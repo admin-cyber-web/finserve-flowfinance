@@ -1,58 +1,84 @@
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import {
-  InputOTP,
-  InputOTPGroup,
-  InputOTPSlot,
-} from "@/components/ui/input-otp";
-
+import { api } from "@/convex/_generated/api";
+import { useMutation } from "convex/react";
 import { useAuth } from "@/hooks/use-auth";
-import logo from "@/assets/logo.svg";
-import { ArrowRight, Loader2, Mail, UserX } from "lucide-react";
-import { Suspense, useEffect, useState } from "react";
+import { Logo } from "@/components/fs/primitives";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Loader2, Mail, ArrowRight, UserCheck } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
+
+/* ---------------------------------------------------------------------------
+ * Auth — branded neobrutalist sign-in with one-click demo persona login.
+ * Template paths (email-OTP + anonymous) are preserved; demo quick-login is
+ * layered on top via api.profiles.attachPersona.
+ * --------------------------------------------------------------------------- */
 
 interface AuthProps {
   redirectAfterAuth?: string;
 }
 
-function resolveRedirectAfterAuth(
-  returnTo: string | null,
-  fallback = "/dashboard",
-) {
-  if (returnTo?.startsWith("/") && !returnTo.startsWith("//")) {
-    return returnTo;
-  }
+function resolveRedirect(returnTo: string | null, fallback = "/dashboard") {
+  if (returnTo?.startsWith("/") && !returnTo.startsWith("//")) return returnTo;
   return fallback;
 }
+
+const DEMOS = [
+  {
+    persona: "admin",
+    label: "Admin",
+    hint: "admin@finserve.in",
+    role: "SUPER_ADMIN",
+    tone: "bg-navy text-paper",
+  },
+  {
+    persona: "bm",
+    label: "Branch Manager",
+    hint: "bm@finserve.in",
+    role: "BRANCH_MANAGER",
+    tone: "bg-royal text-white",
+  },
+  {
+    persona: "accountant",
+    label: "Accountant",
+    hint: "accounts@finserve.in",
+    role: "ACCOUNTANT",
+    tone: "bg-mint",
+  },
+  {
+    persona: "staff",
+    label: "Field staff",
+    hint: "rahul@finserve.in · ST10025",
+    role: "FIELD_STAFF",
+    tone: "bg-gold text-ink",
+  },
+  {
+    persona: "client",
+    label: "Client",
+    hint: "ramesh@client.finserve.in",
+    role: "CLIENT",
+    tone: "bg-sky",
+  },
+];
 
 function Auth({ redirectAfterAuth }: AuthProps = {}) {
   const { isLoading: authLoading, isAuthenticated, signIn } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const redirect = resolveRedirectAfterAuth(
-    searchParams.get("returnTo"),
-    redirectAfterAuth,
-  );
+  const redirect = resolveRedirect(searchParams.get("returnTo"), redirectAfterAuth ?? "/dashboard");
+
   const [step, setStep] = useState<"signIn" | { email: string }>("signIn");
   const [otp, setOtp] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // After auth finishes, go to the intended destination.
   useEffect(() => {
-    if (!authLoading && isAuthenticated) {
-      navigate(redirect);
-    }
+    if (!authLoading && isAuthenticated) navigate(redirect);
   }, [authLoading, isAuthenticated, navigate, redirect]);
-  const handleEmailSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+
+  const signInEmail = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setIsLoading(true);
     setError(null);
@@ -60,245 +86,279 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
       const formData = new FormData(event.currentTarget);
       await signIn("email-otp", formData);
       setStep({ email: formData.get("email") as string });
-      setIsLoading(false);
-    } catch (error) {
-      console.error("Email sign-in error:", error);
+    } catch (err) {
       setError(
-        error instanceof Error
-          ? error.message
-          : "Failed to send verification code. Please try again.",
+        err instanceof Error ? err.message : "Failed to send verification code. Please try again.",
       );
+    } finally {
       setIsLoading(false);
     }
   };
 
-  const handleOtpSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+  const submitOtp = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setIsLoading(true);
     setError(null);
     try {
       const formData = new FormData(event.currentTarget);
       await signIn("email-otp", formData);
-
-      console.log("signed in");
-
       navigate(redirect);
-    } catch (error) {
-      console.error("OTP verification error:", error);
-
+    } catch {
       setError("The verification code you entered is incorrect.");
-      setIsLoading(false);
-
       setOtp("");
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const handleGuestLogin = async () => {
+  const guestLogin = async () => {
     setIsLoading(true);
     setError(null);
     try {
-      console.log("Attempting anonymous sign in...");
       await signIn("anonymous");
-      console.log("Anonymous sign in successful");
       navigate(redirect);
-    } catch (error) {
-      console.error("Guest login error:", error);
-      console.error("Error details:", JSON.stringify(error, null, 2));
-      setError(`Failed to sign in as guest: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } catch (err) {
+      setError(`Failed to sign in as guest: ${err instanceof Error ? err.message : "Unknown error"}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const attachMutation = useMutation(api.profiles.attachPersona);
+
+  const loginAsPersona = async (persona: string) => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      await attachMutation({ persona, device: "demo-login" });
+      navigate(redirect);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Demo sign-in failed. Try email OTP instead.",
+      );
+    } finally {
       setIsLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="min-h-screen bg-paper">
+      {/* Top ink bar — neobrutalist framing */}
+      <div className="border-b-2 border-ink bg-navy px-4 py-3 sm:px-8">
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4">
+          <Logo className="text-paper" />
+          <p className="text-[11px] font-bold uppercase tracking-widest text-gold">
+            FinServe — Empowering Growth Together
+          </p>
+        </div>
+      </div>
 
-      
-      {/* Auth Content */}
-      <div className="flex-1 flex items-center justify-center">
-        <div className="flex items-center justify-center h-full flex-col">
-        <Card className="min-w-[350px] pb-0 border shadow-md">
-          {step === "signIn" ? (
-            <>
-              <CardHeader className="text-center">
-              <div className="flex justify-center">
-                    <img
-                      src={logo}
-                      alt="Lock Icon"
-                      width={64}
-                      height={64}
-                      className="rounded-lg mb-4 mt-4 cursor-pointer"
-                      onClick={() => navigate("/")}
-                    />
-                  </div>
-                <CardTitle className="text-xl">Get Started</CardTitle>
-                <CardDescription>
-                  Enter your email to log in or sign up
-                </CardDescription>
-              </CardHeader>
-              <form onSubmit={handleEmailSubmit}>
-                <CardContent>
-                  
-                  <div className="relative flex items-center gap-2">
-                    <div className="relative flex-1">
-                      <Mail className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                      <Input
-                        name="email"
-                        placeholder="name@example.com"
-                        type="email"
-                        className="pl-9"
-                        disabled={isLoading}
-                        required
-                      />
+      <main className="flex flex-1 items-center justify-center px-4 py-10">
+        <div className="w-full max-w-lg">
+          {/* Eyebrow */}
+          <div className="mb-4 flex items-center justify-center gap-2 text-[11px] font-black uppercase tracking-widest text-muted-foreground">
+            <span className="size-2 animate-pulse-block bg-gold" />
+            Sign in to the demo workspace
+            <span className="size-2 animate-pulse-block bg-gold" />
+          </div>
+
+          <Card className="border-2 border-ink bg-card shadow-hard">
+            {step === "signIn" ? (
+              <>
+                <CardHeader className="text-center border-b-2 border-ink">
+                  <CardTitle className="text-xl font-black uppercase tracking-tight">
+                    Welcome back
+                  </CardTitle>
+                  <CardDescription className="text-sm font-semibold">
+                    Choose a quick demo login, or use email OTP.
+                  </CardDescription>
+                </CardHeader>
+
+                <CardContent className="space-y-5">
+                  {/* Demo quick logins */}
+                  <div className="space-y-2">
+                    <p className="text-[11px] font-black uppercase tracking-widest text-muted-foreground">
+                      One-click demo roles
+                    </p>
+                    <div className="grid grid-cols-1 gap-2">
+                      {DEMOS.map((d) => (
+                        <button
+                          key={d.persona}
+                          type="button"
+                          onClick={() => loginAsPersona(d.persona)}
+                          disabled={isLoading}
+                          className={`flex w-full items-center justify-between gap-3 border-2 border-ink bg-white p-3 text-left shadow-hard-sm active:translate-x-[2px] active:translate-y-[2px] active:shadow-none disabled:opacity-50 ${
+                            isLoading ? "" : ""
+                          }`}
+                        >
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className={`inline-flex size-3 shrink-0 rounded-full border-2 border-ink bg-white ${d.tone.split(" ")[0]}`} />
+                              <span className="text-sm font-black uppercase tracking-tight">{d.label}</span>
+                            </div>
+                            <p className="truncate text-[11px] font-mono font-bold text-muted-foreground">
+                              {d.hint}
+                            </p>
+                          </div>
+                          <ArrowRight className="shrink-0 size-4 stroke-[3]" />
+                        </button>
+                      ))}
                     </div>
-                    <Button
-                      type="submit"
-                      variant="outline"
-                      size="icon"
-                      disabled={isLoading}
-                    >
-                      {isLoading ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <ArrowRight className="h-4 w-4" />
-                      )}
-                    </Button>
                   </div>
-                  {error && (
-                    <p className="mt-2 text-sm text-red-500">{error}</p>
-                  )}
-                  
-                  <div className="mt-4">
-                    <div className="relative">
-                      <div className="absolute inset-0 flex items-center">
-                        <span className="w-full border-t" />
-                      </div>
-                      <div className="relative flex justify-center text-xs uppercase">
-                        <span className="bg-background px-2 text-muted-foreground">
-                          Or
-                        </span>
-                      </div>
+
+                  {/* Divider */}
+                  <div className="relative">
+                    <div className="absolute inset-0 flex items-center">
+                      <span className="w-full border-t border-ink/40" />
                     </div>
-                    
+                    <div className="relative flex justify-center text-[11px] font-black uppercase tracking-widest">
+                      <span className="bg-card px-2 text-muted-foreground">or</span>
+                    </div>
+                  </div>
+
+                  {/* Email OTP */}
+                  <form onSubmit={signInEmail}>
+                    <div className="flex items-center gap-2">
+                      <div className="relative flex-1">
+                        <Mail className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+                        <Input
+                          name="email"
+                          placeholder="you@finserve.in"
+                          type="email"
+                          className="pl-9 h-12"
+                          disabled={isLoading}
+                          required
+                        />
+                      </div>
+                      <Button type="submit" size="icon" disabled={isLoading}>
+                        {isLoading ? (
+                          <Loader2 className="size-4 animate-spin" />
+                        ) : (
+                          <ArrowRight className="size-4" />
+                        )}
+                      </Button>
+                    </div>
+                    {error && (
+                      <p className="mt-2 text-sm font-bold text-danger">{error}</p>
+                    )}
+                  </form>
+
+                  <div className="space-y-3 pt-1">
                     <Button
                       type="button"
                       variant="outline"
-                      className="w-full mt-4"
-                      onClick={handleGuestLogin}
+                      className="w-full h-12 shadow-hard-sm uppercase"
+                      onClick={guestLogin}
                       disabled={isLoading}
                     >
-                      <UserX className="mr-2 h-4 w-4" />
-                      Continue as Guest
+                      <UserCheck className="mr-2 size-4" />
+                      Continue as guest
                     </Button>
-                  </div>
-                </CardContent>
-              </form>
-            </>
-          ) : (
-            <>
-              <CardHeader className="text-center mt-4">
-                <CardTitle>Check your email</CardTitle>
-                <CardDescription>
-                  We've sent a code to {step.email}
-                </CardDescription>
-              </CardHeader>
-              <form onSubmit={handleOtpSubmit}>
-                <CardContent className="pb-4">
-                  <input type="hidden" name="email" value={step.email} />
-                  <input type="hidden" name="code" value={otp} />
-
-                  <div className="flex justify-center">
-                    <InputOTP
-                      value={otp}
-                      onChange={setOtp}
-                      maxLength={6}
-                      disabled={isLoading}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && otp.length === 6 && !isLoading) {
-                          // Find the closest form and submit it
-                          const form = (e.target as HTMLElement).closest("form");
-                          if (form) {
-                            form.requestSubmit();
-                          }
-                        }
-                      }}
-                    >
-                      <InputOTPGroup>
-                        {Array.from({ length: 6 }).map((_, index) => (
-                          <InputOTPSlot key={index} index={index} />
-                        ))}
-                      </InputOTPGroup>
-                    </InputOTP>
-                  </div>
-                  {error && (
-                    <p className="mt-2 text-sm text-red-500 text-center">
-                      {error}
+                    <p className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground text-center">
+                      Guest access skips the demo workspace
                     </p>
-                  )}
-                  <p className="text-sm text-muted-foreground text-center mt-4">
-                    Didn't receive a code?{" "}
-                    <Button
-                      variant="link"
-                      className="p-0 h-auto"
-                      onClick={() => setStep("signIn")}
-                    >
-                      Try again
-                    </Button>
-                  </p>
+                  </div>
                 </CardContent>
-                <CardFooter className="flex-col gap-2">
-                  <Button
-                    type="submit"
-                    className="w-full"
-                    disabled={isLoading || otp.length !== 6}
-                  >
-                    {isLoading ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Verifying...
-                      </>
-                    ) : (
-                      <>
-                        Verify code
-                        <ArrowRight className="ml-2 h-4 w-4" />
-                      </>
-                    )}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    onClick={() => setStep("signIn")}
-                    disabled={isLoading}
-                    className="w-full"
-                  >
-                    Use different email
-                  </Button>
-                </CardFooter>
-              </form>
-            </>
-          )}
+              </>
+            ) : (
+              <>
+                <CardHeader className="text-center border-b-2 border-ink">
+                  <CardTitle className="text-xl font-black uppercase tracking-tight">
+                    Check your email
+                  </CardTitle>
+                  <CardDescription className="text-sm font-semibold">
+                    We sent a code to {step.email}
+                  </CardDescription>
+                </CardHeader>
 
-          <div className="py-4 px-6 text-xs text-center text-muted-foreground bg-muted border-t rounded-b-lg">
-            Secured by{" "}
-            <a
-              href="https://freebuff.com"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline hover:text-primary transition-colors"
-            >
-              freebuff.com
-            </a>
+                <form onSubmit={submitOtp}>
+                  <CardContent className="space-y-4 pt-4">
+                    <input type="hidden" name="email" value={step.email} />
+                    <input type="hidden" name="code" value={otp} />
+
+                    <div className="flex justify-center">
+                      <Input
+                        value={otp}
+                        onChange={(e) => setOtp(e.target.value.replace(/[^\d]/g, ""))}
+                        maxLength={6}
+                        disabled={isLoading}
+                        className="h-14 text-center text-2xl font-black tracking-[0.5em] font-mono"
+                        inputMode="numeric"
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && otp.length === 6 && !isLoading) {
+                            (e.target as HTMLElement).closest("form")?.requestSubmit();
+                          }
+                        }}
+                      />
+                    </div>
+
+                    {error && (
+                      <p className="text-sm font-bold text-danger text-center">{error}</p>
+                    )}
+
+                    <p className="text-center text-xs font-bold uppercase tracking-widest text-muted-foreground">
+                      Did not receive a code?{" "}
+                      <Button
+                        type="button"
+                        variant="link"
+                        className="h-auto p-0 text-royal font-black"
+                        onClick={() => setStep("signIn")}
+                      >
+                        Try again
+                      </Button>
+                    </p>
+                  </CardContent>
+
+                  <CardContent className="flex flex-col gap-2 pb-4">
+                    <Button
+                      type="submit"
+                      className="w-full h-12 shadow-hard-sm uppercase"
+                      disabled={isLoading || otp.length !== 6}
+                    >
+                      {isLoading ? (
+                        <>
+                          <Loader2 className="mr-2 size-4 animate-spin" />
+                          Verifying…
+                        </>
+                      ) : (
+                        <>
+                          Verify code
+                          <ArrowRight className="ml-2 size-4" />
+                        </>
+                      )}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="w-full h-12 uppercase"
+                      onClick={() => setStep("signIn")}
+                      disabled={isLoading}
+                    >
+                      Use a different email
+                    </Button>
+                  </CardContent>
+                </form>
+              </>
+            )}
+          </Card>
+
+          {/* Footer note */}
+          <div className="mt-4 border-t-2 border-ink bg-muted/40 px-4 py-3 text-center">
+            <p className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">
+              Demo personas are pre-seeded with wallets, clients and loans.
+            </p>
+            <p className="mt-1 text-[10px] font-medium text-muted-foreground">
+              Staff login runs offline-ready collections, cash handovers and receipts.
+            </p>
           </div>
-        </Card>
         </div>
-      </div>
+      </main>
     </div>
   );
 }
 
 export default function AuthPage(props: AuthProps) {
-  return (
-    <Suspense>
-      <Auth {...props} />
-    </Suspense>
-  );
+  return <Auth {...props} />;
 }
