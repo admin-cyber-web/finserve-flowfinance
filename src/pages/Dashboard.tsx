@@ -1,55 +1,180 @@
+import { AdminShell } from "@/app/AdminShell";
+import { MobileShell } from "@/app/MobileShell";
+import { Logo } from "@/components/fs/primitives";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { useAuth } from "@/hooks/use-auth";
-import { LayoutDashboard, LogOut } from "lucide-react";
-import { useNavigate } from "react-router";
+import { useProfile, useSeed } from "@/hooks/use-profile";
+import { Loader2, LogOut, TriangleAlert } from "lucide-react";
+import { Navigate, Route, Routes } from "react-router";
 
-export default function Dashboard() {
-  const { user, signOut } = useAuth();
-  const navigate = useNavigate();
+import AdminHome from "./dashboard/AdminHome";
+import Approvals from "./dashboard/Approvals";
+import Audit from "./dashboard/Audit";
+import Accounting from "./dashboard/Accounting";
+import Cash from "./dashboard/Cash";
+import ClientDetail from "./dashboard/ClientDetail";
+import ClientNew from "./dashboard/ClientNew";
+import ClientHome from "./dashboard/ClientHome";
+import Clients from "./dashboard/Clients";
+import Collect from "./dashboard/Collect";
+import LoanDetail from "./dashboard/LoanDetail";
+import LoanNew from "./dashboard/LoanNew";
+import Loans from "./dashboard/Loans";
+import Overdue from "./dashboard/Overdue";
+import Products from "./dashboard/Products";
+import Profile from "./dashboard/Profile";
+import Receipt from "./dashboard/Receipt";
+import Reports from "./dashboard/Reports";
+import Staff from "./dashboard/Staff";
+import StaffDetail from "./dashboard/StaffDetail";
+import StaffHome from "./dashboard/StaffHome";
+import Transactions from "./dashboard/Transactions";
 
-  const handleSignOut = async () => {
-    await signOut();
-    navigate("/");
-  };
-
+function BootScreen({ label }: { label: string }) {
   return (
-    <main className="min-h-screen bg-background px-6 py-10 text-foreground">
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-8">
-        <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-sm font-medium text-muted-foreground">
-              Authenticated workspace
-            </p>
-            <h1 className="mt-1 text-3xl font-bold tracking-tight">
-              Welcome{user?.name ? `, ${user.name}` : ""}
-            </h1>
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            className="cursor-pointer gap-2 self-start"
-            onClick={handleSignOut}
-          >
-            <LogOut className="size-4" />
-            Sign out
-          </Button>
-        </header>
-
-        <Card className="border-border/70 shadow-none">
-          <CardHeader>
-            <div className="mb-3 flex size-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
-              <LayoutDashboard className="size-5" />
-            </div>
-            <CardTitle>Your dashboard is ready</CardTitle>
-          </CardHeader>
-          <CardContent className="text-sm leading-6 text-muted-foreground">
-            Replace this starter content with the product&apos;s authenticated
-            experience. The route is protected and sign-in returns here by
-            default.
-          </CardContent>
-        </Card>
+    <main className="flex min-h-screen flex-col items-center justify-center gap-5 bg-paper p-6">
+      <div className="border-2 border-ink bg-navy px-5 py-4 shadow-hard">
+        <Logo className="text-paper [&_span:last-child]:text-paper" />
+      </div>
+      <div className="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-muted-foreground">
+        <Loader2 className="size-4 animate-spin" />
+        {label}
+      </div>
+      <div className="flex gap-1.5">
+        <span className="size-3 animate-pulse-block border-2 border-ink bg-gold" />
+        <span
+          className="size-3 animate-pulse-block border-2 border-ink bg-royal"
+          style={{ animationDelay: "0.15s" }}
+        />
+        <span
+          className="size-3 animate-pulse-block border-2 border-ink bg-mint"
+          style={{ animationDelay: "0.3s" }}
+        />
       </div>
     </main>
   );
+}
+
+function NoWorkspace() {
+  const { user, signOut } = useProfile();
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-paper p-6">
+      <div className="w-full max-w-md border-2 border-ink bg-card p-6 text-center shadow-hard">
+        <div className="mx-auto w-fit">
+          <Logo />
+        </div>
+        <div className="mx-auto mt-4 grid size-12 place-items-center border-2 border-ink bg-gold">
+          <TriangleAlert className="size-5" />
+        </div>
+        <h1 className="mt-3 text-lg font-black uppercase tracking-tight">
+          No workspace linked
+        </h1>
+        <p className="mt-2 text-sm font-semibold text-muted-foreground">
+          {user?.email ?? user?.name ?? "This account"} isn't linked to a FinServe
+          workspace yet. Sign in again and pick a demo role to continue.
+        </p>
+        <div className="mt-4 flex flex-col gap-2">
+          <Button
+            onClick={() => {
+              void signOut().then(() => {
+                window.location.href = "/auth";
+              });
+            }}
+          >
+            Switch account
+          </Button>
+          <Button variant="outline" onClick={() => (window.location.href = "/")}>
+            Back to home
+          </Button>
+        </div>
+      </div>
+    </main>
+  );
+}
+
+export default function Dashboard() {
+  const seedState = useSeed();
+  const { profile, loading, signOut } = useProfile();
+
+  const booting =
+    loading || seedState === "idle" || seedState === "seeding" || (seedState !== "error" && profile === null && loading);
+
+  if (loading || seedState === "idle" || seedState === "seeding") {
+    return (
+      <BootScreen
+        label={
+          seedState === "seeding" || seedState === "idle"
+            ? "Preparing demo workspace…"
+            : "Loading your workspace…"
+        }
+      />
+    );
+  }
+
+  if (!profile) {
+    return <NoWorkspace />;
+  }
+  void booting;
+
+  const isField = profile.role === "FIELD_STAFF";
+  const home =
+    profile.role === "FIELD_STAFF" ? (
+      <StaffHome />
+    ) : profile.role === "CLIENT" ? (
+      <ClientHome />
+    ) : (
+      <AdminHome />
+    );
+
+  const inner = (
+    <Routes>
+      <Route index element={home} />
+      <Route path="collect" element={<Collect />} />
+      <Route path="clients" element={<Clients />} />
+      <Route path="clients/new" element={<ClientNew />} />
+      <Route path="clients/:id" element={<ClientDetail />} />
+      <Route path="loans" element={<Loans />} />
+      <Route path="loans/new" element={<LoanNew />} />
+      <Route path="loans/:id" element={<LoanDetail />} />
+      <Route path="transactions" element={<Transactions />} />
+      <Route path="receipts/:number" element={<Receipt />} />
+      <Route path="wallet" element={<Profile />} />
+      <Route path="profile" element={<Profile />} />
+      <Route path="cash" element={<Cash />} />
+      <Route path="reports" element={<Reports />} />
+      <Route path="approvals" element={<Approvals />} />
+      <Route path="staff" element={<Staff />} />
+      <Route path="staff/:id" element={<StaffDetail />} />
+      <Route path="overdue" element={<Overdue />} />
+      <Route path="accounting" element={<Accounting />} />
+      <Route path="audit" element={<Audit />} />
+      <Route path="products" element={<Products />} />
+      <Route path="*" element={<Navigate to="/dashboard" replace />} />
+    </Routes>
+  );
+
+  const seedError =
+    seedState === "error" ? (
+      <div className="mb-3 flex items-center justify-between gap-2 border-2 border-ink bg-blush px-3 py-2 text-xs font-black uppercase">
+        <span>Demo data seed failed — some records may be missing</span>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => void signOut().then(() => window.location.reload())}
+        >
+          Reload
+        </Button>
+      </div>
+    ) : null;
+
+  const content = (
+    <>
+      {seedError}
+      {inner}
+    </>
+  );
+
+  if (isField) {
+    return <MobileShell>{content}</MobileShell>;
+  }
+  return <AdminShell>{content}</AdminShell>;
 }

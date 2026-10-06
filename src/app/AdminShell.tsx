@@ -1,0 +1,396 @@
+import { api } from "@/convex/_generated/api";
+import {
+  Logo,
+  StatusChip,
+  timeAgo,
+} from "@/components/fs/primitives";
+import { BottomSheet } from "@/components/fs/primitives";
+import { useProfile } from "@/hooks/use-profile";
+import { cn } from "@/lib/utils";
+import { useMutation, useQuery } from "convex/react";
+import {
+  AlertTriangle,
+  Bell,
+  BookOpen,
+  Banknote,
+  FileBarChart,
+  LayoutDashboard,
+  Loader2,
+  LogOut,
+  HandCoins,
+  Menu,
+  Package,
+  Search,
+  ShieldCheck,
+  Stamp,
+  UserCog,
+  Users,
+  X,
+} from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import { useLocation, useNavigate } from "react-router";
+import { Button } from "@/components/ui/button";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import type { Permission } from "@/lib/finance/permissions";
+
+interface NavItem {
+  to: string;
+  label: string;
+  icon: typeof Users;
+  permission?: Permission;
+  end?: boolean;
+}
+
+const NAV: NavItem[] = [
+  { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, end: true },
+  { to: "/dashboard/clients", label: "Clients", icon: Users, permission: "view_clients" },
+  { to: "/dashboard/loans", label: "Loans", icon: Banknote, permission: "view_loans" },
+  { to: "/dashboard/approvals", label: "Approvals", icon: Stamp },
+  { to: "/dashboard/staff", label: "Staff & Wallets", icon: UserCog, permission: "staff_management" },
+  { to: "/dashboard/cash", label: "Cash & Handovers", icon: HandCoins, permission: "cash_handover" },
+  { to: "/dashboard/overdue", label: "Overdue & Recovery", icon: AlertTriangle, permission: "reports" },
+  { to: "/dashboard/reports", label: "Reports", icon: FileBarChart, permission: "reports" },
+  { to: "/dashboard/accounting", label: "Accounting", icon: BookOpen, permission: "accounting" },
+  { to: "/dashboard/audit", label: "Audit & Money Trail", icon: ShieldCheck, permission: "audit_logs" },
+  { to: "/dashboard/products", label: "Loan Products", icon: Package, permission: "view_loans" },
+];
+
+const TITLES: Record<string, string> = {
+  "/dashboard": "Dashboard",
+  "/dashboard/clients": "Clients",
+  "/dashboard/loans": "Loans",
+  "/dashboard/approvals": "Approvals",
+  "/dashboard/staff": "Staff & Wallets",
+  "/dashboard/cash": "Cash & Handovers",
+  "/dashboard/overdue": "Overdue & Recovery",
+  "/dashboard/reports": "Reports",
+  "/dashboard/accounting": "Accounting",
+  "/dashboard/audit": "Audit & Money Trail",
+  "/dashboard/products": "Loan Products",
+};
+
+function initials(name?: string | null): string {
+  if (!name) return "?";
+  return name
+    .split(" ")
+    .map((w) => w[0])
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+}
+
+function NavList({
+  pathname,
+  onNavigate,
+  allowed,
+  approvalsBadge,
+}: {
+  pathname: string;
+  onNavigate?: () => void;
+  allowed: (p?: Permission) => boolean;
+  approvalsBadge: number;
+}) {
+  const navigate = useNavigate();
+  return (
+    <nav className="flex flex-col gap-1">
+      {NAV.filter((item) => allowed(item.permission)).map((item) => {
+        const active = item.end
+          ? pathname === item.to
+          : pathname.startsWith(item.to);
+        return (
+          <button
+            key={item.to}
+            onClick={() => {
+              navigate(item.to);
+              onNavigate?.();
+            }}
+            className={cn(
+              "flex items-center gap-3 border-2 px-3 py-2.5 text-left text-sm font-black uppercase tracking-wide transition-colors",
+              active
+                ? "border-ink bg-gold text-ink shadow-hard-sm"
+                : "border-transparent text-paper/80 hover:border-paper/30 hover:bg-white/10",
+            )}
+          >
+            <item.icon className="size-4 shrink-0" />
+            <span className="flex-1">{item.label}</span>
+            {item.to === "/dashboard/approvals" && approvalsBadge > 0 && (
+              <span className="grid min-w-5 place-items-center border-2 border-ink bg-destructive px-1 text-[10px] font-black text-white">
+                {approvalsBadge}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+export function AdminShell({ children }: { children: ReactNode }) {
+  const { profile, can, signOut } = useProfile();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [debounced, setDebounced] = useState("");
+
+  const pending = useQuery(api.admin.pendingApprovals);
+  const notifications = useQuery(api.admin.notifications, { limit: 20 });
+  const markRead = useMutation(api.admin.markRead);
+  const markAllRead = useMutation(api.admin.markAllRead);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(q), 250);
+    return () => clearTimeout(t);
+  }, [q]);
+  const results = useQuery(
+    api.admin.search,
+    debounced.trim().length >= 2 ? { q: debounced.trim() } : "skip",
+  );
+
+  useEffect(() => {
+    setDrawerOpen(false);
+    setNotifOpen(false);
+    setSearchOpen(false);
+  }, [location.pathname]);
+
+  const allowed = (p?: Permission) => (p ? can(p) : true);
+  const unread = notifications?.unread ?? 0;
+  const title =
+    TITLES[location.pathname] ??
+    (location.pathname.startsWith("/dashboard/clients/")
+      ? "Client 360°"
+      : location.pathname.startsWith("/dashboard/loans/")
+        ? "Loan file"
+        : location.pathname.startsWith("/dashboard/staff/")
+          ? "Staff 360°"
+          : location.pathname.startsWith("/dashboard/receipts/")
+            ? "Receipt"
+            : "FinServe");
+
+  return (
+    <div className="min-h-screen bg-paper">
+      {/* Desktop sidebar */}
+      <aside className="fixed inset-y-0 left-0 z-40 hidden w-64 flex-col border-r-2 border-ink bg-navy lg:flex">
+        <div className="border-b-2 border-paper/20 px-4 py-4">
+          <div className="text-lg font-black tracking-tight text-paper">
+            Fin<span className="text-gold">Serve</span>
+          </div>
+          <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-paper/60">
+            Empowering Growth Together
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto p-3">
+          <NavList
+            pathname={location.pathname}
+            allowed={allowed}
+            approvalsBadge={pending?.length ?? 0}
+          />
+        </div>
+        <div className="border-t-2 border-paper/20 p-3">
+          <div className="mb-2 flex items-center gap-2">
+            <span className="grid size-9 shrink-0 place-items-center border-2 border-paper bg-gold text-xs font-black text-ink">
+              {initials(profile?.name)}
+            </span>
+            <div className="min-w-0">
+              <div className="truncate text-xs font-black text-paper">
+                {profile?.name}
+              </div>
+              <div className="truncate font-mono text-[10px] font-bold uppercase text-paper/60">
+                {profile?.staffId}
+              </div>
+            </div>
+          </div>
+          <Button
+            variant="destructive"
+            size="sm"
+            className="w-full"
+            onClick={() => void signOut().then(() => navigate("/"))}
+          >
+            <LogOut className="size-4" /> Sign out
+          </Button>
+        </div>
+      </aside>
+
+      {/* Mobile drawer */}
+      <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
+        <SheetContent
+          side="left"
+          className="w-72 border-r-2 border-ink bg-navy p-0 text-paper"
+        >
+          <SheetTitle className="sr-only">Navigation</SheetTitle>
+          <div className="flex items-center justify-between border-b-2 border-paper/20 px-4 py-4">
+            <span className="text-lg font-black">
+              Fin<span className="text-gold">Serve</span>
+            </span>
+            <button onClick={() => setDrawerOpen(false)} aria-label="Close">
+              <X className="size-5" />
+            </button>
+          </div>
+          <div className="overflow-y-auto p-3">
+            <NavList
+              pathname={location.pathname}
+              onNavigate={() => setDrawerOpen(false)}
+              allowed={allowed}
+              approvalsBadge={pending?.length ?? 0}
+            />
+            <Button
+              variant="destructive"
+              size="sm"
+              className="mt-4 w-full"
+              onClick={() => void signOut().then(() => navigate("/"))}
+            >
+              <LogOut className="size-4" /> Sign out
+            </Button>
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      {/* Content column */}
+      <div className="lg:pl-64">
+        <header className="sticky top-0 z-30 flex items-center gap-3 border-b-2 border-ink bg-card px-3 py-3 lg:px-6">
+          <button
+            className="grid size-10 place-items-center border-2 border-ink bg-white shadow-hard-sm lg:hidden"
+            onClick={() => setDrawerOpen(true)}
+            aria-label="Open menu"
+          >
+            <Menu className="size-4" />
+          </button>
+          <div className="min-w-0 flex-1">
+            <h1 className="truncate text-base font-black uppercase tracking-tight lg:text-lg">
+              {title}
+            </h1>
+            <p className="truncate text-[11px] font-bold text-muted-foreground">
+              {profile?.branch?.name ?? "Organization-wide"} ·{" "}
+              {profile?.role?.replace("_", " ").toLowerCase()}
+            </p>
+          </div>
+          <button
+            onClick={() => setSearchOpen(true)}
+            className="grid size-10 place-items-center border-2 border-ink bg-white shadow-hard-sm active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
+            aria-label="Search"
+          >
+            <Search className="size-4" />
+          </button>
+          <button
+            onClick={() => setNotifOpen(true)}
+            className="relative grid size-10 place-items-center border-2 border-ink bg-white shadow-hard-sm active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
+            aria-label="Notifications"
+          >
+            <Bell className="size-4" />
+            {unread > 0 && (
+              <span className="absolute -right-2 -top-2 grid min-w-5 place-items-center border-2 border-ink bg-destructive px-1 text-[10px] font-black text-white">
+                {unread > 9 ? "9+" : unread}
+              </span>
+            )}
+          </button>
+          <span className="hidden size-10 place-items-center border-2 border-ink bg-navy text-xs font-black text-gold sm:grid">
+            {initials(profile?.name)}
+          </span>
+        </header>
+
+        <main className="mx-auto max-w-[1360px] px-3 py-4 lg:px-6 lg:py-6">
+          {children}
+        </main>
+      </div>
+
+      {/* Notifications */}
+      <BottomSheet
+        open={notifOpen}
+        onOpenChange={setNotifOpen}
+        title="Notifications"
+        subtitle={unread ? `${unread} unread` : "All caught up"}
+      >
+        <div className="mb-3 flex justify-end">
+          <Button size="sm" variant="outline" onClick={() => void markAllRead({})}>
+            Mark all read
+          </Button>
+        </div>
+        <div className="flex flex-col gap-2">
+          {(notifications?.rows ?? []).length === 0 && (
+            <p className="py-6 text-center text-sm font-bold text-muted-foreground">
+              No notifications yet.
+            </p>
+          )}
+          {(notifications?.rows ?? []).map((n) => (
+            <button
+              key={n._id}
+              onClick={async () => {
+                await markRead({ notificationId: n._id });
+                if (n.link) navigate(n.link);
+              }}
+              className={cn(
+                "border-2 border-ink p-3 text-left",
+                n.read ? "bg-white" : "bg-sky shadow-hard-sm",
+              )}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-black uppercase">{n.title}</span>
+                <span className="text-[10px] font-bold text-muted-foreground">
+                  {timeAgo(n.createdAt)}
+                </span>
+              </div>
+              <p className="mt-1 text-xs font-semibold">{n.body}</p>
+            </button>
+          ))}
+        </div>
+      </BottomSheet>
+
+      {/* Search */}
+      <BottomSheet
+        open={searchOpen}
+        onOpenChange={setSearchOpen}
+        title="Global search"
+        subtitle="Clients · loans · receipts · staff · transactions"
+      >
+        <div className="flex items-center border-2 border-ink bg-white">
+          <Search className="ml-3 size-4 shrink-0" />
+          <input
+            autoFocus
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="C-000128, LN-000001, Rahul…"
+            className="h-11 w-full bg-transparent px-3 text-sm font-bold outline-none"
+          />
+        </div>
+        <div className="mt-3 flex flex-col gap-2">
+          {(results ?? []).map((r) => (
+            <button
+              key={`${r.kind}:${r.id}`}
+              onClick={() => navigate(r.href)}
+              className="flex items-center justify-between gap-3 border-2 border-ink bg-white p-3 text-left shadow-hard-sm"
+            >
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-black">{r.title}</span>
+                <span className="block truncate text-xs font-semibold text-muted-foreground">
+                  {r.subtitle}
+                </span>
+              </span>
+              <StatusChip label={r.kind} tone="info" />
+            </button>
+          ))}
+          {(results ?? []).length === 0 && debounced.trim().length >= 2 && (
+            <p className="py-4 text-center text-sm font-bold text-muted-foreground">
+              No matches.
+            </p>
+          )}
+          {debounced.trim().length < 2 && (
+            <p className="py-4 text-center text-xs font-semibold text-muted-foreground">
+              Search across the whole organization.
+            </p>
+          )}
+        </div>
+      </BottomSheet>
+
+      {profile?.status && profile.status !== "ACTIVE" && (
+        <div className="fixed inset-x-0 bottom-0 z-50 flex items-center justify-between gap-3 border-t-2 border-ink bg-destructive px-4 py-2 text-xs font-black uppercase text-white">
+          <span>Account {profile.status} — actions are blocked</span>
+          <Loader2 className="size-4 animate-spin" />
+        </div>
+      )}
+    </div>
+  );
+}
+
+export { Logo };
