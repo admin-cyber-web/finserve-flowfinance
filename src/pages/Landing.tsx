@@ -133,7 +133,7 @@ export default function Landing() {
           {/* Tag */}
           <div className="mx-auto mb-6 flex max-w-xs items-center justify-center gap-2 border-2 border-royal bg-navy px-3 py-1.5 text-[11px] font-black uppercase tracking-widest text-gold shadow-hard-sm sm:max-w-none">
             <span className="size-2 animate-pulse-block bg-gold" />
-            Microfinance staff platform
+            Finance staff platform
             <span className="size-2 animate-pulse-block bg-gold" />
           </div>
 
@@ -338,7 +338,7 @@ export default function Landing() {
             FinServe — Empowering Growth Together
           </p>
           <p className="text-[11px] font-medium text-muted-foreground/70">
-            Microfinance staff, wallet, loan and collection management — ledger-backed,
+            Finance staff, wallet, loan and collection management — ledger-backed,
             audit-safe, field-ready.
           </p>
         </div>
