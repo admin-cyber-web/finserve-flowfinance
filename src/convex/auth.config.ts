@@ -19,7 +19,8 @@ export default {
     // `kid` header, so sign-in would silently never confirm and RequireAuth
     // would loop back to /auth forever.
     {
-      domain: process.env.CONVEX_SITE_URL!,
+      // TEMP DIAGNOSTIC: explicit site domain.
+      domain: "https://little-kookabura-409.convex.site",
       applicationID: "convex",
     },
     {

@@ -10,6 +10,7 @@ import {
   writeWalletTx,
 } from "../lib/server/convexHelpers";
 import { effectivePermissions } from "../lib/finance/permissions";
+import { SUPER_ADMIN_EMAIL } from "./users";
 import { FS_ROLES, USER_STATUSES } from "../lib/finance/types";
 import { oneOf, requiredString, optionalString, money } from "../lib/finance/validate";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -58,62 +59,15 @@ export const me = query({
   },
 });
 
-/** Claims a seeded workspace profile for the current session (demo + real). */
-export const selectWorkspace = mutation({
-  args: { persona: v.string() },
-  handler: async (ctx, { persona }) => {
-    const actor = await getActor(ctx);
-    if (!actor) throw new AppError("Sign in first.");
-
-    if (actor.profile) {
-      const current = actor.profile;
-      if (current.persona === persona) {
-        return { ok: true, alreadyLinked: true };
-      }
-      throw new AppError("This session already has a workspace.");
-    }
-
-    const profile = await ctx.db
-      .query("profiles")
-      .withIndex("by_persona", (q) => q.eq("persona", persona))
-      .unique();
-
-    if (!profile) {
-      throw new AppError("No workspace matches that sign-in.");
-    }
-    if (profile.status !== "ACTIVE" && profile.status !== "CLIENT") {
-      throw new AppError(
-        `Access denied: this account is ${profile.status.toLowerCase()}.`,
-      );
-    }
-
-    const alreadyLinked = profile.userId != null;
-    await ctx.db.patch(profile._id, { userId: actor.userId });
-
-    await ctx.db.insert("devices", {
-      profileId: profile._id,
-      label: "Demo device",
-      lastSeenAt: Date.now(),
-    });
-
-    await logAudit(ctx, {
-      actorId: profile._id,
-      actorName: profile.name,
-      role: profile.role,
-      action: "SESSION_STARTED",
-      entity: "profiles",
-      entityId: profile.staffId,
-      device: "demo-login",
-    });
-
-    return { ok: true, alreadyLinked };
-  },
-});
-
-/** Links a signed-in user (incl. demo/anonymous) to a seeded workspace profile. */
-export const attachPersona = selectWorkspace;
-
-/** Claims a profile by verified email (used after email OTP sign-in). */
+/**
+ * Claims a profile by verified email after real authentication.
+ *
+ * This is the ONLY path from a signed-in auth session to a workspace
+ * profile — the old demo `selectWorkspace`/`attachPersona` mutations were
+ * removed. If the designated SUPER ADMIN address signs in before its
+ * profile exists, the profile is bootstrapped here: mailbox ownership was
+ * just proven by the OTP, and no other email can take this path.
+ */
 export const linkByEmail = mutation({
   args: {},
   handler: async (ctx) => {
@@ -122,12 +76,48 @@ export const linkByEmail = mutation({
     if (actor.profile) return { ok: true, alreadyLinked: true };
     const email = actor.user.email;
     if (!email) return { ok: false, reason: "no-email" };
-    const profile = await ctx.db
+
+    let profile = await ctx.db
       .query("profiles")
       .withIndex("by_email", (q) => q.eq("email", email.toLowerCase()))
       .unique();
+
+    if (!profile && email.toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase()) {
+      // First-run bootstrap of the real SUPER ADMIN account.
+      const now = Date.now();
+      const branches = await ctx.db.query("branches").collect();
+      const profileId = await ctx.db.insert("profiles", {
+        userId: actor.userId,
+        name: actor.user.name?.trim() || "Super Admin",
+        email: email.toLowerCase(),
+        role: "SUPER_ADMIN",
+        status: "ACTIVE",
+        staffId: "SA-00001",
+        ...(branches.length > 0 ? { branchId: branches[0]._id } : {}),
+        joiningDate: now,
+        createdAt: now,
+        failedLoginAttempts: 0,
+      });
+      await ctx.db.insert("devices", {
+        profileId,
+        label: "Email sign-in",
+        lastSeenAt: now,
+      });
+      await logAudit(ctx, {
+        actorId: profileId,
+        actorName: actor.user.name ?? "Super Admin",
+        role: "SUPER_ADMIN",
+        action: "SUPER_ADMIN_BOOTSTRAP",
+        entity: "profiles",
+        entityId: "SA-00001",
+        after: { email: email.toLowerCase(), created: true },
+        device: "email-otp",
+      });
+      return { ok: true };
+    }
+
     if (!profile) return { ok: false, reason: "no-workspace" };
-    if (profile.status !== "ACTIVE") {
+    if (profile.status !== "ACTIVE" && profile.status !== "CLIENT") {
       throw new AppError(
         `Access denied: this account is ${profile.status.toLowerCase()}.`,
       );
@@ -140,6 +130,15 @@ export const linkByEmail = mutation({
       profileId: profile._id,
       label: "Email sign-in",
       lastSeenAt: Date.now(),
+    });
+    await logAudit(ctx, {
+      actorId: profile._id,
+      actorName: profile.name,
+      role: profile.role,
+      action: "SESSION_STARTED",
+      entity: "profiles",
+      entityId: profile.staffId,
+      device: "email-otp",
     });
     return { ok: true };
   },

@@ -309,21 +309,21 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* Demo credential strip */}
+      {/* Role-based access strip */}
       <section className="border-t-2 border-ink bg-gold/15 px-4 py-10 sm:px-8 sm:py-12">
         <div className="mx-auto max-w-4xl">
           <p className="mb-5 text-center text-[12px] font-black uppercase tracking-[0.2em] text-muted-foreground">
-            Try it as a real persona
+            Built for every role in the branch
           </p>
           <div className="flex flex-wrap items-center justify-center gap-3 text-xs font-bold uppercase tracking-widest text-ink">
-            <Badge label="Admin" hint="admin@finserve.in" tone="bg-navy text-paper" />
-            <Badge label="Branch Manager" hint="bm@finserve.in" tone="bg-royal text-white" />
-            <Badge label="Accountant" hint="accounts@finserve.in" tone="bg-mint" />
-            <Badge label="Field staff" hint="rahul@finserve.in · ST10025" tone="bg-gold text-ink" />
-            <Badge label="Client" hint="ramesh@client.finserve.in" tone="bg-sky" />
+            <Badge label="Super Admin" hint="Full control" tone="bg-navy text-paper" />
+            <Badge label="Branch Manager" hint="Branch workspace" tone="bg-royal text-white" />
+            <Badge label="Accountant" hint="Ledger & approvals" tone="bg-mint" />
+            <Badge label="Field staff" hint="Collections on the ground" tone="bg-gold text-ink" />
+            <Badge label="Client" hint="Own account only" tone="bg-sky" />
           </div>
           <p className="mt-5 text-center text-[11px] font-bold uppercase tracking-widest text-muted-foreground">
-            One click logs you in as that persona on the seeded demo workspace.
+            Sign-in is email-verified, and every action is authorized server-side by role.
           </p>
         </div>
       </section>

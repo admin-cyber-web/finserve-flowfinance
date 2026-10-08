@@ -14,7 +14,7 @@ import { FS_ROLES, USER_STATUSES } from "../lib/finance/types";
 import { oneOf, requiredString, optionalString, money } from "../lib/finance/validate";
 import { normalizeCredential, hashCredential, verifyCredential } from "../lib/server/credentials";
 
-const SUPER_ADMIN_EMAIL = "tiwarijhumki@gmail.com";
+export const SUPER_ADMIN_EMAIL = "tiwarijhumki@gmail.com";
 
 export const me = query({
   args: {},

@@ -5,14 +5,17 @@ import { Logo } from "@/components/fs/primitives";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Loader2, Mail, ArrowRight, UserCheck } from "lucide-react";
+import { Loader2, Mail, ArrowRight } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 
 /* ---------------------------------------------------------------------------
- * Auth — branded neobrutalist sign-in with one-click demo persona login.
- * Template paths (email-OTP + anonymous) are preserved; demo quick-login is
- * layered on top via api.profiles.attachPersona.
+ * Auth — real sign-in via email OTP only.
+ *
+ * Once the session is verified, profiles.linkByEmail attaches the workspace
+ * profile (bootstrapping the SUPER ADMIN account on its first sign-in) and
+ * the user goes straight to their role's dashboard. The demo persona,
+ * workspace-selection and guest login paths were removed.
  * --------------------------------------------------------------------------- */
 
 interface AuthProps {
@@ -24,46 +27,8 @@ function resolveRedirect(returnTo: string | null, fallback = "/dashboard") {
   return fallback;
 }
 
-const DEMOS = [
-  {
-    persona: "admin",
-    label: "Admin",
-    hint: "admin@finserve.in",
-    role: "SUPER_ADMIN",
-    tone: "bg-navy text-paper",
-  },
-  {
-    persona: "bm",
-    label: "Branch Manager",
-    hint: "bm@finserve.in",
-    role: "BRANCH_MANAGER",
-    tone: "bg-royal text-white",
-  },
-  {
-    persona: "accountant",
-    label: "Accountant",
-    hint: "accounts@finserve.in",
-    role: "ACCOUNTANT",
-    tone: "bg-mint",
-  },
-  {
-    persona: "staff",
-    label: "Field staff",
-    hint: "rahul@finserve.in · ST10025",
-    role: "FIELD_STAFF",
-    tone: "bg-gold text-ink",
-  },
-  {
-    persona: "client",
-    label: "Client",
-    hint: "ramesh@client.finserve.in",
-    role: "CLIENT",
-    tone: "bg-sky",
-  },
-];
-
 function Auth({ redirectAfterAuth }: AuthProps = {}) {
-  const { isLoading: authLoading, isAuthenticated, signIn } = useAuth();
+  const { isLoading: authLoading, isAuthenticated, signIn, signOut } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const redirect = resolveRedirect(searchParams.get("returnTo"), redirectAfterAuth ?? "/dashboard");
@@ -73,10 +38,42 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // After auth finishes, go to the intended destination.
+  const linkProfile = useMutation(api.profiles.linkByEmail);
+
+  // Real authentication only: once a session exists, link it to its
+  // workspace profile and go straight to the destination dashboard.
+  // No persona/workspace selection step exists anywhere in this flow.
   useEffect(() => {
-    if (!authLoading && isAuthenticated) navigate(redirect);
-  }, [authLoading, isAuthenticated, navigate, redirect]);
+    if (authLoading || !isAuthenticated) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await linkProfile({});
+        if (cancelled) return;
+        if (result.ok) {
+          navigate(redirect);
+          return;
+        }
+        setStep("signIn");
+        setError(
+          result.reason === "no-workspace"
+            ? "No account is registered for this email. Ask your administrator to create your user."
+            : "This sign-in has no verified email address. Use the email your administrator registered.",
+        );
+        await signOut();
+      } catch (err) {
+        if (cancelled) return;
+        setStep("signIn");
+        setError(
+          err instanceof Error ? err.message : "Sign-in could not be completed. Please try again.",
+        );
+        await signOut();
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, isAuthenticated, linkProfile, navigate, redirect, signOut]);
 
   const signInEmail = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -101,47 +98,12 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
     setError(null);
     try {
       const formData = new FormData(event.currentTarget);
+      // Navigation happens in the link effect above, after the session has
+      // been attached to its workspace profile.
       await signIn("email-otp", formData);
-      navigate(redirect);
     } catch {
       setError("The verification code you entered is incorrect.");
       setOtp("");
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const guestLogin = async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      await signIn("anonymous");
-      navigate(redirect);
-    } catch (err) {
-      setError(`Failed to sign in as guest: ${err instanceof Error ? err.message : "Unknown error"}`);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const attachMutation = useMutation(api.profiles.selectWorkspace);
-
-  const loginAsPersona = async (persona: string) => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const result = await attachMutation({ persona });
-      if (result?.alreadyLinked) {
-        setError("This demo role is already signed in on another session.");
-        return;
-      }
-      navigate(redirect);
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Demo sign-in failed. Try again.",
-      );
     } finally {
       setIsLoading(false);
     }
@@ -164,7 +126,7 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
           {/* Eyebrow */}
           <div className="mb-4 flex items-center justify-center gap-2 text-[11px] font-black uppercase tracking-widest text-muted-foreground">
             <span className="size-2 animate-pulse-block bg-gold" />
-            Sign in to the demo workspace
+            Secure staff sign-in
             <span className="size-2 animate-pulse-block bg-gold" />
           </div>
 
@@ -176,52 +138,11 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                     Welcome back
                   </CardTitle>
                   <CardDescription className="text-sm font-semibold">
-                    Choose a quick demo login, or use email OTP.
+                    Sign in with the email registered to your account.
                   </CardDescription>
                 </CardHeader>
 
-                <CardContent className="space-y-5">
-                  {/* Demo quick logins */}
-                  <div className="space-y-2">
-                    <p className="text-[11px] font-black uppercase tracking-widest text-muted-foreground">
-                      One-click demo roles
-                    </p>
-                    <div className="grid grid-cols-1 gap-2">
-                      {DEMOS.map((d) => (
-                        <button
-                          key={d.persona}
-                          type="button"
-                          onClick={() => loginAsPersona(d.persona)}
-                          disabled={isLoading}
-                          className={`flex w-full items-center justify-between gap-3 border-2 border-ink bg-white p-3 text-left shadow-hard-sm active:translate-x-[2px] active:translate-y-[2px] active:shadow-none disabled:opacity-50 ${
-                            isLoading ? "" : ""
-                          }`}
-                        >
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                              <span className={`inline-flex size-3 shrink-0 rounded-full border-2 border-ink bg-white ${d.tone.split(" ")[0]}`} />
-                              <span className="text-sm font-black uppercase tracking-tight">{d.label}</span>
-                            </div>
-                            <p className="truncate text-[11px] font-mono font-bold text-muted-foreground">
-                              {d.hint}
-                            </p>
-                          </div>
-                          <ArrowRight className="shrink-0 size-4 stroke-[3]" />
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Divider */}
-                  <div className="relative">
-                    <div className="absolute inset-0 flex items-center">
-                      <span className="w-full border-t border-ink/40" />
-                    </div>
-                    <div className="relative flex justify-center text-[11px] font-black uppercase tracking-widest">
-                      <span className="bg-card px-2 text-muted-foreground">or</span>
-                    </div>
-                  </div>
-
+                <CardContent className="space-y-5 pt-5">
                   {/* Email OTP */}
                   <form onSubmit={signInEmail}>
                     <div className="flex items-center gap-2">
@@ -249,21 +170,9 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                     )}
                   </form>
 
-                  <div className="space-y-3 pt-1">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="w-full h-12 shadow-hard-sm uppercase"
-                      onClick={guestLogin}
-                      disabled={isLoading}
-                    >
-                      <UserCheck className="mr-2 size-4" />
-                      Continue as guest
-                    </Button>
-                    <p className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground text-center">
-                      Guest access skips the demo workspace
-                    </p>
-                  </div>
+                  <p className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground text-center">
+                    We email you a one-time code — no passwords to remember.
+                  </p>
                 </CardContent>
               </>
             ) : (
@@ -351,10 +260,10 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
           {/* Footer note */}
           <div className="mt-4 border-t-2 border-ink bg-muted/40 px-4 py-3 text-center">
             <p className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">
-              Demo personas are pre-seeded with wallets, clients and loans.
+              Every sign-in is email-verified and authorized by role on the server.
             </p>
             <p className="mt-1 text-[10px] font-medium text-muted-foreground">
-              Staff login runs offline-ready collections, cash handovers and receipts.
+              Field staff run offline-ready collections, cash handovers and receipts.
             </p>
           </div>
         </div>

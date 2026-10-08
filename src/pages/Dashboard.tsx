@@ -70,7 +70,8 @@ function NoWorkspace() {
         </h1>
         <p className="mt-2 text-sm font-semibold text-muted-foreground">
           {user?.email ?? user?.name ?? "This account"} isn't linked to a FinServe
-          workspace yet. Sign in again and pick a demo role to continue.
+          workspace yet. Sign in with the email your administrator registered for
+          your account.
         </p>
         <div className="mt-4 flex flex-col gap-2">
           <Button
@@ -101,10 +102,9 @@ export default function Dashboard() {
   if (loading || seedState === "idle" || seedState === "seeding") {
     return (
       <BootScreen
-        label={
-          seedState === "seeding" || seedState === "idle"
-            ? "Preparing demo workspace…"
-            : "Loading your workspace…"
+        label={            seedState === "seeding" || seedState === "idle"
+              ? "Preparing workspace…"
+              : "Loading your workspace…"
         }
       />
     );
@@ -155,7 +155,7 @@ export default function Dashboard() {
   const seedError =
     seedState === "error" ? (
       <div className="mb-3 flex items-center justify-between gap-2 border-2 border-ink bg-blush px-3 py-2 text-xs font-black uppercase">
-        <span>Demo data seed failed — some records may be missing</span>
+        <span>Workspace setup failed — some records may be missing</span>
         <Button
           size="sm"
           variant="outline"
