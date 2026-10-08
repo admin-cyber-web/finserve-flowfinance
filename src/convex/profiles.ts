@@ -46,32 +46,44 @@ export const me = query({
   },
 });
 
-/** Links a signed-in user (incl. demo/anonymous) to a seeded workspace profile. */
-export const attachPersona = mutation({
-  args: { persona: v.string(), device: v.optional(v.string()) },
-  handler: async (ctx, { persona, device }) => {
+/** Claims a seeded workspace profile for the current session (demo + real). */
+export const selectWorkspace = mutation({
+  args: { persona: v.string() },
+  handler: async (ctx, { persona }) => {
     const actor = await getActor(ctx);
     if (!actor) throw new AppError("Sign in first.");
-    if (actor.profile) return { ok: true, alreadyLinked: true };
+
+    if (actor.profile) {
+      const current = actor.profile;
+      if (current.persona === persona) {
+        return { ok: true, alreadyLinked: true };
+      }
+      throw new AppError("This session already has a workspace.");
+    }
+
     const profile = await ctx.db
       .query("profiles")
       .withIndex("by_persona", (q) => q.eq("persona", persona))
       .unique();
-    if (!profile) throw new AppError("No workspace matches that sign-in.");
-    if (profile.status !== "ACTIVE") {
+
+    if (!profile) {
+      throw new AppError("No workspace matches that sign-in.");
+    }
+    if (profile.status !== "ACTIVE" && profile.status !== "CLIENT") {
       throw new AppError(
         `Access denied: this account is ${profile.status.toLowerCase()}.`,
       );
     }
-    if (profile.userId && profile.userId !== actor.userId) {
-      throw new AppError("This demo profile is already linked to another session.");
-    }
+
+    const alreadyLinked = profile.userId != null;
     await ctx.db.patch(profile._id, { userId: actor.userId });
+
     await ctx.db.insert("devices", {
       profileId: profile._id,
-      label: device ?? "This device",
+      label: "Demo device",
       lastSeenAt: Date.now(),
     });
+
     await logAudit(ctx, {
       actorId: profile._id,
       actorName: profile.name,
@@ -79,11 +91,15 @@ export const attachPersona = mutation({
       action: "SESSION_STARTED",
       entity: "profiles",
       entityId: profile.staffId,
-      device,
+      device: "demo-login",
     });
-    return { ok: true };
+
+    return { ok: true, alreadyLinked };
   },
 });
+
+/** Links a signed-in user (incl. demo/anonymous) to a seeded workspace profile. */
+export const attachPersona = selectWorkspace;
 
 /** Claims a profile by verified email (used after email OTP sign-in). */
 export const linkByEmail = mutation({

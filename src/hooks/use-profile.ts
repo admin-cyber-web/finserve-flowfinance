@@ -1,8 +1,9 @@
-import { api } from "@/convex/_generated/api";
-import { useConvex, useQuery } from "convex/react";
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "./use-auth";
 import { can, type Permission } from "@/lib/finance/permissions";
+import type { Id } from "@/convex/_generated/dataModel";
+import { api } from "@/convex/_generated/api";
+import { useConvex, useQuery } from "convex/react";
 
 /**
  * The signed-in FinServe identity: user + workspace profile + effective
@@ -26,6 +27,29 @@ export function useProfile() {
     can: (permission: Permission) => can(profile, permission),
     signOut,
     signIn,
+  };
+}
+
+/** Negotiates the current app session for demo + real sign-in. */
+export function useSession() {
+  const { isAuthenticated, signOut } = useAuth();
+  const data = useQuery(api.profiles.me);
+  const profile = data?.profile ?? null;
+
+  const active =
+    isAuthenticated &&
+    profile &&
+    (profile.status === "ACTIVE" || profile.status === "CLIENT");
+
+  return {
+    active,
+    profile,
+    role: profile?.role ?? null,
+    isAuthenticated,
+    signOut,
+    canJoinWorkspace: isAuthenticated && !profile,
+    needWorkspaceSelection:
+      isAuthenticated && !profile && !!signOut,
   };
 }
 

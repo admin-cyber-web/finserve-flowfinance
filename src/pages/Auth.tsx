@@ -124,19 +124,23 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
     }
   };
 
-  const attachMutation = useMutation(api.profiles.attachPersona);
+  const attachMutation = useMutation(api.profiles.selectWorkspace);
 
   const loginAsPersona = async (persona: string) => {
     setIsLoading(true);
     setError(null);
     try {
-      await attachMutation({ persona, device: "demo-login" });
+      const result = await attachMutation({ persona });
+      if (result?.alreadyLinked) {
+        setError("This demo role is already signed in on another session.");
+        return;
+      }
       navigate(redirect);
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
-          : "Demo sign-in failed. Try email OTP instead.",
+          : "Demo sign-in failed. Try again.",
       );
     } finally {
       setIsLoading(false);
