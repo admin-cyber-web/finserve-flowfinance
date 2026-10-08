@@ -52,7 +52,7 @@ export default function Profile() {
               {profile.staffId}
             </div>
             <div className="truncate text-[11px] font-semibold text-paper/70">
-              {profile.branch?.name ?? "No branch"} · {user?.email ?? "demo session"}
+              {profile.branch?.name ?? "No branch"} · {user?.email ?? "signed-in session"}
             </div>
           </div>
         </div>

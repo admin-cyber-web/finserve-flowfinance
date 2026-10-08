@@ -32,7 +32,7 @@ export function useProfile() {
   };
 }
 
-/** Negotiates the current app session for demo + real sign-in. */
+/** Negotiates the current app session state. (Unused legacy helper.) */
 export function useSession() {
   const { isAuthenticated, signOut } = useAuth();
   const data = useQuery(api.profiles.me);
@@ -55,7 +55,7 @@ export function useSession() {
   };
 }
 
-/** Idempotent demo-dataset bootstrap — runs once per browser session. */
+/** Idempotent sample-dataset bootstrap — runs once per browser session. */
 export function useSeed() {
   const convex = useConvex();
   const [state, setState] = useState<"idle" | "seeding" | "ready" | "error">(

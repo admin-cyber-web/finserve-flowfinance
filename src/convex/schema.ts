@@ -65,7 +65,7 @@ const schema = defineSchema(
       role: v.string(), // SUPER_ADMIN | BRANCH_MANAGER | FIELD_STAFF | ACCOUNTANT | CLIENT
       branchId: v.optional(v.id("branches")),
       status: v.string(), // ACTIVE | SUSPENDED | BLOCKED | DEACTIVATED
-      persona: v.optional(v.string()), // demo login handle: admin | bm | staff | accountant | client
+      persona: v.optional(v.string()), // legacy demo-seed tag (inert: no auth path reads it)
       clientId: v.optional(v.id("clients")), // set for CLIENT role
       image: v.optional(v.string()),
       joiningDate: v.optional(v.number()),

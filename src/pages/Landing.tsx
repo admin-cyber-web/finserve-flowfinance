@@ -64,8 +64,8 @@ const FEATURES = [
 
 const MONEY_STATS = [
   { value: "₹4,00,000", label: "Max staff wallet limit", sub: "Working cash, derived balance" },
-  { value: "₹2,75,430", label: "Outstanding in demo book", sub: "Across active + overdue loans" },
-  { value: "21", label: "Demo clients", sub: "Across the seeded branch" },
+  { value: "₹2,75,430", label: "Outstanding portfolio", sub: "Across active + overdue loans" },
+  { value: "21", label: "Active clients", sub: "Across the seeded branch" },
   { value: "12", label: "Staff profiles", sub: "Admin · BM · accountants · field" },
 ];
 
@@ -109,7 +109,7 @@ export default function Landing() {
             className="shadow-hard-sm uppercase"
             onClick={() => navigate("/auth")}
           >
-            Try the demo
+            Sign in
             <ArrowRight className="ml-1.5 size-4" />
           </Button>
         </div>
@@ -154,11 +154,11 @@ export default function Landing() {
                 className="min-w-[200px] shadow-hard uppercase"
                 onClick={() => navigate("/auth")}
               >
-                Try the demo
+                Sign in
                 <ArrowRight className="ml-2 size-4" />
               </Button>
               <p className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">
-                No setup · demo workspace seeded
+                Email code sign-in · authorized by role on the server
               </p>
             </div>
           </div>
