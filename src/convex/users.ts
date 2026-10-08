@@ -93,6 +93,104 @@ export const verifyStaffLogin = mutation({
   },
 });
 
+/**
+ * System ID + PIN sign-in for admin-created staff accounts.
+ *
+ * Runs inside the Convex Auth `staff-credentials` provider (see
+ * auth/staffCredentials.ts), so the resulting session/tokens are the SAME
+ * standard Convex Auth sessions the email-OTP flow issues — no second auth
+ * architecture. This only validates the stored credential and resolves the
+ * Convex user to sign in as. Never returns the stored hash.
+ *
+ * IMPORTANT: failures are RETURNED, not thrown — a thrown mutation rolls
+ * back its writes, which would discard the failed-attempt counter and break
+ * the lockout. The provider throws after this mutation commits.
+ */
+export const staffCredentialsSignIn = internalMutation({
+  args: { systemId: v.string(), credential: v.string() },
+  handler: async (ctx, { systemId, credential }): Promise<
+    { ok: true; userId: Id<"users"> } | { ok: false; message: string }
+  > => {
+    const trimmed = systemId.trim().toUpperCase();
+    if (!trimmed || !credential) {
+      return { ok: false, message: "Enter your System ID and PIN." };
+    }
+
+    const profiles = await ctx.db.query("profiles").collect();
+    const target = profiles.find(
+      (p) => p.role !== "CLIENT" && p.staffId?.toUpperCase() === trimmed,
+    );
+    if (!target) {
+      return { ok: false, message: "Invalid system ID or credentials." };
+    }
+    if (target.lockedUntil && target.lockedUntil > Date.now()) {
+      return {
+        ok: false,
+        message: "Too many failed attempts. This account is locked for 15 minutes.",
+      };
+    }
+    if (target.status !== "ACTIVE") {
+      return {
+        ok: false,
+        message: `Your account is ${target.status.toLowerCase()}. Contact your administrator.`,
+      };
+    }
+    if (!target.credentialHash) {
+      return {
+        ok: false,
+        message:
+          "This account has no login credentials configured. Contact your administrator.",
+      };
+    }
+
+    const verified = await verifyCredential(
+      normalizeCredential(credential),
+      target.credentialHash,
+    );
+    if (!verified) {
+      // Commits because this mutation returns normally; the provider then
+      // throws with the message below.
+      await bumpFailedAttempt(ctx, target._id);
+      return { ok: false, message: "Invalid system ID or credentials." };
+    }
+    await clearFailedAttempts(ctx, target._id);
+    await touchLastLogin(ctx, target._id);
+
+    // Resolve the Convex user this session acts as. Admin-created staff may
+    // not have one yet: reuse the user for the same email if present,
+    // otherwise create and link one so profile/session identity stay aligned.
+    let userId = target.userId;
+    if (!userId) {
+      const email = target.email;
+      const existing = email
+        ? await ctx.db
+            .query("users")
+            .withIndex("email", (q) => q.eq("email", email))
+            .first()
+        : null;
+      userId =
+        existing?._id ??
+        (await ctx.db.insert("users", {
+          name: target.name,
+          ...(email ? { email } : {}),
+        }));
+      await ctx.db.patch(target._id, { userId });
+    }
+
+    await logAudit(ctx, {
+      actorId: target._id,
+      actorName: target.name,
+      role: target.role,
+      action: "SESSION_STARTED",
+      entity: "profiles",
+      entityId: target.staffId,
+      device: "system-id-login",
+    });
+
+    return { ok: true, userId };
+  },
+});
+
 export const createStaffUser = mutation({
   args: {
     name: v.string(),
@@ -511,9 +609,12 @@ async function touchLastLogin(ctx: Mtx, profileId: Id<"profiles">) {
 
 function generateTempPin(): string {
   const digits = "0123456789";
+  // Cryptographically secure — this value becomes a stored credential hash.
+  const random = new Uint32Array(6);
+  crypto.getRandomValues(random);
   let pin = "";
   for (let i = 0; i < 6; i += 1) {
-    pin += digits[Math.floor(Math.random() * digits.length)];
+    pin += digits[random[i] % 10];
   }
   return pin;
 }

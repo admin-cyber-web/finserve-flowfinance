@@ -5,7 +5,7 @@ import { Logo } from "@/components/fs/primitives";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Loader2, Mail, ArrowRight } from "lucide-react";
+import { Loader2, Mail, ArrowRight, CreditCard, KeyRound } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 
@@ -27,6 +27,14 @@ function resolveRedirect(returnTo: string | null, fallback = "/dashboard") {
   return fallback;
 }
 
+/** Convex surfaces thrown AppErrors with stack context — show only the message. */
+function prettyError(err: unknown): string {
+  const raw =
+    err instanceof Error ? err.message : "Sign-in failed. Please try again.";
+  const match = raw.match(/Uncaught AppError: ([^\n]*)/);
+  return match?.[1]?.trim() || raw;
+}
+
 function Auth({ redirectAfterAuth }: AuthProps = {}) {
   const { isLoading: authLoading, isAuthenticated, signIn, signOut } = useAuth();
   const navigate = useNavigate();
@@ -34,6 +42,7 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
   const redirect = resolveRedirect(searchParams.get("returnTo"), redirectAfterAuth ?? "/dashboard");
 
   const [step, setStep] = useState<"signIn" | { email: string }>("signIn");
+  const [mode, setMode] = useState<"email" | "system">("email");
   const [otp, setOtp] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -92,6 +101,26 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
     }
   };
 
+  // System ID + PIN sign-in for admin-created staff. Reuses the same Convex
+  // Auth session as email OTP — on success the link effect above attaches the
+  // profile and routes by the user's actual role (no persona/workspace step).
+  const signInSystem = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setIsLoading(true);
+    setError(null);
+    try {
+      const formData = new FormData(event.currentTarget);
+      await signIn("staff-credentials", {
+        systemId: String(formData.get("systemId") ?? ""),
+        credential: String(formData.get("credential") ?? ""),
+      });
+    } catch (err) {
+      setError(prettyError(err));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const submitOtp = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setIsLoading(true);
@@ -138,41 +167,125 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                     Welcome back
                   </CardTitle>
                   <CardDescription className="text-sm font-semibold">
-                    Sign in with the email registered to your account.
+                    {mode === "email"
+                      ? "Sign in with the email registered to your account."
+                      : "Staff sign-in with your System ID and PIN."}
                   </CardDescription>
                 </CardHeader>
 
                 <CardContent className="space-y-5 pt-5">
-                  {/* Email OTP */}
-                  <form onSubmit={signInEmail}>
-                    <div className="flex items-center gap-2">
-                      <div className="relative flex-1">
-                        <Mail className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+                  {/* Sign-in method tabs */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMode("email");
+                        setError(null);
+                      }}
+                      className={`border-2 border-ink px-3 py-2 text-[11px] font-black uppercase tracking-widest shadow-hard-sm active:translate-x-[2px] active:translate-y-[2px] active:shadow-none ${
+                        mode === "email" ? "bg-navy text-paper" : "bg-white"
+                      }`}
+                    >
+                      Email code
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMode("system");
+                        setError(null);
+                      }}
+                      className={`border-2 border-ink px-3 py-2 text-[11px] font-black uppercase tracking-widest shadow-hard-sm active:translate-x-[2px] active:translate-y-[2px] active:shadow-none ${
+                        mode === "system" ? "bg-navy text-paper" : "bg-white"
+                      }`}
+                    >
+                      System ID + PIN
+                    </button>
+                  </div>
+
+                  {mode === "email" ? (
+                    <>
+                      {/* Email OTP */}
+                      <form onSubmit={signInEmail}>
+                        <div className="flex items-center gap-2">
+                          <div className="relative flex-1">
+                            <Mail className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+                            <Input
+                              name="email"
+                              placeholder="you@finserve.in"
+                              type="email"
+                              className="pl-9 h-12"
+                              disabled={isLoading}
+                              required
+                            />
+                          </div>
+                          <Button type="submit" size="icon" disabled={isLoading}>
+                            {isLoading ? (
+                              <Loader2 className="size-4 animate-spin" />
+                            ) : (
+                              <ArrowRight className="size-4" />
+                            )}
+                          </Button>
+                        </div>
+                        {error && (
+                          <p className="mt-2 text-sm font-bold text-danger">{error}</p>
+                        )}
+                      </form>
+
+                      <p className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground text-center">
+                        We email you a one-time code — no passwords to remember.
+                      </p>
+                    </>
+                  ) : (
+                    <form onSubmit={signInSystem} className="space-y-3">
+                      <div className="relative">
+                        <CreditCard className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
                         <Input
-                          name="email"
-                          placeholder="you@finserve.in"
-                          type="email"
-                          className="pl-9 h-12"
+                          name="systemId"
+                          placeholder="System ID (e.g. BM-10002)"
+                          className="pl-9 h-12 uppercase"
+                          autoCapitalize="characters"
+                          autoComplete="username"
                           disabled={isLoading}
                           required
                         />
                       </div>
-                      <Button type="submit" size="icon" disabled={isLoading}>
+                      <div className="relative">
+                        <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+                        <Input
+                          name="credential"
+                          type="password"
+                          placeholder="PIN / password"
+                          className="pl-9 h-12"
+                          autoComplete="current-password"
+                          disabled={isLoading}
+                          required
+                        />
+                      </div>
+                      {error && (
+                        <p className="text-sm font-bold text-danger">{error}</p>
+                      )}
+                      <Button
+                        type="submit"
+                        className="w-full h-12 shadow-hard-sm uppercase"
+                        disabled={isLoading}
+                      >
                         {isLoading ? (
-                          <Loader2 className="size-4 animate-spin" />
+                          <>
+                            <Loader2 className="mr-2 size-4 animate-spin" />
+                            Signing in…
+                          </>
                         ) : (
-                          <ArrowRight className="size-4" />
+                          <>
+                            Sign in
+                            <ArrowRight className="ml-2 size-4" />
+                          </>
                         )}
                       </Button>
-                    </div>
-                    {error && (
-                      <p className="mt-2 text-sm font-bold text-danger">{error}</p>
-                    )}
-                  </form>
-
-                  <p className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground text-center">
-                    We email you a one-time code — no passwords to remember.
-                  </p>
+                      <p className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground text-center">
+                        Your System ID and PIN are issued by your administrator.
+                      </p>
+                    </form>
+                  )}
                 </CardContent>
               </>
             ) : (
