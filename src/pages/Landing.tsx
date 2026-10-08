@@ -4,6 +4,7 @@ import { Logo } from "@/components/fs/primitives";
 import { Button } from "@/components/ui/button";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
+import type { ReactNode } from "react";
 
 /* ---------------------------------------------------------------------------
  * FinServe — landing page
@@ -124,47 +125,44 @@ export default function Landing() {
           <div className="absolute bottom-0 right-1/4 h-32 w-32 border-2 border-ink bg-mint/60 shadow-hard" />
         </div>
 
-        <motion.div
-          initial={{ opacity: 0, y: 12 }}
-          animate={visible ? { opacity: 1, y: 0 } : {}}
-          transition={{ duration: 0.45, ease: "easeOut" }}
-          className="relative mx-auto max-w-4xl"
-        >
-          {/* Tag */}
-          <div className="mx-auto mb-6 flex max-w-xs items-center justify-center gap-2 border-2 border-royal bg-navy px-3 py-1.5 text-[11px] font-black uppercase tracking-widest text-gold shadow-hard-sm sm:max-w-none">
-            <span className="size-2 animate-pulse-block bg-gold" />
-            Finance staff platform
-            <span className="size-2 animate-pulse-block bg-gold" />
-          </div>
+        <BannerWrapper>
+          <div className="relative mx-auto max-w-4xl">
+            {/* Tag */}
+            <div className="mx-auto mb-6 flex max-w-xs items-center justify-center gap-2 border-2 border-royal bg-navy px-3 py-1.5 text-[11px] font-black uppercase tracking-widest text-gold shadow-hard-sm sm:max-w-none">
+              <span className="size-2 animate-pulse-block bg-gold" />
+              Finance staff platform
+              <span className="size-2 animate-pulse-block bg-gold" />
+            </div>
 
-          <h1 className="text-5xl font-black leading-[1.04] tracking-tight text-ink sm:text-7xl">
-            Fin<span className="text-royal">Serve</span>
-          </h1>
+            <h1 className="text-5xl font-black leading-[1.04] tracking-tight text-ink sm:text-7xl">
+              Fin<span className="text-royal">Serve</span>
+            </h1>
 
-          <p className="mx-auto mt-5 max-w-xl text-2xl font-black uppercase tracking-tight text-muted-foreground sm:text-3xl sm:tracking-[0.04em]">
-            Empowering Growth Together
-          </p>
-
-          <p className="mx-auto mt-4 max-w-lg text-sm font-bold leading-relaxed text-foreground/80">
-            A mobile-first workspace for microfinance field staff, branch managers
-            and accountants — loans, collections, cash, receipts and audit, all on
-            the same money trail.
-          </p>
-
-          <div className="mt-8 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
-            <Button
-              size="lg"
-              className="min-w-[200px] shadow-hard uppercase"
-              onClick={() => navigate("/auth")}
-            >
-              Try the demo
-              <ArrowRight className="ml-2 size-4" />
-            </Button>
-            <p className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">
-              No setup · demo workspace seeded
+            <p className="mx-auto mt-5 max-w-xl text-2xl font-black uppercase tracking-tight text-muted-foreground sm:text-3xl sm:tracking-[0.04em]">
+              Empowering Growth Together
             </p>
+
+            <p className="mx-auto mt-4 max-w-lg text-sm font-bold leading-relaxed text-foreground/80">
+              A mobile-first workspace for microfinance field staff, branch managers
+              and accountants — loans, collections, cash, receipts and audit, all on
+              the same money trail.
+            </p>
+
+            <div className="mt-8 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
+              <Button
+                size="lg"
+                className="min-w-[200px] shadow-hard uppercase"
+                onClick={() => navigate("/auth")}
+              >
+                Try the demo
+                <ArrowRight className="ml-2 size-4" />
+              </Button>
+              <p className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">
+                No setup · demo workspace seeded
+              </p>
+            </div>
           </div>
-        </motion.div>
+        </BannerWrapper>
 
         {/* Money stat tiles */}
         <div className="mt-12 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -243,9 +241,9 @@ export default function Landing() {
                   </p>
                 </div>
               </motion.div>
-            ))}
+              ))}
+            </div>
           </div>
-        </div>
       </section>
 
       {/* Money trail strip */}
@@ -425,4 +423,9 @@ function MotionDiv({ top }: { top: number }) {
       aria-hidden
     />
   );
+}
+
+/** Keeps the animated hero block mounted even if framer motion is missing. */
+function BannerWrapper({ children }: { children: ReactNode }) {
+  return <>{children}</>;
 }
