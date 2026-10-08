@@ -73,6 +73,11 @@ const schema = defineSchema(
       twoFactorEnabled: v.optional(v.boolean()),
       createdBy: v.optional(v.id("profiles")),
       createdAt: v.number(),
+      credentialHash: v.optional(v.string()),
+      mustChangePassword: v.optional(v.boolean()),
+      lastLoginAt: v.optional(v.number()),
+      failedLoginAttempts: v.optional(v.number()),
+      lockedUntil: v.optional(v.number()),
     })
       .index("by_user", ["userId"])
       .index("by_email", ["email"])
