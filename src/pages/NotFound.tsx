@@ -1,26 +1,32 @@
-import { motion } from "framer-motion";
+import { Button } from "@/components/ui/button";
+import { Logo } from "@/components/fs/primitives";
 
 export default function NotFound() {
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      transition={{ duration: 0.5 }}
-      className="min-h-screen flex flex-col"
-    >
-
-      
-      {/* Main Content */}
-      <div className="flex-1 flex flex-col items-center justify-center">
-        <div className="max-w-5xl mx-auto relative px-4">
-          <div className="flex items-center justify-center min-h-[200px]">
-            <div className="text-center">
-              <h1 className="text-4xl font-bold text-gray-900 mb-4">404</h1>
-              <p className="text-lg text-gray-600">Page Not Found</p>
-            </div>
-          </div>
+    <main className="flex min-h-screen items-center justify-center bg-paper p-6">
+      <div className="w-full max-w-md border-2 border-ink bg-card p-6 text-center shadow-hard">
+        <div className="mx-auto mb-4 w-fit">
+          <Logo />
+        </div>
+        <h1 className="mx-auto mb-3 text-lg font-black uppercase tracking-tight text-ink">
+          Page not found
+        </h1>
+        <p className="mb-5 text-sm font-semibold text-muted-foreground">
+          This page does not exist in FinServe.
+        </p>
+        <div className="flex flex-col gap-3">
+          <Button className="w-full" onClick={() => (window.location.href = "/")}>
+            Back to home
+          </Button>
+          <Button
+            variant="outline"
+            className="w-full"
+            onClick={() => (window.location.href = "/auth")}
+          >
+            Sign in
+          </Button>
         </div>
       </div>
-    </motion.div>
+    </main>
   );
 }
