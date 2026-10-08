@@ -30,18 +30,25 @@ export const me = query({
     };
     if (!actor.profile) return { ...base, profile: null, permissions: [] };
     const profile = actor.profile;
-    const branch = profile.branchId ? await ctx.db.get(profile.branchId) : null;
-    const wallet = profile.role === "FIELD_STAFF"
-      ? await ctx.db
-          .query("wallets")
-          .withIndex("by_profile", (q) => q.eq("profileId", profile._id))
-          .unique()
-      : null;
+    if (!profile) return { ...base, profile: null, permissions: [] };
+    const permissions = effectivePermissions(profile);
+    const branchId = profile.branchId;
+    const branch = branchId ? (await ctx.db.get(branchId)) ?? null : null;
     return {
       ...base,
-      profile: { ...profile, branch },
-      permissions: effectivePermissions(profile),
-      wallet: wallet ? { _id: wallet._id, walletLimit: wallet.walletLimit } : null,
+      profile: {
+        _id: profile._id,
+        name: profile.name,
+        email: profile.email,
+        role: profile.role,
+        status: profile.status,
+        staffId: profile.staffId ?? null,
+        image: profile.image ?? null,
+        branch: branch ? { _id: branch._id, name: branch.name } : null,
+        joiningDate: profile.joiningDate,
+        personaLoaded: false,
+      },
+      permissions,
     };
   },
 });

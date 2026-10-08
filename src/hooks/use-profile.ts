@@ -24,6 +24,8 @@ export function useProfile() {
     permissions: data?.permissions ?? [],
     role: profile?.role ?? null,
     status: profile?.status ?? null,
+    joiningDate: profile?.joiningDate ?? null,
+    personaLoaded: profile?.personaLoaded ?? false,
     can: (permission: Permission) => can(profile, permission),
     signOut,
     signIn,
