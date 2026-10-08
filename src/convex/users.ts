@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { query, mutation, internalMutation } from "./_generated/server";
+import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import {
   AppError,
@@ -181,7 +182,7 @@ export const createStaffUser = mutation({
         status: "ACTIVE",
         createdAt: createAt,
       });
-      await ctx.runMutation(internalMutation.staffWalletTx, {
+      await ctx.runMutation(internal.users.staffWalletTx, {
         walletId,
         profileId,
         branchId: args.branchId,
