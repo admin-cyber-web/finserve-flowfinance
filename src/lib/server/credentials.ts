@@ -1,4 +1,4 @@
-import { modifyAccountCredentials } from "@convex-dev/auth/server";
+const SALT = "finserve-credential-v1";
 
 export type CredentialKind = "PIN" | "PASSWORD";
 
@@ -6,29 +6,17 @@ export function normalizeCredential(value: string): string {
   return value.trim();
 }
 
-/**
- * Hash a staff PIN/password for storage.
- *
- * Convex Auth's `modifyAccountCredentials` expects a real userId to operate on
- * an existing account. For staff profiles we store a stable, provider-derived
- * credential hash on the profile document so verification can happen through the
- * same hashing contract.
- *
- * Because `modifyAccountCredentials` is async and requires an existing account,
- * we use it only to derive the hash layout when an account exists; for new
- * profiles we derive a comparable hash using the same provider contract.
- */
-export function hashCredential(pin: string): string {
-  // Derive a stable hash using the auth provider's credential path.
-  const tokens = modifyAccountCredentials({
-    password: pin,
-  });
-  return tokens.hash;
+export async function hashCredential(pin: string): Promise<string> {
+  const payload = new TextEncoder().encode(`${SALT}:${pin}`);
+  const buf = await globalThis.crypto.subtle.digest("SHA-256", payload);
+  const bytes = new Uint8Array(buf);
+  let hex = "";
+  for (let i = 0; i < bytes.length; i += 1) {
+    hex += bytes[i].toString(16).padStart(2, "0");
+  }
+  return hex.slice(0, 64);
 }
 
-export function verifyCredential(verified: string, hash: string): boolean {
-  const tokens = modifyAccountCredentials({
-    password: verified,
-  });
-  return tokens.hash === hash;
+export async function verifyCredential(verified: string, hash: string): Promise<boolean> {
+  return (await hashCredential(verified)) === hash;
 }

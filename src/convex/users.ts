@@ -11,7 +11,6 @@ import {
 } from "../lib/server/convexHelpers";
 import { FS_ROLES, USER_STATUSES } from "../lib/finance/types";
 import { oneOf, requiredString, optionalString, money } from "../lib/finance/validate";
-import type { Id } from "./_generated/dataModel";
 import { normalizeCredential, hashCredential, verifyCredential } from "../lib/server/credentials";
 
 const SUPER_ADMIN_EMAIL = "tiwarijhumki@gmail.com";
@@ -157,6 +156,7 @@ export const createStaffUser = mutation({
       }
     }
 
+    const createAt = Date.now();
     const profileId = await ctx.db.insert("profiles", {
       name,
       mobile,
@@ -166,11 +166,10 @@ export const createStaffUser = mutation({
       status,
       staffId,
       credentialHash,
-      joiningDate: Date.now(),
+      joiningDate: createAt,
       createdBy: me._id,
-      createdAt: Date.now(),
+      createdAt: createAt,
       failedLoginAttempts: 0,
-      lockedUntil: null,
     });
 
     if (role === "FIELD_STAFF" && args.walletLimit && args.walletLimit > 0) {
@@ -180,9 +179,9 @@ export const createStaffUser = mutation({
         branchId: args.branchId,
         walletLimit: limit,
         status: "ACTIVE",
-        createdAt: Date.now(),
+        createdAt: createAt,
       });
-      await ctx.runMutation(internalMutation.users.createWalletTx, {
+      await ctx.runMutation(internalMutation.staffWalletTx, {
         walletId,
         profileId,
         branchId: args.branchId,
@@ -318,6 +317,7 @@ export const bootstrapSuperAdmin = mutation({
       }
       const adminBranch = branches[0]._id;
 
+      const createAt = Date.now();
       const adminId = await ctx.db.insert("profiles", {
         name: "System Administrator",
         mobile: "",
@@ -327,10 +327,9 @@ export const bootstrapSuperAdmin = mutation({
         status: "ACTIVE",
         staffId: "SA-00001",
         credentialHash: await hashCredential(normalizeCredential(password)),
-        joiningDate: Date.now(),
-        createdAt: Date.now(),
+        joiningDate: createAt,
+        createdAt: createAt,
         failedLoginAttempts: 0,
-        lockedUntil: null,
       });
       adminProfile = await ctx.db.get(adminId);
       await logAudit(ctx, {
@@ -441,6 +440,7 @@ export const changeSuperAdminPassword = mutation({
     }
     await ctx.db.patch(me._id, {
       credentialHash: await hashCredential(normalizeCredential(newPassword)),
+      lockedUntil: undefined,
     });
     await logAudit(ctx, {
       actorId: me._id,
@@ -456,7 +456,7 @@ export const changeSuperAdminPassword = mutation({
   },
 });
 
-export const createWalletTx = internalMutation({
+export const staffWalletTx = internalMutation({
   args: {
     walletId: v.id("wallets"),
     profileId: v.id("profiles"),
@@ -486,19 +486,20 @@ async function bumpFailedAttempt(ctx: Mtx, profileId: Id<"profiles">) {
   const p = await ctx.db.get(profileId);
   if (!p) return;
   const attempts = (p.failedLoginAttempts ?? 0) + 1;
-  const lockUntil = attempts >= 5 ? Date.now() + 15 * 60 * 1000 : null;
+  const lockUntil = attempts >= 5 ? Date.now() + 15 * 60 * 1000 : undefined;
   await ctx.db.patch(profileId, {
     failedLoginAttempts: attempts,
-    lockedUntil: lockUntil ?? undefined,
+    lockedUntil: lockUntil,
   });
 }
 
 async function clearFailedAttempts(ctx: Mtx, profileId: Id<"profiles">) {
   const p = await ctx.db.get(profileId);
-  if (!p) return;    await ctx.db.patch(profileId, {
-      failedLoginAttempts: 0,
-      lockedUntil: null,
-    });
+  if (!p) return;
+  await ctx.db.patch(profileId, {
+    failedLoginAttempts: 0,
+    lockedUntil: undefined,
+  });
 }
 
 async function touchLastLogin(ctx: Mtx, profileId: Id<"profiles">) {
@@ -515,18 +516,3 @@ function generateTempPin(): string {
   }
   return pin;
 }
-
-async function hashCredential(pin: string): Promise<string> {
-  const tokens = await import("@convex-dev/auth/server").then((m) =>
-    m.modifyAccountCredentials({ password: pin }),
-  );
-  return tokens.hash as string;
-}
-
-async function verifyCredential(verified: string, hash: string): Promise<boolean> {
-  const tokens = await import("@convex-dev/auth/server").then((m) =>
-    m.modifyAccountCredentials({ password: verified }),
-  );
-  return (tokens.hash as string) === hash;
-}
-
