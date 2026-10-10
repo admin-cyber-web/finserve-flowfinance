@@ -240,19 +240,21 @@ export const createStaffUser = mutation({
 
     let credentialHash: string | null = null;
     let needsSetup = false;
+    // Returned to the creating SUPER_ADMIN exactly once, so the admin can
+    // hand the staff member their initial PIN. Only the hash is stored.
+    let initialCredential: string | null = null;
 
     if (role === "SUPER_ADMIN") {
       if (!args.credential || args.credential.trim().length === 0) {
         throw new AppError("SUPER ADMIN must be created with a credential.");
       }
       credentialHash = await hashCredential(normalizeCredential(args.credential));
+    } else if (args.credential && args.credential.trim().length > 0) {
+      credentialHash = await hashCredential(normalizeCredential(args.credential));
     } else {
-      if (args.credential && args.credential.trim().length > 0) {
-        credentialHash = await hashCredential(normalizeCredential(args.credential));
-      } else {
-        credentialHash = await hashCredential(generateTempPin());
-        needsSetup = true;
-      }
+      initialCredential = generateTempPin();
+      credentialHash = await hashCredential(normalizeCredential(initialCredential));
+      needsSetup = true;
     }
 
     const createAt = Date.now();
@@ -324,6 +326,7 @@ export const createStaffUser = mutation({
       profileId,
       staffId,
       needsCredentialSetup: needsSetup,
+      initialCredential,
     };
   },
 });
@@ -345,8 +348,12 @@ export const setStaffCredential = mutation({
     }
 
     let hash: string;
+    // When generating, return the new PIN to the SUPER_ADMIN exactly once;
+    // only its hash is stored on the profile.
+    let initialCredential: string | null = null;
     if (generate) {
-      hash = await hashCredential(generateTempPin());
+      initialCredential = generateTempPin();
+      hash = await hashCredential(normalizeCredential(initialCredential));
     } else {
       hash = await hashCredential(normalizeCredential(credential));
     }
@@ -363,7 +370,7 @@ export const setStaffCredential = mutation({
       branchId: target.branchId,
     });
 
-    return { ok: true, generated: generate };
+    return { ok: true, generated: generate, initialCredential };
   },
 });
 

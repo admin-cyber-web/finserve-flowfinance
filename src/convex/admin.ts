@@ -186,16 +186,30 @@ export const dashboard = query({
     );
 
     const alerts: { kind: string; title: string; body: string; tone: "bad" | "warn" | "info"; link?: string }[] = [];
+    // Group pending closings per branch: multiple pending closings (same
+    // amount, different days/staff) used to render as identical repeated
+    // alert rows on the dashboard. One aggregated alert keeps every pending
+    // closing visible without repeating the same line.
+    const closingGroups = new Map<string, { total: number; count: number; dates: string[] }>();
     for (const c of pendingClosings) {
-      if (c.difference !== 0) {
-        alerts.push({
-          kind: "CASH_SHORTAGE",
-          tone: "bad",
-          title: `Cash ${c.difference < 0 ? "shortage" : "excess"} ₹${Math.abs(c.difference).toLocaleString("en-IN")}`,
-          body: `${c.dateKey} closing awaits review.`,
-          link: "/dashboard/cash",
-        });
-      }
+      if (c.difference === 0) continue;
+      const key = c.branchId ?? "org";
+      const group = closingGroups.get(key) ?? { total: 0, count: 0, dates: [] as string[] };
+      group.total += c.difference;
+      group.count += 1;
+      if (!group.dates.includes(c.dateKey)) group.dates.push(c.dateKey);
+      closingGroups.set(key, group);
+    }
+    for (const group of closingGroups.values()) {
+      alerts.push({
+        kind: "CASH_SHORTAGE",
+        tone: "bad",
+        title: `Cash ${group.total < 0 ? "shortage" : "excess"} ₹${Math.abs(group.total).toLocaleString("en-IN")}${
+          group.count > 1 ? ` across ${group.count} closings` : ""
+        }`,
+        body: `${group.dates.sort().join(", ")} closing${group.count > 1 ? "s" : ""} await review.`,
+        link: "/dashboard/cash",
+      });
     }
     if (pendingApplications.length) {
       alerts.push({

@@ -63,15 +63,20 @@ class RootErrorBoundary extends React.Component<
       return (
         <div className="min-h-screen flex items-center justify-center bg-background text-foreground p-6">
           <div className="max-w-lg text-center">
-            <p className="text-sm font-semibold">Preview runtime error</p>
-            <p className="mt-2 text-xs text-muted-foreground break-words">
-              {this.state.message}
+            <p className="text-sm font-semibold">
+              Something went wrong on this page.
             </p>
-            {this.state.stack && (
-              <pre className="mt-3 text-left text-[10px] leading-4 text-muted-foreground/80 max-h-40 overflow-auto rounded border border-border/60 p-2">
-                {this.state.stack}
-              </pre>
-            )}
+            <p className="mt-2 text-xs text-muted-foreground break-words">
+              The error has been logged. Try reloading — if it keeps happening,
+              go back to the dashboard.
+            </p>
+            <button
+              type="button"
+              className="mt-4 border-2 border-border px-4 py-2 text-sm font-semibold hover:bg-muted"
+              onClick={() => window.location.reload()}
+            >
+              Reload
+            </button>
           </div>
         </div>
       );
@@ -125,7 +130,7 @@ createRoot(document.getElementById("root")!).render(
                 element={<AuthPage redirectAfterAuth="/dashboard" />}
               />
               <Route
-                path="/dashboard"
+                path="/dashboard/*"
                 element={
                   <RequireAuth>
                     <Dashboard />

@@ -28,11 +28,17 @@ export default function Staff() {
   const navigate = useNavigate();
   const { profile, can } = useProfile();
   const staff = useQuery(api.profiles.listStaff, { includeInactive: false });
-  const createStaff = useMutation(api.profiles.createStaff);
+  const createStaff = useMutation(api.users.createStaffUser);
 
   const [roleFilter, setRoleFilter] = useState<(typeof ROLE_FILTERS)[number]>("ALL");
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [created, setCreated] = useState<{
+    staffId: string;
+    name: string;
+    role: string;
+    initialCredential: string | null;
+  } | null>(null);
 
   const [form, setForm] = useState({
     name: "",
@@ -71,6 +77,7 @@ export default function Staff() {
     }
     setBusy(true);
     try {
+      const roleName = form.role === "FIELD_STAFF" ? "Field staff" : form.role === "BRANCH_MANAGER" ? "Branch manager" : "Accountant";
       const result = await createStaff({
         name: form.name.trim(),
         mobile: form.mobile.trim(),
@@ -79,9 +86,15 @@ export default function Staff() {
         branchId,
         walletLimit: form.role === "FIELD_STAFF" && form.walletLimit ? Number(form.walletLimit) : undefined,
       });
-      toast.success(`Created ${result.staffId}`);
       setOpen(false);
+      setCreated({
+        staffId: result.staffId,
+        name: form.name.trim(),
+        role: roleName,
+        initialCredential: result.initialCredential,
+      });
       setForm({ name: "", mobile: "", email: "", role: "FIELD_STAFF", branchId: "", walletLimit: "" });
+      toast.success(`${roleName} created — ${result.staffId}`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not create staff");
     } finally {
@@ -229,6 +242,44 @@ export default function Staff() {
             <UserCog className="size-4" /> {busy ? "Creating…" : "Create staff"}
           </Button>
         </div>
+      </BottomSheet>
+
+      {/* One-time credential handover — shown exactly once per creation */}
+      <BottomSheet
+        open={created !== null}
+        onOpenChange={(o) => {
+          if (!o) setCreated(null);
+        }}
+        title="Staff created"
+        subtitle="Sign-in credentials — shown only once"
+      >
+        {created && (
+          <div className="space-y-3">
+            <div className="border-2 border-ink bg-mint p-3">
+              <p className="text-xs font-black uppercase tracking-wider">{created.name} · {created.role}</p>
+              <p className="mt-2 text-[11px] font-black uppercase text-muted-foreground">System ID</p>
+              <p className="font-mono text-xl font-black tracking-wider">{created.staffId}</p>
+              {created.initialCredential ? (
+                <>
+                  <p className="mt-2 text-[11px] font-black uppercase text-muted-foreground">Initial PIN</p>
+                  <p className="font-mono text-xl font-black tracking-[0.3em]">{created.initialCredential}</p>
+                </>
+              ) : (
+                <p className="mt-2 text-xs font-bold">
+                  This account was created with an administrator-set credential — no temporary PIN was generated.
+                </p>
+              )}
+            </div>
+            <p className="border-2 border-ink bg-blush p-3 text-xs font-bold">
+              This PIN is displayed only once and is not recoverable. Share it
+              with the staff member over a secure channel, and ask them to
+              change it after first sign-in.
+            </p>
+            <Button className="w-full" size="lg" onClick={() => setCreated(null)}>
+              I have saved the credentials
+            </Button>
+          </div>
+        )}
       </BottomSheet>
     </div>
   );
