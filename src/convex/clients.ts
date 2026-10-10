@@ -308,7 +308,25 @@ export const create = mutation({
     const householdIncome = money(args.householdIncome, "householdIncome", { allowZero: true });
 
     let branchId = me.branchId;
-    if (!branchId) throw new AppError("Your profile has no branch assigned.");
+    if (!branchId) {
+      if (me.role === "SUPER_ADMIN") {
+        // Org-wide admin without a home branch (e.g. bootstrapped before the
+        // org existed): default to the oldest active branch so onboarding is
+        // never blocked by bootstrap ordering.
+        const branches = (await ctx.db.query("branches").collect()).filter(
+          (b: Doc<"branches">) => b.status === "ACTIVE",
+        );
+        branches.sort((a, b) => a._creationTime - b._creationTime);
+        if (!branches[0]) {
+          throw new AppError(
+            "No active branch exists yet — create a branch before onboarding clients.",
+          );
+        }
+        branchId = branches[0]._id;
+      } else {
+        throw new AppError("Your profile has no branch assigned.");
+      }
+    }
 
     const assignee = args.assignedTo ?? (me.role === "FIELD_STAFF" ? me._id : me._id);
     const assigneeProfile = await ctx.db.get(assignee);

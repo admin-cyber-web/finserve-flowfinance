@@ -39,6 +39,16 @@ function Field({
 const inputCls =
   "h-11 w-full border-2 border-ink bg-white px-3 text-sm font-semibold outline-none focus:shadow-hard-sm";
 
+/** Convex surfaces thrown AppErrors with stack context — show only the message. */
+function prettyError(err: unknown): string {
+  const raw =
+    err instanceof Error
+      ? err.message
+      : "Could not create the client — please retry.";
+  const match = raw.match(/Uncaught AppError: ([^\n]*)/);
+  return (match?.[1]?.trim() || raw.replace(/^Uncaught\s+/, "")).slice(0, 200);
+}
+
 export default function ClientNew() {
   const navigate = useNavigate();
   const create = useMutation(api.clients.create);
@@ -47,6 +57,9 @@ export default function ClientNew() {
 
   // Geo-tagged client photo — mandatory: camera capture + fresh GPS fix.
   const [photo, setPhoto] = useState<CapturedClientPhoto | null>(null);
+  // Re-entry guard covering the WHOLE submit (upload URL + upload + create),
+  // so repeated taps can never create duplicate clients.
+  const [submitting, setSubmitting] = useState(false);
 
   const [f, setF] = useState({
     name: "",
@@ -80,12 +93,14 @@ export default function ClientNew() {
     photo !== null;
 
   const submit = async () => {
+    if (submitting) return;
     if (!valid || !photo) {
       toast.error(
         "Fill the required fields and capture the client photo with GPS.",
       );
       return;
     }
+    setSubmitting(true);
     try {
       // 1. Server-issued, short-lived upload URL (RBAC-checked).
       const uploadUrl = await getUploadUrl({});
@@ -137,15 +152,15 @@ export default function ClientNew() {
         toast.success(
           `Client created — ${result.code} · GPS ${photo.geo.latitude}, ${photo.geo.longitude}`,
         );
-        navigate(`/dashboard/clients/${result.clientId}`);
+        // Back to the Clients list: the reactive query shows the new client
+        // immediately — no manual refresh needed.
+        navigate("/dashboard/clients");
       }
     } catch (err) {
       // Form and captured photo stay intact so the user can simply retry.
-      toast.error(
-        err instanceof Error
-          ? err.message
-          : "Could not create the client — please retry.",
-      );
+      toast.error(prettyError(err));
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -263,7 +278,7 @@ export default function ClientNew() {
 
       <section className="space-y-3 border-2 border-ink bg-card p-4 shadow-hard-sm">
         <h2 className="text-xs font-black uppercase tracking-[0.14em] text-muted-foreground">
-          4 · Client photo — live capture (GPS required)
+          Client Photo
         </h2>
         <ClientPhotoCapture value={photo} onChange={setPhoto} />
       </section>
@@ -293,10 +308,9 @@ export default function ClientNew() {
       <div className="sticky bottom-24 flex gap-2">
         <Button variant="outline" size="lg" className="flex-1" onClick={() => navigate("/dashboard/clients")}>
           Cancel
-        </Button>
-        <Button size="lg" className="flex-[2]" disabled={!valid || busy} onClick={() => void submit()}>
-          {busy ? "Saving…" : "Create client"}
-        </Button>
+        </Button>          <Button size="lg" className="flex-[2]" disabled={!valid || busy || submitting} onClick={() => void submit()}>
+            {busy || submitting ? "Saving…" : "Create client"}
+          </Button>
       </div>
     </div>
   );

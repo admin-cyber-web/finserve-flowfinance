@@ -477,10 +477,6 @@ export function ClientPhotoCapture({
                 </span>
               )}
             </span>
-            <p className="text-[11px] font-semibold text-muted-foreground">
-              Form bhar sakte hain — photo tab save hoga jab tak accurate
-              location (≤ {MAX_GEO_ACCURACY_M} m) na mil jaye.
-            </p>
           </div>
           <Button
             type="button"
@@ -501,11 +497,10 @@ export function ClientPhotoCapture({
       {phase === "idle" && !cameraError && !geoError && (
         <Button
           type="button"
-          size="lg"
           className="w-full"
           onClick={() => void startCamera()}
         >
-          <Camera className="size-4" /> Open camera / Capture client photo
+          <Camera className="size-4" /> Client Photo
         </Button>
       )}
 
@@ -586,11 +581,10 @@ export function ClientPhotoCapture({
       {phase === "idle" && (cameraError || geoError) && (
         <Button
           type="button"
-          size="lg"
           className="w-full"
           onClick={() => void startCamera()}
         >
-          <Camera className="size-4" /> Open camera / Capture client photo
+          <Camera className="size-4" /> Client Photo
         </Button>
       )}
 
