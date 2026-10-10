@@ -2,89 +2,49 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Camera,
+  Check,
   Loader2,
-  MapPin,
   RefreshCw,
   SwitchCamera,
   Trash2,
 } from "lucide-react";
 import {
+  GEO_ACQUIRE_WINDOW_MS,
   GEO_TIMEOUT_MS,
+  MAX_GEO_ACCURACY_M,
+  acceptableFixAtCapture,
+  betterFix,
   geoStampLines,
-  geoValidationError,
-  type GeoFix,
+  isPlausibleFix,
+  type AcquiredFix,
 } from "@/lib/geo";
 
 /**
  * Client photo live capture.
  *
- * Opens the device camera via `getUserMedia` (front/rear switchable), grabs a
- * frame, then requires a fresh high-accuracy GPS fix BEFORE accepting the
- * photo. The accepted frame is stamped with the location box on a canvas —
- * the blob handed to the parent is the stamped image, and the coordinates in
- * the stamp are the exact coordinates stored with the client record.
+ * GPS runs in the background via `watchPosition` (enableHighAccuracy,
+ * maximumAge: 0) from the moment the camera opens. Successive readings are
+ * kept as a best-accuracy fix; the photo is finalized only once a reading
+ * meets the accuracy limit AND is fresh relative to the frame instant, so
+ * an initial 5000 m reading never aborts the flow — a better reading can
+ * still arrive within the acquisition window. The stamp always carries the
+ * actual GPS values of the accepted reading.
  *
- * Nothing here silently bypasses: if camera or GPS is
- * unavailable/denied/inaccurate, the user gets a clear error and retry path,
- * and the client form cannot be submitted.
+ * UI is quiet by design: a small spinner while acquiring, a compact
+ * success row when ready, and a compact actionable error row (with Retry)
+ * only when user action is needed.
  */
 
 export interface CapturedClientPhoto {
   blob: Blob;
   previewUrl: string;
-  geo: GeoFix;
+  geo: AcquiredFix & { permissionStatus: string };
 }
 
-type Phase = "idle" | "starting" | "live" | "locating" | "geo-error";
+type Phase = "idle" | "starting" | "live" | "locating";
 
 function stopStream(stream: MediaStream | null) {
   stream?.getTracks().forEach((t) => t.stop());
-}
-
-/** Promisified high-accuracy GPS fix — one prompt per capture attempt. */
-function getGeoFix(): Promise<GeoFix> {
-  return new Promise((resolve, reject) => {
-    if (!("geolocation" in navigator)) {
-      reject(
-        new Error(
-          "This device or browser does not support location services (GPS).",
-        ),
-      );
-      return;
-    }
-    navigator.geolocation.getCurrentPosition(
-      (pos) =>
-        resolve({
-          latitude: pos.coords.latitude,
-          longitude: pos.coords.longitude,
-          accuracyMeters: pos.coords.accuracy,
-          capturedAt: pos.timestamp,
-          permissionStatus: "granted",
-        }),
-      (err) => {
-        if (err.code === err.PERMISSION_DENIED) {
-          reject(
-            new Error(
-              "Location permission denied — client photo capture ke liye Location/GPS ON karein aur permission allow karein.",
-            ),
-          );
-        } else if (err.code === err.TIMEOUT) {
-          reject(
-            new Error(
-              "Timed out waiting for a GPS fix. Move to open air (or near a window) and retry.",
-            ),
-          );
-        } else {
-          reject(
-            new Error(
-              "Location unavailable right now. Move to open air (or near a window) and retry.",
-            ),
-          );
-        }
-      },
-      { enableHighAccuracy: true, timeout: GEO_TIMEOUT_MS, maximumAge: 0 },
-    );
-  });
 }
 
 /** Draw the frame + readable location stamp (full coordinates, never truncated). */
@@ -92,7 +52,7 @@ function drawStamped(
   source: CanvasImageSource,
   width: number,
   height: number,
-  geo: GeoFix,
+  geo: CapturedClientPhoto["geo"],
 ): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -145,16 +105,114 @@ export function ClientPhotoCapture({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const frameRef = useRef<HTMLCanvasElement | null>(null);
+  const frameAtRef = useRef<number | null>(null);
+  const watchIdRef = useRef<number | null>(null);
+  const bestRef = useRef<AcquiredFix | null>(null);
+  const deadlineRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const finalizingRef = useRef(false);
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [facing, setFacing] = useState<"environment" | "user">("environment");
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [geoError, setGeoError] = useState<string | null>(null);
+  // Small live GPS readout while the camera is open: null = still acquiring.
+  const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null);
+  // Downscaled frozen-frame thumbnail, encoded once at capture time.
+  const [frozenPreview, setFrozenPreview] = useState<string | null>(null);
 
-  // Stop the camera stream when the component goes away.
-  useEffect(() => {
-    return () => stopStream(streamRef.current);
+  const stopWatch = useCallback(() => {
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
+    if (deadlineRef.current !== null) {
+      clearTimeout(deadlineRef.current);
+      deadlineRef.current = null;
+    }
   }, []);
+
+  // Stop watch + camera stream when the component goes away.
+  useEffect(() => {
+    return () => {
+      stopWatch();
+      stopStream(streamRef.current);
+    };
+  }, [stopWatch]);
+
+  const finalize = useCallback(
+    async (fix: AcquiredFix) => {
+      const frame = frameRef.current;
+      if (!frame || finalizingRef.current) return;
+      finalizingRef.current = true;
+      stopWatch();
+      try {
+        const geo = { ...fix, permissionStatus: "granted" };
+        const stamped = drawStamped(frame, frame.width, frame.height, geo);
+        const blob = await canvasToJpegBlob(stamped);
+        const previewUrl = URL.createObjectURL(blob);
+        frameRef.current = null;
+        frameAtRef.current = null;
+        bestRef.current = null;
+        setGeoError(null);
+        setGpsAccuracy(null);
+        setFrozenPreview(null);
+        setPhase("idle");
+        onChange({ blob, previewUrl, geo });
+      } finally {
+        finalizingRef.current = false;
+      }
+    },
+    [onChange, stopWatch],
+  );
+
+  /** Called on every watchPosition reading: track best, accept when ready. */
+  const onPosition = useCallback(
+    (position: GeolocationPosition) => {
+      const candidate: AcquiredFix = {
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        accuracyMeters: position.coords.accuracy,
+        capturedAt: position.timestamp,
+      };
+      if (!isPlausibleFix(candidate)) return;
+      bestRef.current = betterFix(bestRef.current, candidate);
+      setGpsAccuracy(bestRef.current.accuracyMeters);
+      // Accept only once the frame exists AND the fix matches the frame time.
+      if (frameAtRef.current !== null) {
+        const accepted = acceptableFixAtCapture(bestRef.current, frameAtRef.current);
+        if (accepted) void finalize(accepted);
+      }
+    },
+    [finalize],
+  );
+
+  const startWatch = useCallback((): boolean => {
+    if (watchIdRef.current !== null) return true; // never double-prompt
+    if (!("geolocation" in navigator)) {
+      setGeoError(
+        "This device or browser does not support location services (GPS).",
+      );
+      return false;
+    }
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      onPosition,
+      (err) => {
+        if (err.code === err.PERMISSION_DENIED) {
+          stopWatch();
+          setGeoError(
+            "Location permission denied — client photo capture ke liye Location/GPS ON karein aur permission allow karein.",
+          );
+          setFrozenPreview(null);
+          frameRef.current = null;
+          frameAtRef.current = null;
+          setPhase("idle");
+        }
+        // UNAVAILABLE / TIMEOUT: keep watching — a better reading may arrive.
+      },
+      { enableHighAccuracy: true, timeout: GEO_TIMEOUT_MS, maximumAge: 0 },
+    );
+    return true;
+  }, [onPosition, stopWatch]);
 
   const startCamera = useCallback(async () => {
     setCameraError(null);
@@ -176,6 +234,12 @@ export function ClientPhotoCapture({
     setPhase("starting");
     stopStream(streamRef.current);
     streamRef.current = null;
+    frameRef.current = null;
+    frameAtRef.current = null;
+    bestRef.current = null;
+    setFrozenPreview(null);
+    // GPS acquisition starts in the background alongside the camera.
+    startWatch();
     try {
       let stream: MediaStream;
       try {
@@ -220,32 +284,7 @@ export function ClientPhotoCapture({
       );
       setPhase("idle");
     }
-  }, [facing]);
-
-  const finishWithGeo = useCallback(
-    async (frame: HTMLCanvasElement) => {
-      setGeoError(null);
-      setPhase("locating");
-      try {
-        const geo = await getGeoFix();
-        const invalid = geoValidationError(geo);
-        if (invalid) throw new Error(invalid);
-        const stamped = drawStamped(frame, frame.width, frame.height, geo);
-        const blob = await canvasToJpegBlob(stamped);
-        const previewUrl = URL.createObjectURL(blob);
-        frameRef.current = null;
-        setPhase("idle");
-        onChange({ blob, previewUrl, geo });
-      } catch (err) {
-        // Keep the frozen frame so GPS can be retried without recapturing.
-        setGeoError(
-          err instanceof Error ? err.message : "Could not get a GPS fix.",
-        );
-        setPhase("geo-error");
-      }
-    },
-    [onChange],
-  );
+  }, [facing, startWatch, stopStream]);
 
   const captureFrame = useCallback(async () => {
     const video = videoRef.current;
@@ -261,15 +300,82 @@ export function ClientPhotoCapture({
     frame.height = video.videoHeight;
     frame.getContext("2d")!.drawImage(video, 0, 0, frame.width, frame.height);
     frameRef.current = frame;
+    frameAtRef.current = Date.now();
+    setFrozenPreview(frame.toDataURL("image/jpeg", 0.5));
     stopStream(streamRef.current);
     streamRef.current = null;
-    await finishWithGeo(frame);
-  }, [finishWithGeo]);
+    setGeoError(null);
+    setPhase("locating");
+    if (!startWatch()) {
+      // No location services at all — surface the error, skip the wait.
+      frameRef.current = null;
+      frameAtRef.current = null;
+      setFrozenPreview(null);
+      setPhase("idle");
+      return;
+    }
+    // A fresh accurate fix may already be in hand — accept immediately.
+    if (bestRef.current) {
+      const accepted = acceptableFixAtCapture(bestRef.current, frameAtRef.current);
+      if (accepted) {
+        await finalize(accepted);
+        return;
+      }
+    }
+    // Acquisition window: if no acceptable fix arrives, show a compact
+    // actionable error with Retry instead of a persistent warning.
+    if (deadlineRef.current === null) {
+      deadlineRef.current = setTimeout(() => {
+        stopWatch();
+        if (!frameRef.current) return; // already finalized or cancelled
+        const best = bestRef.current;
+        setGeoError(
+          best
+            ? `Best GPS accuracy was ${Math.round(best.accuracyMeters)} m — need ≤ ${MAX_GEO_ACCURACY_M} m. Move to open air (or near a window) and Retry.`
+            : "Could not get a GPS fix — location services may be off. Turn GPS ON and Retry.",
+        );
+        setPhase("idle");
+      }, GEO_ACQUIRE_WINDOW_MS);
+    }
+  }, [finalize, startWatch, stopWatch, stopStream]);
+
+  const retryGps = useCallback(() => {
+    setGeoError(null);
+    if (frameRef.current) {
+      setPhase("locating");
+      startWatch();
+      if (bestRef.current && frameAtRef.current !== null) {
+        const accepted = acceptableFixAtCapture(bestRef.current, frameAtRef.current);
+        if (accepted) void finalize(accepted);
+        return;
+      }
+      if (deadlineRef.current === null) {
+        deadlineRef.current = setTimeout(() => {
+          stopWatch();
+          if (!frameRef.current) return; // already finalized or cancelled
+          const best = bestRef.current;
+          setGeoError(
+            best
+              ? `Best GPS accuracy was ${Math.round(best.accuracyMeters)} m — need ≤ ${MAX_GEO_ACCURACY_M} m. Move to open air (or near a window) and Retry.`
+              : "Could not get a GPS fix — location services may be off. Turn GPS ON and Retry.",
+          );
+          setPhase("idle");
+        }, GEO_ACQUIRE_WINDOW_MS);
+      }
+    } else {
+      startWatch();
+    }
+  }, [finalize, startWatch, stopWatch]);
 
   const retake = useCallback(() => {
     if (value) URL.revokeObjectURL(value.previewUrl);
     onChange(null);
+    frameRef.current = null;
+    frameAtRef.current = null;
+    bestRef.current = null;
     setGeoError(null);
+    setGpsAccuracy(null);
+    setFrozenPreview(null);
     void startCamera();
   }, [onChange, startCamera, value]);
 
@@ -284,12 +390,28 @@ export function ClientPhotoCapture({
     onChange(null);
     setGeoError(null);
     setCameraError(null);
+    setGpsAccuracy(null);
   }, [onChange, value]);
+
+  const cancelFrozen = useCallback(() => {
+    stopWatch();
+    frameRef.current = null;
+    frameAtRef.current = null;
+    bestRef.current = null;
+    setGpsAccuracy(null);
+    setFrozenPreview(null);
+    setGeoError(null);
+    setPhase("idle");
+  }, [stopWatch]);
 
   /* ------------------------------ PREVIEW ------------------------------- */
   if (value) {
     return (
       <div className="space-y-2">
+        <div className="flex items-center gap-1.5 border-2 border-ink bg-mint px-2 py-1.5 text-[11px] font-black uppercase">
+          <Check className="size-3.5 shrink-0" /> Photo + GPS ready · accuracy{" "}
+          {Math.round(value.geo.accuracyMeters)} m
+        </div>
         <div className="relative border-2 border-ink bg-white">
           <img
             src={value.previewUrl}
@@ -297,11 +419,8 @@ export function ClientPhotoCapture({
             className="block w-full object-cover"
           />
         </div>
-        <div className="border-2 border-ink bg-mint p-3 font-mono text-xs font-bold">
-          <div className="flex items-center gap-1.5 font-sans text-[11px] font-black uppercase tracking-wider">
-            <MapPin className="size-3.5" /> GPS captured (device-reported)
-          </div>
-          <p className="mt-1">Latitude: {value.geo.latitude}</p>
+        <div className="border-2 border-ink bg-card p-3 font-mono text-xs font-bold">
+          <p>Latitude: {value.geo.latitude}</p>
           <p>Longitude: {value.geo.longitude}</p>
           <p>Accuracy: {Math.round(value.geo.accuracyMeters)} m</p>
           <p>
@@ -339,130 +458,158 @@ export function ClientPhotoCapture({
     );
   }
 
-  /* --------------------------- CAMERA / ERRORS -------------------------- */
-  if (
-    phase === "live" ||
-    phase === "starting" ||
-    phase === "locating" ||
-    phase === "geo-error"
-  ) {
+  /* --------------------- FROZEN FRAME WHILE LOCATING -------------------- */
+  if (frozenPreview && phase === "locating") {
     return (
       <div className="space-y-2">
-        <div className="relative border-2 border-ink bg-black">
-          <video
-            ref={videoRef}
-            playsInline
-            muted
-            autoPlay
-            className={`block w-full ${phase === "live" ? "" : "opacity-40"}`}
-            style={{ aspectRatio: "3 / 4", objectFit: "cover" }}
+        <div className="flex items-center gap-3">
+          <img
+            alt="Frozen capture awaiting GPS"
+            className="w-24 shrink-0 border-2 border-ink object-cover"
+            src={frozenPreview}
           />
-          {phase === "starting" && (
-            <div className="absolute inset-0 grid place-items-center text-xs font-black uppercase text-white">
-              <span className="flex items-center gap-2">
-                <Loader2 className="size-4 animate-spin" /> Opening camera…
-              </span>
-            </div>
-          )}
-          {phase === "locating" && (
-            <div className="absolute inset-0 grid place-items-center bg-black/60 p-4 text-center">
-              <div>
-                <span className="flex items-center justify-center gap-2 text-xs font-black uppercase text-white">
-                  <Loader2 className="size-4 animate-spin" /> Getting GPS fix…
+          <div className="min-w-0 flex-1 space-y-1">
+            <span className="flex items-center gap-2 text-[11px] font-black uppercase">
+              <Loader2 className="size-3.5 animate-spin" /> Acquiring GPS…
+              {gpsAccuracy !== null && (
+                <span className="font-mono normal-case text-muted-foreground">
+                  best {Math.round(gpsAccuracy)} m
                 </span>
-                <p className="mt-2 text-[11px] font-semibold text-white/80">
-                  Photo accept hone se pehle accurate location milti hai — phone
-                  ko client ke paas rakhein.
-                </p>
-              </div>
-            </div>
-          )}
-          {phase === "geo-error" && (
-            <div className="absolute inset-0 grid place-items-center bg-black/70 p-4 text-center">
-              <div className="space-y-2">
-                <p className="text-[11px] font-bold text-white">{geoError}</p>
-                <div className="flex justify-center gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={() =>
-                      frameRef.current && void finishWithGeo(frameRef.current)
-                    }
-                  >
-                    <RefreshCw className="size-3.5" /> Retry GPS
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="secondary"
-                    onClick={retake}
-                  >
-                    <Camera className="size-3.5" /> Retake photo
-                  </Button>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-        <div className="flex gap-2">
+              )}
+            </span>
+            <p className="text-[11px] font-semibold text-muted-foreground">
+              Form bhar sakte hain — photo tab save hoga jab tak accurate
+              location (≤ {MAX_GEO_ACCURACY_M} m) na mil jaye.
+            </p>
+          </div>
           <Button
             type="button"
-            className="flex-1"
-            disabled={phase !== "live"}
-            onClick={() => void captureFrame()}
-          >
-            <Camera className="size-4" /> Capture photo
-          </Button>
-          <Button
-            type="button"
+            size="sm"
             variant="outline"
-            disabled={phase !== "live"}
-            onClick={switchCamera}
-            aria-label="Switch camera"
+            onClick={cancelFrozen}
           >
-            <SwitchCamera className="size-4" />
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={phase === "locating"}
-            onClick={() => {
-              stopStream(streamRef.current);
-              streamRef.current = null;
-              setPhase("idle");
-            }}
-            aria-label="Close camera"
-          >
-            ✕
+            Cancel
           </Button>
         </div>
-        {cameraError && (
-          <p className="border-2 border-ink bg-blush p-2 text-xs font-bold">
-            {cameraError}
-          </p>
-        )}
       </div>
     );
   }
 
+  /* --------------------------- LIVE CAMERA ------------------------------ */
   return (
     <div className="space-y-2">
-      <Button
-        type="button"
-        size="lg"
-        className="w-full"
-        onClick={() => void startCamera()}
-      >
-        <Camera className="size-4" /> Open camera / Capture client photo
-      </Button>
-      <p className="text-[11px] font-semibold text-muted-foreground">
-        Camera + GPS dono chahiye: photo par location stamp lagega aur accurate
-        GPS fix (≤ 100 m) ke bina submit nahi hoga.
-      </p>
+      {phase === "idle" && !cameraError && !geoError && (
+        <Button
+          type="button"
+          size="lg"
+          className="w-full"
+          onClick={() => void startCamera()}
+        >
+          <Camera className="size-4" /> Open camera / Capture client photo
+        </Button>
+      )}
+
+      {(phase === "starting" || phase === "live") && (
+        <>
+          <div className="relative border-2 border-ink bg-black">
+            <video
+              ref={videoRef}
+              playsInline
+              muted
+              autoPlay
+              className={`block w-full ${phase === "live" ? "" : "opacity-40"}`}
+              style={{ aspectRatio: "3 / 4", objectFit: "cover" }}
+            />
+            {phase === "starting" && (
+              <div className="absolute inset-0 grid place-items-center text-xs font-black uppercase text-white">
+                <span className="flex items-center gap-2">
+                  <Loader2 className="size-4 animate-spin" /> Opening camera…
+                </span>
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {gpsAccuracy === null ? (
+              <span className="flex flex-1 items-center gap-1.5 text-[11px] font-black uppercase text-muted-foreground">
+                <Loader2 className="size-3.5 animate-spin" /> GPS acquiring…
+              </span>
+            ) : (
+              <span
+                className={`flex flex-1 items-center gap-1.5 text-[11px] font-black uppercase ${
+                  gpsAccuracy <= MAX_GEO_ACCURACY_M
+                    ? "text-green-700"
+                    : "text-muted-foreground"
+                }`}
+              >
+                <span className="font-mono normal-case">
+                  GPS {Math.round(gpsAccuracy)} m
+                  {gpsAccuracy <= MAX_GEO_ACCURACY_M ? " ✓" : " — waiting for better"}
+                </span>
+              </span>
+            )}
+            <Button
+              type="button"
+              size="sm"
+              className="shrink-0"
+              disabled={phase !== "live"}
+              onClick={() => void captureFrame()}
+            >
+              <Camera className="size-4" /> Capture
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={phase !== "live"}
+              onClick={switchCamera}
+              aria-label="Switch camera"
+            >
+              <SwitchCamera className="size-4" />
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                stopStream(streamRef.current);
+                streamRef.current = null;
+                setPhase("idle");
+              }}
+              aria-label="Close camera"
+            >
+              ✕
+            </Button>
+          </div>
+        </>
+      )}
+
+      {phase === "idle" && (cameraError || geoError) && (
+        <Button
+          type="button"
+          size="lg"
+          className="w-full"
+          onClick={() => void startCamera()}
+        >
+          <Camera className="size-4" /> Open camera / Capture client photo
+        </Button>
+      )}
+
+      {/* Compact actionable errors — only when user action is needed. */}
       {cameraError && (
-        <p className="border-2 border-ink bg-blush p-2 text-xs font-bold">
-          {cameraError}
-        </p>
+        <div className="flex items-center gap-2 border-2 border-ink bg-blush px-3 py-2 text-[11px] font-bold">
+          <span className="flex-1">{cameraError}</span>
+          <Button size="sm" variant="outline" onClick={() => void startCamera()}>
+            Retry
+          </Button>
+        </div>
+      )}
+      {geoError && (
+        <div className="flex items-center gap-2 border-2 border-ink bg-blush px-3 py-2 text-[11px] font-bold">
+          <span className="flex-1">{geoError}</span>
+          <Button size="sm" variant="outline" onClick={retryGps}>
+            <RefreshCw className="size-3.5" /> Retry
+          </Button>
+        </div>
       )}
     </div>
   );

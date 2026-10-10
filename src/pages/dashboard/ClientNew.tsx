@@ -290,20 +290,13 @@ export default function ClientNew() {
         </Field>
       </section>
 
-      <div className="sticky bottom-24 space-y-2">
-        {!photo && (
-          <p className="border-2 border-ink bg-gold px-3 py-2 text-[11px] font-black uppercase">
-            Capture the client photo with GPS to enable submit
-          </p>
-        )}
-        <div className="flex gap-2">
-          <Button variant="outline" size="lg" className="flex-1" onClick={() => navigate("/dashboard/clients")}>
-            Cancel
-          </Button>
-          <Button size="lg" className="flex-[2]" disabled={!valid || busy} onClick={() => void submit()}>
-            {busy ? "Saving…" : "Create client"}
-          </Button>
-        </div>
+      <div className="sticky bottom-24 flex gap-2">
+        <Button variant="outline" size="lg" className="flex-1" onClick={() => navigate("/dashboard/clients")}>
+          Cancel
+        </Button>
+        <Button size="lg" className="flex-[2]" disabled={!valid || busy} onClick={() => void submit()}>
+          {busy ? "Saving…" : "Create client"}
+        </Button>
       </div>
     </div>
   );

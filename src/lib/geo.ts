@@ -68,6 +68,68 @@ export function geoValidationError(
   return null;
 }
 
+/* ------------------------ watchPosition acquisition --------------------- */
+
+/** Post-frame window to wait for a fresh, accurate fix (spec: 30–45 s). */
+export const GEO_ACQUIRE_WINDOW_MS = 40_000;
+/** A fix older than this relative to the photo frame is too stale to stamp. */
+export const GEO_MAX_FIX_AGE_AT_CAPTURE_MS = 10_000;
+
+export interface AcquiredFix {
+  latitude: number;
+  longitude: number;
+  accuracyMeters: number;
+  capturedAt: number;
+}
+
+/** Structurally valid coordinates + positive accuracy (not yet accuracy-limited). */
+export function isPlausibleFix(fix: {
+  latitude: number;
+  longitude: number;
+  accuracyMeters: number;
+  capturedAt: number;
+}): fix is AcquiredFix {
+  return (
+    Number.isFinite(fix.latitude) &&
+    fix.latitude >= -90 &&
+    fix.latitude <= 90 &&
+    Number.isFinite(fix.longitude) &&
+    fix.longitude >= -180 &&
+    fix.longitude <= 180 &&
+    !(fix.latitude === 0 && fix.longitude === 0) &&
+    Number.isFinite(fix.accuracyMeters) &&
+    fix.accuracyMeters > 0 &&
+    Number.isFinite(fix.capturedAt)
+  );
+}
+
+/** Keep whichever fix is more accurate — successive watchPosition readings. */
+export function betterFix(
+  current: AcquiredFix | null,
+  candidate: AcquiredFix,
+): AcquiredFix {
+  return !current || candidate.accuracyMeters < current.accuracyMeters
+    ? candidate
+    : current;
+}
+
+/**
+ * A fix may be stamped only when it meets the accuracy limit AND corresponds
+ * to the photo frame time (fresh either side of the capture instant).
+ * Never relaxes the accuracy limit; never fabricates.
+ */
+export function acceptableFixAtCapture(
+  fix: AcquiredFix | null,
+  frameAt: number,
+): AcquiredFix | null {
+  if (!fix) return null;
+  if (fix.accuracyMeters > MAX_GEO_ACCURACY_M) return null;
+  const skew = frameAt - fix.capturedAt;
+  if (skew > GEO_MAX_FIX_AGE_AT_CAPTURE_MS) return null; // too old for the frame
+  if (skew < -GEO_FUTURE_SKEW_MS) return null; // unreasonably ahead of the frame
+  return fix;
+}
+
 /** Lines rendered into the on-photo location stamp (full coordinates). */
 export function geoStampLines(geo: GeoFix): string[] {
   const captured = new Date(geo.capturedAt).toLocaleString("en-IN", {
