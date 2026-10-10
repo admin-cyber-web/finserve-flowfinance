@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { useBusy } from "@/components/fs/primitives";
 import { useMutation } from "convex/react";
-import { useState, type ReactNode } from "react";
+import { useState, type ChangeEvent, type ReactNode } from "react";
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
 
@@ -57,9 +57,15 @@ export default function ClientNew() {
 
   // Geo-tagged client photo — mandatory: camera capture + fresh GPS fix.
   const [photo, setPhoto] = useState<CapturedClientPhoto | null>(null);
-  // Re-entry guard covering the WHOLE submit (upload URL + upload + create),
+  // Re-entry guard covering the WHOLE submit (upload URLs + uploads + create),
   // so repeated taps can never create duplicate clients.
   const [submitting, setSubmitting] = useState(false);
+  // Mandatory stamp document — validated locally, uploaded to private
+  // storage with the client. Only a real uploaded file counts, never a name.
+  const [stamp, setStamp] = useState<{
+    file: File;
+    previewUrl: string | null;
+  } | null>(null);
 
   const [f, setF] = useState({
     name: "",
@@ -82,6 +88,11 @@ export default function ClientNew() {
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) =>
     setF((s) => ({ ...s, [k]: e.target.value }));
 
+  // KYC — Aadhaar mandatory (12 digits); other doc types need a reference.
+  const kycRef = f.kycDocRef.trim();
+  const kycRefValid =
+    f.kycDocType === "AADHAAR" ? /^\d{12}$/.test(kycRef) : kycRef.length >= 3;
+
   const valid =
     f.name.trim().length >= 2 &&
     f.village.trim().length >= 1 &&
@@ -90,13 +101,38 @@ export default function ClientNew() {
     Number(f.age) >= 18 &&
     Number(f.age) <= 100 &&
     Number(f.familyMembers) >= 1 &&
+    kycRefValid &&
+    stamp !== null &&
     photo !== null;
+
+  const STAMP_MAX_BYTES = 5 * 1024 * 1024;
+  const onStampFile = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // re-selecting the same file replaces the previous one
+    if (!file) return;
+    const okTypes = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
+    if (!okTypes.includes(file.type)) {
+      toast.error("Stamp must be a JPEG, PNG, WebP or PDF file.");
+      return;
+    }
+    if (file.size <= 0 || file.size > STAMP_MAX_BYTES) {
+      toast.error("Stamp file must be between 1 byte and 5 MB.");
+      return;
+    }
+    if (stamp?.previewUrl) URL.revokeObjectURL(stamp.previewUrl);
+    setStamp({
+      file,
+      previewUrl: file.type.startsWith("image/")
+        ? URL.createObjectURL(file)
+        : null,
+    });
+  };
 
   const submit = async () => {
     if (submitting) return;
-    if (!valid || !photo) {
+    if (!valid || !photo || !stamp) {
       toast.error(
-        "Fill the required fields and capture the client photo with GPS.",
+        "Fill all required details — Aadhaar (12 digits), stamp upload, and the client photo with GPS.",
       );
       return;
     }
@@ -117,6 +153,22 @@ export default function ClientNew() {
       }
       const { storageId } = (await res.json()) as { storageId: string };
 
+      // 2b. Upload the stamp document to private Convex storage.
+      const stampUploadUrl = await getUploadUrl({});
+      const stampRes = await fetch(stampUploadUrl, {
+        method: "POST",
+        headers: { "Content-Type": stamp.file.type },
+        body: stamp.file,
+      });
+      if (!stampRes.ok) {
+        throw new Error(
+          "Stamp upload failed — check your connection and retry (no client was created).",
+        );
+      }
+      const { storageId: stampStorageId } = (await stampRes.json()) as {
+        storageId: string;
+      };
+
       // 3. Atomic create: client + geo photo link commit together, so a
       //    failure can never leave a duplicate or half-created client.
       const result = await run(() =>
@@ -135,14 +187,16 @@ export default function ClientNew() {
           householdIncome: Number(f.householdIncome || f.monthlyIncome || 0),
           familyMembers: Number(f.familyMembers || 1),
           kycDocType: f.kycDocType,
-          kycDocRef: f.kycDocRef.trim() || undefined,
+          kycDocRef: kycRef,
           documentName: f.documentName.trim() || undefined,
           photoStorageId: storageId as Id<"_storage">,
+          stampStorageId: stampStorageId as Id<"_storage">,
           geo: {
             latitude: photo.geo.latitude,
             longitude: photo.geo.longitude,
             accuracyMeters: photo.geo.accuracyMeters,
             capturedAt: photo.geo.capturedAt,
+            photoCapturedAt: photo.frameAt,
             permissionStatus: photo.geo.permissionStatus,
           },
           device: navigator.userAgent.slice(0, 60),
@@ -295,11 +349,77 @@ export default function ClientNew() {
               <option value="VOTER_ID">Voter ID</option>
               <option value="OTHER">Other</option>
             </select>
-          </Field>
-          <Field label="Document number">
-            <input className={inputCls} value={f.kycDocRef} onChange={set("kycDocRef")} />
-          </Field>
+          </Field>        <Field
+          label={f.kycDocType === "AADHAAR" ? "Aadhaar number" : "Document number"}
+          required
+          hint={
+            f.kycDocType === "AADHAAR"
+              ? kycRef && !kycRefValid
+                ? "Aadhaar must be exactly 12 digits."
+                : "12 digits — mandatory for KYC"
+              : "Required"
+          }
+        >
+          <input
+            className={inputCls}
+            inputMode="numeric"
+            value={f.kycDocRef}
+            onChange={(e) =>
+              setF((s) => ({
+                ...s,
+                kycDocRef: e.target.value.replace(/\D/g, "").slice(0, 12),
+              }))
+            }
+            placeholder={f.kycDocType === "AADHAAR" ? "12-digit Aadhaar" : "Document number"}
+          />
+        </Field>
+      </div>
+
+      <Field
+        label="Stamp Upload"
+        required
+        hint="Image (JPG/PNG/WebP) or PDF · max 5 MB"
+      >
+        <input
+          type="file"
+          accept="image/jpeg,image/png,image/webp,application/pdf"
+          className="block w-full text-xs font-semibold file:mr-3 file:border-2 file:border-ink file:bg-white file:px-3 file:py-1.5 file:text-xs file:font-black file:uppercase"
+          onChange={onStampFile}
+        />
+      </Field>
+      {stamp && (
+        <div className="flex items-center gap-3 border-2 border-ink bg-white p-2">
+          {stamp.previewUrl ? (
+            <img
+              src={stamp.previewUrl}
+              alt="Stamp preview"
+              className="size-14 shrink-0 border border-ink object-cover"
+            />
+          ) : (
+            <span className="grid size-14 shrink-0 place-items-center border border-ink bg-muted text-[10px] font-black uppercase">
+              PDF
+            </span>
+          )}
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-xs font-black">
+              {stamp.file.name}
+            </span>
+            <span className="block text-[10px] font-semibold text-muted-foreground">
+              {(stamp.file.size / 1024).toFixed(0)} KB · ready to upload
+            </span>
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              if (stamp.previewUrl) URL.revokeObjectURL(stamp.previewUrl);
+              setStamp(null);
+            }}
+          >
+            Remove
+          </Button>
         </div>
+      )}
         <Field label="KYC file name" hint="e.g. aadhaar-front.jpg">
           <input className={inputCls} value={f.documentName} onChange={set("documentName")} />
         </Field>

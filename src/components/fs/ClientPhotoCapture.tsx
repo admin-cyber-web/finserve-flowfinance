@@ -38,7 +38,10 @@ import {
 export interface CapturedClientPhoto {
   blob: Blob;
   previewUrl: string;
+  /** GPS fix — its capturedAt is the FIX timestamp, kept separate. */
   geo: AcquiredFix & { permissionStatus: string };
+  /** Photo frame timestamp — preserved separately from the GPS fix time. */
+  frameAt: number;
 }
 
 type Phase = "idle" | "starting" | "live" | "locating";
@@ -144,6 +147,7 @@ export function ClientPhotoCapture({
       const frame = frameRef.current;
       if (!frame || finalizingRef.current) return;
       finalizingRef.current = true;
+      const frameAt = frameAtRef.current ?? Date.now();
       stopWatch();
       try {
         const geo = { ...fix, permissionStatus: "granted" };
@@ -157,7 +161,7 @@ export function ClientPhotoCapture({
         setGpsAccuracy(null);
         setFrozenPreview(null);
         setPhase("idle");
-        onChange({ blob, previewUrl, geo });
+        onChange({ blob, previewUrl, geo, frameAt });
       } finally {
         finalizingRef.current = false;
       }
@@ -177,14 +181,40 @@ export function ClientPhotoCapture({
       if (!isPlausibleFix(candidate)) return;
       bestRef.current = betterFix(bestRef.current, candidate);
       setGpsAccuracy(bestRef.current.accuracyMeters);
-      // Accept only once the frame exists AND the fix matches the frame time.
+      // Accept as soon as ANY acceptable fix exists: the fresh candidate
+      // itself OR the retained best. A stale-but-accurate best must never
+      // block acceptance of a fresh acceptable reading, and a valid fix
+      // (e.g. 47 m) must never be rejected while waiting for "better".
       if (frameAtRef.current !== null) {
-        const accepted = acceptableFixAtCapture(bestRef.current, frameAtRef.current);
+        const accepted =
+          acceptableFixAtCapture(candidate, frameAtRef.current) ??
+          acceptableFixAtCapture(bestRef.current, frameAtRef.current);
         if (accepted) void finalize(accepted);
       }
     },
     [finalize],
   );
+
+  /** Acquisition window expired — compact actionable error, never misleading. */
+  const failAcquisition = useCallback(() => {
+    stopWatch();
+    if (!frameRef.current) return; // already finalized or cancelled
+    const best = bestRef.current;
+    setGeoError(
+      !best
+        ? "Could not get a GPS fix — location services may be off. Turn GPS ON and Retry."
+        : best.accuracyMeters > MAX_GEO_ACCURACY_M
+          ? `Best GPS accuracy was ${Math.round(best.accuracyMeters)} m — need ≤ ${MAX_GEO_ACCURACY_M} m. Move to open air (or near a window) and Retry.`
+          : "The GPS fix was too old for this photo. Tap Retry to get a fresh fix.",
+    );
+    setPhase("idle");
+  }, [stopWatch]);
+
+  const armDeadline = useCallback(() => {
+    if (deadlineRef.current === null) {
+      deadlineRef.current = setTimeout(failAcquisition, GEO_ACQUIRE_WINDOW_MS);
+    }
+  }, [failAcquisition]);
 
   const startWatch = useCallback((): boolean => {
     if (watchIdRef.current !== null) return true; // never double-prompt
@@ -314,7 +344,8 @@ export function ClientPhotoCapture({
       setPhase("idle");
       return;
     }
-    // A fresh accurate fix may already be in hand — accept immediately.
+    // A fresh accurate fix may already be in hand — accept immediately
+    // (a 47 m fix acquired while the camera was open must NOT be rejected).
     if (bestRef.current) {
       const accepted = acceptableFixAtCapture(bestRef.current, frameAtRef.current);
       if (accepted) {
@@ -322,50 +353,40 @@ export function ClientPhotoCapture({
         return;
       }
     }
-    // Acquisition window: if no acceptable fix arrives, show a compact
-    // actionable error with Retry instead of a persistent warning.
-    if (deadlineRef.current === null) {
-      deadlineRef.current = setTimeout(() => {
-        stopWatch();
-        if (!frameRef.current) return; // already finalized or cancelled
-        const best = bestRef.current;
-        setGeoError(
-          best
-            ? `Best GPS accuracy was ${Math.round(best.accuracyMeters)} m — need ≤ ${MAX_GEO_ACCURACY_M} m. Move to open air (or near a window) and Retry.`
-            : "Could not get a GPS fix — location services may be off. Turn GPS ON and Retry.",
-        );
-        setPhase("idle");
-      }, GEO_ACQUIRE_WINDOW_MS);
+    // Best fix is not acceptable (too old / too inaccurate): restart the
+    // watch so the browser issues a FRESH reading — a stationary device may
+    // never re-fire an already-running watch on its own.
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
     }
-  }, [finalize, startWatch, stopWatch, stopStream]);
+    startWatch();
+    armDeadline();
+  }, [armDeadline, finalize, startWatch, stopStream]);
 
   const retryGps = useCallback(() => {
     setGeoError(null);
     if (frameRef.current) {
       setPhase("locating");
+      // Force a fresh reading — restart the watch rather than relying on an
+      // idle one that may never re-fire on a stationary device.
+      if (watchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
+      }
       startWatch();
       if (bestRef.current && frameAtRef.current !== null) {
         const accepted = acceptableFixAtCapture(bestRef.current, frameAtRef.current);
-        if (accepted) void finalize(accepted);
-        return;
+        if (accepted) {
+          void finalize(accepted);
+          return;
+        }
       }
-      if (deadlineRef.current === null) {
-        deadlineRef.current = setTimeout(() => {
-          stopWatch();
-          if (!frameRef.current) return; // already finalized or cancelled
-          const best = bestRef.current;
-          setGeoError(
-            best
-              ? `Best GPS accuracy was ${Math.round(best.accuracyMeters)} m — need ≤ ${MAX_GEO_ACCURACY_M} m. Move to open air (or near a window) and Retry.`
-              : "Could not get a GPS fix — location services may be off. Turn GPS ON and Retry.",
-          );
-          setPhase("idle");
-        }, GEO_ACQUIRE_WINDOW_MS);
-      }
+      armDeadline();
     } else {
       startWatch();
     }
-  }, [finalize, startWatch, stopWatch]);
+  }, [armDeadline, finalize, startWatch]);
 
   const retake = useCallback(() => {
     if (value) URL.revokeObjectURL(value.previewUrl);

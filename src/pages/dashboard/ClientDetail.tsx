@@ -460,6 +460,13 @@ export default function ClientDetail() {
                   {d.note && <p className="text-[11px] font-semibold">{d.note}</p>}
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
+                  {d.url && (
+                    <Button size="sm" variant="outline" asChild>
+                      <a href={d.url} target="_blank" rel="noreferrer">
+                        View
+                      </a>
+                    </Button>
+                  )}
                   <StatusChip status={d.status} />
                   {canVerify && d.status !== "VERIFIED" && (
                     <Button

@@ -147,9 +147,17 @@ export const get = query({
     const staffHistory = (await ctx.db.query("clientStaffHistory").collect())
       .filter((h) => h.clientId === clientId)
       .sort((a, b) => a.createdAt - b.createdAt);
-    const documents = (await ctx.db.query("clientDocuments").collect())
+    const docRows = (await ctx.db.query("clientDocuments").collect())
       .filter((d) => d.clientId === clientId)
       .sort((a, b) => b.createdAt - a.createdAt);
+    // Signed, short-lived URLs for stored files (e.g. the stamp) — issued only
+    // to viewers who passed this query's client-level access checks.
+    const documents = await Promise.all(
+      docRows.map(async (d) => ({
+        ...d,
+        url: d.storageId ? await ctx.storage.getUrl(d.storageId) : null,
+      })),
+    );
     const notes = (await ctx.db.query("clientNotes").collect())
       .filter((n) => n.clientId === clientId)
       .sort((a, b) => b.createdAt - a.createdAt);
@@ -286,11 +294,15 @@ export const create = mutation({
     // uploaded to Convex storage (via a server-issued upload URL) plus the
     // device-reported GPS fix it was stamped with.
     photoStorageId: v.id("_storage"),
+    // Mandatory stamp document (uploaded to private Convex storage via a
+    // server-issued upload URL before this mutation runs).
+    stampStorageId: v.id("_storage"),
     geo: v.object({
       latitude: v.number(),
       longitude: v.number(),
       accuracyMeters: v.number(),
-      capturedAt: v.number(),
+      capturedAt: v.number(), // GPS fix timestamp
+      photoCapturedAt: v.optional(v.number()), // photo frame timestamp (separate)
       permissionStatus: v.optional(v.string()),
     }),
   },
@@ -304,6 +316,19 @@ export const create = mutation({
     const mobile = mobileNumber(args.mobile);
     const age = intInRange(args.age, "age", 18, 100);
     const gender = oneOf(args.gender, ["MALE", "FEMALE", "OTHER"], "gender");
+
+    // KYC — Aadhaar is mandatory for every NEW client (legacy rows are
+    // untouched; this only guards creation). Enforced here as well as in the
+    // form so a direct backend call cannot bypass it.
+    const kycDocType =
+      optionalString(args.kycDocType, "kycDocType", 40) ?? "AADHAAR";
+    const kycDocRef = optionalString(args.kycDocRef, "kycDocRef", 40);
+    if (!kycDocRef) {
+      throw new AppError("Aadhaar number is required for KYC.");
+    }
+    if (kycDocType === "AADHAAR" && !/^\d{12}$/.test(kycDocRef)) {
+      throw new AppError("Aadhaar must be exactly 12 digits.");
+    }
     const monthlyIncome = money(args.monthlyIncome, "monthlyIncome", { allowZero: true });
     const householdIncome = money(args.householdIncome, "householdIncome", { allowZero: true });
 
@@ -369,8 +394,8 @@ export const create = mutation({
       assignedTo: assignee,
       createdBy: me._id,
       kycStatus: "PENDING",
-      kycDocType: optionalString(args.kycDocType, "kycDocType", 40),
-      kycDocRef: optionalString(args.kycDocRef, "kycDocRef", 40),
+      kycDocType,
+      kycDocRef,
       centerCode: optionalString(args.centerCode, "centerCode", 40),
       groupCode: optionalString(args.groupCode, "groupCode", 40),
       status: "ACTIVE",
@@ -422,6 +447,7 @@ export const create = mutation({
       capturedAt: args.geo.capturedAt,
       permissionStatus: args.geo.permissionStatus ?? "granted",
     };
+    const photoCapturedAt = args.geo.photoCapturedAt ?? args.geo.capturedAt;
     const geoError = geoValidationError(geoFix, now);
     if (geoError) {
       await ctx.storage.delete(args.photoStorageId);
@@ -444,6 +470,33 @@ export const create = mutation({
       );
     }
 
+    // ---- Mandatory stamp document -----------------------------------------
+    const MAX_STAMP_BYTES = 5 * 1024 * 1024;
+    const stampMeta = await ctx.db.system.get("_storage", args.stampStorageId);
+    if (!stampMeta) {
+      throw new AppError(
+        "Uploaded stamp document not found — upload it again.",
+      );
+    }
+    const stampTypes = [
+      "image/jpeg",
+      "image/png",
+      "image/webp",
+      "application/pdf",
+    ];
+    if (!stampMeta.contentType || !stampTypes.includes(stampMeta.contentType)) {
+      await ctx.storage.delete(args.stampStorageId);
+      throw new AppError(
+        "Stamp must be a JPEG, PNG, WebP or PDF file.",
+      );
+    }
+    if (stampMeta.size <= 0 || stampMeta.size > MAX_STAMP_BYTES) {
+      await ctx.storage.delete(args.stampStorageId);
+      throw new AppError(
+        `Stamp must be between 1 byte and ${Math.round(MAX_STAMP_BYTES / 1024 / 1024)} MB.`,
+      );
+    }
+
     const fileName = `client-photo-${code}.jpg`;
     await ctx.db.insert("clientGeoPhotos", {
       clientId,
@@ -455,12 +508,28 @@ export const create = mutation({
       longitude: geoFix.longitude,
       accuracyMeters: Math.round(geoFix.accuracyMeters * 100) / 100,
       capturedAt: geoFix.capturedAt,
+      photoCapturedAt,
       uploadedAt: now,
       uploadedBy: me._id,
       branchId,
       permissionStatus: geoFix.permissionStatus,
       device: args.device,
       status: "GEO_TAGGED",
+    });
+
+    const stampFileName = `client-stamp-${code}.${
+      stampMeta.contentType === "application/pdf" ? "pdf" : "jpg"
+    }`;
+    await ctx.db.insert("clientDocuments", {
+      clientId,
+      type: "STAMP",
+      fileName: stampFileName,
+      status: "UPLOADED",
+      uploadedBy: me._id,
+      storageId: args.stampStorageId,
+      sizeBytes: stampMeta.size,
+      mimeType: stampMeta.contentType,
+      createdAt: now,
     });
 
     await logAudit(ctx, {
@@ -477,6 +546,7 @@ export const create = mutation({
         longitude: geoFix.longitude,
         accuracyMeters: geoFix.accuracyMeters,
         capturedAt: geoFix.capturedAt,
+        photoCapturedAt,
         source: "device-reported",
       },
       referenceId: code,
@@ -491,7 +561,16 @@ export const create = mutation({
       action: "CLIENT_CREATED",
       entity: "clients",
       entityId: code,
-      after: { name, mobile, village, assignedTo: assigneeProfile.name },
+      after: {
+        name,
+        mobile,
+        village,
+        assignedTo: assigneeProfile.name,
+        kycDocType,
+        // Masked in the audit trail — full Aadhaar stays on the client record.
+        kycDocRefTail: `xxxx${kycDocRef.slice(-4)}`,
+        stampFileName,
+      },
       referenceId: code,
       branchId,
       device: args.device,

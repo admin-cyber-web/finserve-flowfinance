@@ -175,7 +175,8 @@ const schema = defineSchema(
       latitude: v.number(),
       longitude: v.number(),
       accuracyMeters: v.number(),
-      capturedAt: v.number(), // device-reported capture time
+      capturedAt: v.number(), // device-reported GPS FIX time
+      photoCapturedAt: v.optional(v.number()), // photo frame time (kept separate)
       uploadedAt: v.number(), // server receipt time
       uploadedBy: v.id("profiles"),
       branchId: v.id("branches"),
@@ -195,10 +196,13 @@ const schema = defineSchema(
 
     clientDocuments: defineTable({
       clientId: v.id("clients"),
-      type: v.string(), // CLIENT_PHOTO | KYC | ADDRESS_PROOF | OTHER
+      type: v.string(), // CLIENT_PHOTO | KYC | STAMP | ADDRESS_PROOF | OTHER
       fileName: v.string(),
       status: v.string(), // UPLOADED | PENDING_VERIFICATION | VERIFIED | REJECTED
       uploadedBy: v.id("profiles"),
+      storageId: v.optional(v.id("_storage")), // private Convex storage ref
+      sizeBytes: v.optional(v.number()), // upload metadata (validated at create)
+      mimeType: v.optional(v.string()),
       verifiedBy: v.optional(v.id("profiles")),
       note: v.optional(v.string()),
       createdAt: v.number(),

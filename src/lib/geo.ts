@@ -70,10 +70,17 @@ export function geoValidationError(
 
 /* ------------------------ watchPosition acquisition --------------------- */
 
-/** Post-frame window to wait for a fresh, accurate fix (spec: 30–45 s). */
+/** Post-frame window to wait for an acceptable fix (spec: up to ~40 s). */
 export const GEO_ACQUIRE_WINDOW_MS = 40_000;
-/** A fix older than this relative to the photo frame is too stale to stamp. */
-export const GEO_MAX_FIX_AGE_AT_CAPTURE_MS = 10_000;
+/**
+ * Freshness policy: a fix may correspond to the photo if it is within this
+ * window EITHER SIDE of the frame instant. The stamp and database always
+ * carry the GPS fix's own timestamp (`capturedAt`) — separate from the photo
+ * frame time (`photoCapturedAt`) — so the two are never conflated. A valid
+ * accurate fix is accepted even if it arrived shortly before the photo; a
+ * fix arriving shortly after the photo is equally valid.
+ */
+export const GEO_FIX_FRAME_WINDOW_MS = 60_000;
 
 export interface AcquiredFix {
   latitude: number;
@@ -114,19 +121,21 @@ export function betterFix(
 }
 
 /**
- * A fix may be stamped only when it meets the accuracy limit AND corresponds
- * to the photo frame time (fresh either side of the capture instant).
- * Never relaxes the accuracy limit; never fabricates.
+ * A fix may be stamped only when it meets the accuracy limit (0 < accuracy
+ * ≤ 100 m, inclusive) AND falls inside the freshness window around the photo
+ * frame. Fixes that arrive after the photo are fine; the stored timestamp is
+ * always the fix's own. Never relaxes the accuracy limit; never fabricates.
  */
 export function acceptableFixAtCapture(
   fix: AcquiredFix | null,
   frameAt: number,
 ): AcquiredFix | null {
   if (!fix) return null;
+  if (!isPlausibleFix(fix)) return null; // ranges, (0, 0), positive accuracy
   if (fix.accuracyMeters > MAX_GEO_ACCURACY_M) return null;
   const skew = frameAt - fix.capturedAt;
-  if (skew > GEO_MAX_FIX_AGE_AT_CAPTURE_MS) return null; // too old for the frame
-  if (skew < -GEO_FUTURE_SKEW_MS) return null; // unreasonably ahead of the frame
+  if (skew > GEO_FIX_FRAME_WINDOW_MS) return null; // fix too old for this frame
+  if (skew < -GEO_FIX_FRAME_WINDOW_MS) return null; // fix absurdly ahead (clock skew)
   return fix;
 }
 
