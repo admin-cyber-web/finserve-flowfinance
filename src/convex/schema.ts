@@ -163,6 +163,27 @@ const schema = defineSchema(
       .index("by_staff", ["assignedTo"])
       .index("by_created", ["createdAt"]),
 
+    // Geo-tagged client photos: one immutable capture row per client photo.
+    // The image itself lives in Convex file storage (private, signed URLs —
+    // never a public bucket); coordinates are DEVICE-REPORTED at capture time.
+    clientGeoPhotos: defineTable({
+      clientId: v.id("clients"),
+      storageId: v.id("_storage"),
+      fileName: v.string(),
+      sizeBytes: v.number(),
+      mimeType: v.string(),
+      latitude: v.number(),
+      longitude: v.number(),
+      accuracyMeters: v.number(),
+      capturedAt: v.number(), // device-reported capture time
+      uploadedAt: v.number(), // server receipt time
+      uploadedBy: v.id("profiles"),
+      branchId: v.id("branches"),
+      permissionStatus: v.optional(v.string()), // geolocation permission at capture
+      device: v.optional(v.string()),
+      status: v.string(), // GEO_TAGGED
+    }).index("by_client", ["clientId"]),
+
     clientStaffHistory: defineTable({
       clientId: v.id("clients"),
       fromStaffId: v.optional(v.id("profiles")),

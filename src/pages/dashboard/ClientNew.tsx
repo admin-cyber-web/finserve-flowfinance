@@ -1,5 +1,10 @@
 import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
 import { PageHeader } from "@/components/fs/primitives";
+import {
+  ClientPhotoCapture,
+  type CapturedClientPhoto,
+} from "@/components/fs/ClientPhotoCapture";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { useBusy } from "@/components/fs/primitives";
@@ -37,7 +42,11 @@ const inputCls =
 export default function ClientNew() {
   const navigate = useNavigate();
   const create = useMutation(api.clients.create);
+  const getUploadUrl = useMutation(api.clients.photoUploadUrl);
   const { busy, run } = useBusy();
+
+  // Geo-tagged client photo — mandatory: camera capture + fresh GPS fix.
+  const [photo, setPhoto] = useState<CapturedClientPhoto | null>(null);
 
   const [f, setF] = useState({
     name: "",
@@ -56,7 +65,6 @@ export default function ClientNew() {
     kycDocType: "AADHAAR",
     kycDocRef: "",
     documentName: "",
-    photoName: "",
   });
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) =>
     setF((s) => ({ ...s, [k]: e.target.value }));
@@ -68,38 +76,76 @@ export default function ClientNew() {
     /^\d{10}$/.test(f.mobile.trim()) &&
     Number(f.age) >= 18 &&
     Number(f.age) <= 100 &&
-    Number(f.familyMembers) >= 1;
+    Number(f.familyMembers) >= 1 &&
+    photo !== null;
 
   const submit = async () => {
-    if (!valid) {
-      toast.error("Fill the required fields (name, mobile, village, occupation, age).");
+    if (!valid || !photo) {
+      toast.error(
+        "Fill the required fields and capture the client photo with GPS.",
+      );
       return;
     }
-    const result = await run(() =>
-      create({
-        name: f.name.trim(),
-        fatherName: f.fatherName.trim() || undefined,
-        age: Number(f.age),
-        gender: f.gender,
-        mobile: f.mobile.trim(),
-        address: f.address.trim() || undefined,
-        village: f.village.trim(),
-        district: f.district.trim() || undefined,
-        pin: f.pin.trim() || undefined,
-        occupation: f.occupation.trim(),
-        monthlyIncome: Number(f.monthlyIncome || 0),
-        householdIncome: Number(f.householdIncome || f.monthlyIncome || 0),
-        familyMembers: Number(f.familyMembers || 1),
-        kycDocType: f.kycDocType,
-        kycDocRef: f.kycDocRef.trim() || undefined,
-        documentName: f.documentName.trim() || undefined,
-        photoName: f.photoName.trim() || undefined,
-        device: navigator.userAgent.slice(0, 60),
-      }),
-    );
-    if (result) {
-      toast.success(`Client created — ${result.code}`);
-      navigate(`/dashboard/clients/${result.clientId}`);
+    try {
+      // 1. Server-issued, short-lived upload URL (RBAC-checked).
+      const uploadUrl = await getUploadUrl({});
+      // 2. Upload the stamped photo to private Convex storage.
+      const res = await fetch(uploadUrl, {
+        method: "POST",
+        headers: { "Content-Type": photo.blob.type || "image/jpeg" },
+        body: photo.blob,
+      });
+      if (!res.ok) {
+        throw new Error(
+          "Photo upload failed — check your connection and retry (no client was created).",
+        );
+      }
+      const { storageId } = (await res.json()) as { storageId: string };
+
+      // 3. Atomic create: client + geo photo link commit together, so a
+      //    failure can never leave a duplicate or half-created client.
+      const result = await run(() =>
+        create({
+          name: f.name.trim(),
+          fatherName: f.fatherName.trim() || undefined,
+          age: Number(f.age),
+          gender: f.gender,
+          mobile: f.mobile.trim(),
+          address: f.address.trim() || undefined,
+          village: f.village.trim(),
+          district: f.district.trim() || undefined,
+          pin: f.pin.trim() || undefined,
+          occupation: f.occupation.trim(),
+          monthlyIncome: Number(f.monthlyIncome || 0),
+          householdIncome: Number(f.householdIncome || f.monthlyIncome || 0),
+          familyMembers: Number(f.familyMembers || 1),
+          kycDocType: f.kycDocType,
+          kycDocRef: f.kycDocRef.trim() || undefined,
+          documentName: f.documentName.trim() || undefined,
+          photoStorageId: storageId as Id<"_storage">,
+          geo: {
+            latitude: photo.geo.latitude,
+            longitude: photo.geo.longitude,
+            accuracyMeters: photo.geo.accuracyMeters,
+            capturedAt: photo.geo.capturedAt,
+            permissionStatus: photo.geo.permissionStatus,
+          },
+          device: navigator.userAgent.slice(0, 60),
+        }),
+      );
+      if (result) {
+        toast.success(
+          `Client created — ${result.code} · GPS ${photo.geo.latitude}, ${photo.geo.longitude}`,
+        );
+        navigate(`/dashboard/clients/${result.clientId}`);
+      }
+    } catch (err) {
+      // Form and captured photo stay intact so the user can simply retry.
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : "Could not create the client — please retry.",
+      );
     }
   };
 
@@ -217,7 +263,14 @@ export default function ClientNew() {
 
       <section className="space-y-3 border-2 border-ink bg-card p-4 shadow-hard-sm">
         <h2 className="text-xs font-black uppercase tracking-[0.14em] text-muted-foreground">
-          4 · KYC
+          4 · Client photo — live capture (GPS required)
+        </h2>
+        <ClientPhotoCapture value={photo} onChange={setPhoto} />
+      </section>
+
+      <section className="space-y-3 border-2 border-ink bg-card p-4 shadow-hard-sm">
+        <h2 className="text-xs font-black uppercase tracking-[0.14em] text-muted-foreground">
+          5 · KYC
         </h2>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Document type">
@@ -232,23 +285,25 @@ export default function ClientNew() {
             <input className={inputCls} value={f.kycDocRef} onChange={set("kycDocRef")} />
           </Field>
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="KYC file name" hint="e.g. aadhaar-front.jpg">
-            <input className={inputCls} value={f.documentName} onChange={set("documentName")} />
-          </Field>
-          <Field label="Photo file name">
-            <input className={inputCls} value={f.photoName} onChange={set("photoName")} />
-          </Field>
-        </div>
+        <Field label="KYC file name" hint="e.g. aadhaar-front.jpg">
+          <input className={inputCls} value={f.documentName} onChange={set("documentName")} />
+        </Field>
       </section>
 
-      <div className="sticky bottom-24 flex gap-2">
-        <Button variant="outline" size="lg" className="flex-1" onClick={() => navigate("/dashboard/clients")}>
-          Cancel
-        </Button>
-        <Button size="lg" className="flex-[2]" disabled={!valid || busy} onClick={() => void submit()}>
-          {busy ? "Saving…" : "Create client"}
-        </Button>
+      <div className="sticky bottom-24 space-y-2">
+        {!photo && (
+          <p className="border-2 border-ink bg-gold px-3 py-2 text-[11px] font-black uppercase">
+            Capture the client photo with GPS to enable submit
+          </p>
+        )}
+        <div className="flex gap-2">
+          <Button variant="outline" size="lg" className="flex-1" onClick={() => navigate("/dashboard/clients")}>
+            Cancel
+          </Button>
+          <Button size="lg" className="flex-[2]" disabled={!valid || busy} onClick={() => void submit()}>
+            {busy ? "Saving…" : "Create client"}
+          </Button>
+        </div>
       </div>
     </div>
   );

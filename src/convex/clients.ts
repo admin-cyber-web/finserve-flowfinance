@@ -19,6 +19,11 @@ import {
   oneOf,
 } from "../lib/finance/validate";
 import { KYC_STATUS, DOC_STATUS } from "../lib/finance/types";
+import {
+  geoValidationError,
+  MAX_CLIENT_PHOTO_BYTES,
+  type GeoFix,
+} from "../lib/geo";
 
 /** Scope the client list to what this viewer is allowed to see. */
 async function visibleClients(
@@ -277,6 +282,17 @@ export const create = mutation({
     centerCode: v.optional(v.string()),
     groupCode: v.optional(v.string()),
     device: v.optional(v.string()),
+    // Mandatory geo-tagged client photo: the stamped JPEG the capture widget
+    // uploaded to Convex storage (via a server-issued upload URL) plus the
+    // device-reported GPS fix it was stamped with.
+    photoStorageId: v.id("_storage"),
+    geo: v.object({
+      latitude: v.number(),
+      longitude: v.number(),
+      accuracyMeters: v.number(),
+      capturedAt: v.number(),
+      permissionStatus: v.optional(v.string()),
+    }),
   },
   handler: async (ctx, args) => {
     const me = await requireProfile(ctx);
@@ -373,6 +389,83 @@ export const create = mutation({
       });
     }
 
+    // ---- Mandatory geo-tagged client photo --------------------------------
+    // Server-side re-validation: the browser's capture UI already blocks
+    // stale/poor fixes, but the client is untrusted — the SAME rules run here
+    // so fabricated coordinates, (0, 0) or stale timestamps can never be
+    // stored. The photo was uploaded before this mutation ran, so every
+    // rejection path deletes the uploaded file first (no orphaned photos),
+    // and a thrown error rolls the whole mutation back (no half-created
+    // client, so a retry can never duplicate the client).
+    const geoFix: GeoFix = {
+      latitude: args.geo.latitude,
+      longitude: args.geo.longitude,
+      accuracyMeters: args.geo.accuracyMeters,
+      capturedAt: args.geo.capturedAt,
+      permissionStatus: args.geo.permissionStatus ?? "granted",
+    };
+    const geoError = geoValidationError(geoFix, now);
+    if (geoError) {
+      await ctx.storage.delete(args.photoStorageId);
+      throw new AppError(`Client photo location rejected: ${geoError}`);
+    }
+
+    const meta = await ctx.db.system.get("_storage", args.photoStorageId);
+    if (!meta) {
+      throw new AppError("Uploaded client photo not found — capture and upload it again.");
+    }
+    const allowedTypes = ["image/jpeg", "image/png", "image/webp"];
+    if (!meta.contentType || !allowedTypes.includes(meta.contentType)) {
+      await ctx.storage.delete(args.photoStorageId);
+      throw new AppError("Client photo must be a JPEG, PNG or WebP image.");
+    }
+    if (meta.size <= 0 || meta.size > MAX_CLIENT_PHOTO_BYTES) {
+      await ctx.storage.delete(args.photoStorageId);
+      throw new AppError(
+        `Client photo must be between 1 byte and ${Math.round(MAX_CLIENT_PHOTO_BYTES / 1024 / 1024)} MB.`,
+      );
+    }
+
+    const fileName = `client-photo-${code}.jpg`;
+    await ctx.db.insert("clientGeoPhotos", {
+      clientId,
+      storageId: args.photoStorageId,
+      fileName,
+      sizeBytes: meta.size,
+      mimeType: meta.contentType,
+      latitude: geoFix.latitude,
+      longitude: geoFix.longitude,
+      accuracyMeters: Math.round(geoFix.accuracyMeters * 100) / 100,
+      capturedAt: geoFix.capturedAt,
+      uploadedAt: now,
+      uploadedBy: me._id,
+      branchId,
+      permissionStatus: geoFix.permissionStatus,
+      device: args.device,
+      status: "GEO_TAGGED",
+    });
+
+    await logAudit(ctx, {
+      actorId: me._id,
+      actorName: me.name,
+      role: me.role,
+      action: "CLIENT_PHOTO_CAPTURED",
+      entity: "clients",
+      entityId: code,
+      after: {
+        fileName,
+        sizeBytes: meta.size,
+        latitude: geoFix.latitude,
+        longitude: geoFix.longitude,
+        accuracyMeters: geoFix.accuracyMeters,
+        capturedAt: geoFix.capturedAt,
+        source: "device-reported",
+      },
+      referenceId: code,
+      branchId,
+      device: args.device,
+    });
+
     await logAudit(ctx, {
       actorId: me._id,
       actorName: me.name,
@@ -396,6 +489,60 @@ export const create = mutation({
     }
 
     return { ok: true, clientId, code };
+  },
+});
+
+/**
+ * Short-lived upload URL for the stamped client photo.
+ *
+ * Issued only to users who may create clients; the file lands in private
+ * Convex storage and is linked to its client inside `create`, which re-checks
+ * type/size from storage metadata and geo validity before committing.
+ */
+export const photoUploadUrl = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const me = await requireProfile(ctx);
+    requirePermission(me, "create_client");
+    return await ctx.storage.generateUploadUrl();
+  },
+});
+
+/**
+ * Latest geo-tagged photo for a client, with a short-lived signed URL.
+ *
+ * Read access mirrors `clients.get` scoping (field staff: own/branch clients,
+ * client portal: own profile, other staff roles: as their page access), so
+ * location data never reaches an unauthorized viewer. The URL is generated
+ * on demand by Convex storage — photos are never exposed as permanent
+ * public links.
+ */
+export const geoPhoto = query({
+  args: { clientId: v.id("clients") },
+  handler: async (ctx, { clientId }) => {
+    const me = await requireProfile(ctx, { allowInactive: true });
+    requirePermission(me, "view_clients");
+    const client = await ctx.db.get(clientId);
+    if (!client) throw new AppError("Client not found.");
+    if (me.role === "FIELD_STAFF" && client.assignedTo !== me._id) {
+      // Same rule as `get`: staff may still open a client reassigned away,
+      // but only within their own branch.
+      if (client.branchId !== me.branchId) throw new AppError("Not your client.");
+    }
+    if (me.role === "CLIENT" && me.clientId !== clientId) {
+      throw new AppError("You can only view your own profile.");
+    }
+
+    const photo = await ctx.db
+      .query("clientGeoPhotos")
+      .withIndex("by_client", (q) => q.eq("clientId", clientId))
+      .order("desc")
+      .first();
+    if (!photo) return null;
+
+    const url = await ctx.storage.getUrl(photo.storageId);
+    const { storageId: _storageId, ...rest } = photo;
+    return { ...rest, url };
   },
 });
 

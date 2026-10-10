@@ -25,9 +25,12 @@ import { formatINR } from "@/lib/finance/money";
 import { LOAN_STATUS_LABELS, RECOVERY_LABELS } from "@/lib/finance/types";
 import { useMutation, useQuery } from "convex/react";
 import {
+  Camera,
   FileText,
   HandCoins,
   IndianRupee,
+  MapPin,
+  Navigation,
   NotebookPen,
   ShieldCheck,
   UserCheck,
@@ -42,6 +45,7 @@ export default function ClientDetail() {
   const { profile, can } = useProfile();
   const clientId = id as Id<"clients">;
   const data = useQuery(api.clients.get, { clientId });
+  const geoPhoto = useQuery(api.clients.geoPhoto, { clientId });
 
   const addNote = useMutation(api.clients.addNote);
   const addDocument = useMutation(api.clients.addDocument);
@@ -176,6 +180,68 @@ export default function ClientDetail() {
             <KeyValue k="KYC doc" v={client.kycDocRef ? `${client.kycDocType}: ${client.kycDocRef}` : client.kycDocType ?? "—"} mono />
             <KeyValue k="Assigned staff" v={data.assignedStaff?.name ?? "—"} />
             <KeyValue k="Joined" v={formatDate(client.createdAt)} />
+          </section>
+
+          {/* Geo-tagged onboarding photo */}
+          <section className="border-2 border-ink bg-card p-4 shadow-hard-sm">
+            <SectionTitle
+              action={<StatusChip label="Device GPS" tone="info" />}
+            >
+              Client photo & location
+            </SectionTitle>
+            {geoPhoto === undefined ? (
+              <RowSkeleton rows={2} />
+            ) : geoPhoto === null ? (
+              <EmptyState
+                title="No geo-tagged photo yet"
+                hint="The client photo with GPS stamp is captured during onboarding."
+                icon={<Camera className="size-5" />}
+              />
+            ) : (
+              <div className="space-y-3">
+                {geoPhoto.url && (
+                  <img
+                    src={geoPhoto.url}
+                    alt={`Geo-tagged photo of ${client.name}`}
+                    className="block w-full border-2 border-ink object-cover"
+                  />
+                )}
+                <div className="font-mono text-xs font-bold">
+                  <p>Latitude: {geoPhoto.latitude}</p>
+                  <p>Longitude: {geoPhoto.longitude}</p>
+                  <p>Accuracy: {Math.round(geoPhoto.accuracyMeters)} m</p>
+                </div>
+                <KeyValue k="Captured" v={formatDateTime(geoPhoto.capturedAt)} />
+                <KeyValue
+                  k="Photo uploaded"
+                  v={`${formatDateTime(geoPhoto.uploadedAt)} · ${geoPhoto.status.toLowerCase()}`}
+                />
+                <p className="border-2 border-ink bg-sky p-2 text-[11px] font-bold">
+                  Device-reported GPS capture at photo time — not an
+                  independently verified location.
+                </p>
+                <div className="flex gap-2">
+                  <Button variant="outline" className="flex-1" asChild>
+                    <a
+                      href={`https://www.google.com/maps?q=${geoPhoto.latitude},${geoPhoto.longitude}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <MapPin className="size-4" /> View on map
+                    </a>
+                  </Button>
+                  <Button variant="outline" className="flex-1" asChild>
+                    <a
+                      href={`https://www.google.com/maps/dir/?api=1&destination=${geoPhoto.latitude},${geoPhoto.longitude}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <Navigation className="size-4" /> Navigate
+                    </a>
+                  </Button>
+                </div>
+              </div>
+            )}
           </section>
 
           {canVerify && (
