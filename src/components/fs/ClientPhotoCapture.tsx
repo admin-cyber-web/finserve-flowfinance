@@ -18,6 +18,8 @@ import {
   isPlausibleFix,
   type AcquiredFix,
 } from "@/lib/geo";
+import type { GeolocationPosition } from "globalThis";
+
 
 /**
  * Client photo live capture.
@@ -61,9 +63,7 @@ function drawStamped(
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext("2d")!;
-  ctx.drawImage(source, 0, 0, width, height);
-
-  const lines = geoStampLines(geo);
+  ctx.drawImage(source, 0, 0, width, height);    const lines = geoStampLines(geo);
   const pad = Math.round(width * 0.03);
   const lineHeight = Math.max(20, Math.round(width * 0.045));
   const boxHeight = lineHeight * lines.length + pad * 2;
@@ -123,6 +123,11 @@ export function ClientPhotoCapture({
   // Downscaled frozen-frame thumbnail, encoded once at capture time.
   const [frozenPreview, setFrozenPreview] = useState<string | null>(null);
 
+  // Live GPS status line text — driven only by watchPosition readings, never
+  // by the accuracy comparison result (so a 47 m fix is never hidden behind a
+  // stale "waiting for better" message while tracking is still active).
+  const [gpsStatus, setGpsStatus] = useState<string | null>(null);
+
   const stopWatch = useCallback(() => {
     if (watchIdRef.current !== null) {
       navigator.geolocation.clearWatch(watchIdRef.current);
@@ -156,8 +161,8 @@ export function ClientPhotoCapture({
         const previewUrl = URL.createObjectURL(blob);
         frameRef.current = null;
         frameAtRef.current = null;
-        bestRef.current = null;
-        setGeoError(null);
+        bestRef.current = null;        setGeoError(null);
+        setGpsStatus(null);
         setGpsAccuracy(null);
         setFrozenPreview(null);
         setPhase("idle");
@@ -181,6 +186,19 @@ export function ClientPhotoCapture({
       if (!isPlausibleFix(candidate)) return;
       bestRef.current = betterFix(bestRef.current, candidate);
       setGpsAccuracy(bestRef.current.accuracyMeters);
+      // Keep a stable status readout that only changes when a real reading
+      // arrives — never driven by the <= 100 m comparison result, so a 47 m
+      // fix is never silently collapsed into a stale "waiting for better"
+      // label while the watcher is still active.
+      if (bestRef.current.accuracyMeters <= MAX_GEO_ACCURACY_M) {
+        setGpsStatus(
+          `Live location ready · Accuracy ${Math.round(bestRef.current.accuracyMeters)} m`,
+        );
+      } else {
+        setGpsStatus(
+          `Location accuracy ${Math.round(bestRef.current.accuracyMeters)} m · Improving…`,
+        );
+      }
       // Accept as soon as ANY acceptable fix exists: the fresh candidate
       // itself OR the retained best. A stale-but-accurate best must never
       // block acceptance of a fresh acceptable reading, and a valid fix
@@ -241,6 +259,8 @@ export function ClientPhotoCapture({
       },
       { enableHighAccuracy: true, timeout: GEO_TIMEOUT_MS, maximumAge: 0 },
     );
+    // Reset the live status readout the moment tracking starts so a previous
+    // frozen-frame "best N m" label cannot be shown again by a stale render.      setGpsStatus(null);
     return true;
   }, [onPosition, stopWatch]);
 
@@ -383,7 +403,8 @@ export function ClientPhotoCapture({
         }
       }
       armDeadline();
-    } else {
+    } else if (!frameRef.current) {
+      // No photo frame yet — just begin/continue tracking in the background.
       startWatch();
     }
   }, [armDeadline, finalize, startWatch]);
@@ -395,6 +416,7 @@ export function ClientPhotoCapture({
     frameAtRef.current = null;
     bestRef.current = null;
     setGeoError(null);
+    setGpsStatus(null);
     setGpsAccuracy(null);
     setFrozenPreview(null);
     void startCamera();
@@ -406,11 +428,19 @@ export function ClientPhotoCapture({
     if (streamRef.current) void startCamera();
   }, [startCamera]);
 
+  const geoLiveStatus = (
+    gpsStatus ??
+    (gpsAccuracy === null
+      ? "Getting live location…"
+      : `Location accuracy ${Math.round(gpsAccuracy)} m · Improving…`),
+  );
+
   const remove = useCallback(() => {
     if (value) URL.revokeObjectURL(value.previewUrl);
     onChange(null);
     setGeoError(null);
     setCameraError(null);
+    setGpsStatus(null);
     setGpsAccuracy(null);
   }, [onChange, value]);
 
@@ -419,6 +449,7 @@ export function ClientPhotoCapture({
     frameRef.current = null;
     frameAtRef.current = null;
     bestRef.current = null;
+    setGpsStatus(null);
     setGpsAccuracy(null);
     setFrozenPreview(null);
     setGeoError(null);
@@ -430,8 +461,7 @@ export function ClientPhotoCapture({
     return (
       <div className="space-y-2">
         <div className="flex items-center gap-1.5 border-2 border-ink bg-mint px-2 py-1.5 text-[11px] font-black uppercase">
-          <Check className="size-3.5 shrink-0" /> Photo + GPS ready · accuracy{" "}
-          {Math.round(value.geo.accuracyMeters)} m
+          <Check className="size-3.5 shrink-0" /> Photo + GPS ready · {geoLiveStatus}
         </div>
         <div className="relative border-2 border-ink bg-white">
           <img
@@ -489,8 +519,7 @@ export function ClientPhotoCapture({
             className="w-24 shrink-0 border-2 border-ink object-cover"
             src={frozenPreview}
           />
-          <div className="min-w-0 flex-1 space-y-1">
-            <span className="flex items-center gap-2 text-[11px] font-black uppercase">
+          <div className="min-w-0 flex-1 space-y-1">            <span className="flex items-center gap-2 text-[11px] font-black uppercase">
               <Loader2 className="size-3.5 animate-spin" /> Acquiring GPS…
               {gpsAccuracy !== null && (
                 <span className="font-mono normal-case text-muted-foreground">
