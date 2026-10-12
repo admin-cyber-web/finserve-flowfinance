@@ -41,7 +41,8 @@ function BrandWordmark({ className }: { className?: string }) {
     </span>
   );
 }
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode, useRef } from "react";
+import React from "react";
 import { useLocation, useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
 import {
@@ -172,19 +173,28 @@ function NavList({
 }
 
 export function AdminShell({ children }: { children: ReactNode }) {
-  const { profile, can, signOut } = useProfile();
+  const { profile, can, role: profileRole, signOut } = useProfile();
   const location = useLocation();
   const navigate = useNavigate();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
-  // Desktop-only sidebar expand/collapse (mobile Sheet navigation is separate
-  // and unaffected by this state).
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [q, setQ] = useState("");
-  const [debounced, setDebounced] = useState("");
+  // Desktop-only 2-state sidebar (mobile Sheet navigation is separate
+  // and unaffected by this state). Cycle: expanded / tagline / expanded ...
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [kmc, setKmc] = useState(false);
+  const [mouseEntered, setMouseEntered] = useState(false);
+  const [mouseLeft, setMouseLeft] = useState(false);
+  const roleLabel = profileRole?.replace("_", " ").toLowerCase() ?? "user";
+  const notifications = useQuery(api.admin.notifications, { limit: 20 });
+  const markRead = useMutation(api.admin.markRead);
+  const markAllRead = useMutation(api.admin.markAllRead);
 
-  const pending = useQuery(api.admin.pendingApprovals);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(q), 250);
+    return () => clearTimeout(t);
+  }, [q]);
+  const roleLabel = profileRole?.replace("_", " ").toLowerCase() ?? "user";
   const notifications = useQuery(api.admin.notifications, { limit: 20 });
   const markRead = useMutation(api.admin.markRead);
   const markAllRead = useMutation(api.admin.markAllRead);
@@ -225,19 +235,18 @@ export function AdminShell({ children }: { children: ReactNode }) {
         id="desktop-sidebar"
         className={cn(
           "fixed inset-y-0 left-0 z-40 hidden w-64 flex-col overflow-hidden border-r-2 border-ink bg-navy transition-[width] duration-300 ease-in-out lg:flex",
-          sidebarCollapsed && "lg:w-[72px]",
+          sidebarOpen && "lg:pointer-events-none lg:opacity-0 lg:relative lg:translate-x-[-2px]",
         )}
       >
         <div
           className={cn(
-            "border-b-2 border-paper/20 px-4 py-4",
-            sidebarCollapsed && "flex justify-center px-2",
+            "border-b-2 border-paper/20 px-4 py-4",              sidebarOpen && "flex justify-center px-2",
           )}
         >
-          {sidebarCollapsed ? (
-            <Logo withWordmark={false} />
-          ) : (
+          {sidebarOpen ? (
             <BrandWordmark className="block" />
+          ) : (
+            <Logo withWordmark={false} />
           )}
         </div>
         <div className="flex-1 overflow-y-auto p-3">
@@ -245,20 +254,20 @@ export function AdminShell({ children }: { children: ReactNode }) {
             pathname={location.pathname}
             allowed={allowed}
             approvalsBadge={pending?.length ?? 0}
-            collapsed={sidebarCollapsed}
+            collapsed={!sidebarOpen}
           />
         </div>
         <div className="border-t-2 border-paper/20 p-3">
           <div
             className={cn(
               "mb-2 flex items-center gap-2",
-              sidebarCollapsed && "justify-center",
+              sidebarOpen && "justify-center",
             )}
           >
             <span className="grid size-9 shrink-0 place-items-center border-2 border-paper bg-gold text-xs font-black text-ink">
               {initials(profile?.name)}
             </span>
-            <div className={cn("min-w-0", sidebarCollapsed && "hidden")}>
+            <div className={cn("min-w-0", sidebarOpen && "hidden")}>
               <div className="truncate text-xs font-black text-paper">
                 {profile?.name}
               </div>
@@ -267,29 +276,93 @@ export function AdminShell({ children }: { children: ReactNode }) {
               </div>
             </div>
           </div>
-          {sidebarCollapsed ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  className="w-full"
-                  onClick={() => void signOut().then(() => navigate("/auth"))}
-                >
-                  <LogOut className="size-4" />
-                  <span className="sr-only">Sign out</span>
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="right">Sign out</TooltipContent>
-            </Tooltip>
+          {sidebarOpen ? (
+            <div
+              className="flex items-center justify-center gap-2 border-2 border-ink bg-white px-3 py-2 shadow-hard-sm"
+              onMouseEnter={() => setMouseEntered(true)}
+              onMouseLeave={() => setMouseLeft(false)}
+            >
+              <span className="grid size-9 shrink-0 place-items-center border-2 border-ink bg-royal text-xs font-black text-white shadow-hard-sm">
+                <IndianRupee className="size-4" />
+              </span                >
+                  <span
+                    className="relative text-base font-black tracking-tight text-ink"
+                    ref={(el) => {
+                      const el0 = el;
+                      if (!el0) return;
+                      const update = () => {
+                        const h = el0.offsetWidth;
+                        const all = el0.textContent ?? "";
+                        if (!all.trim()) return;
+                        const target = all.length > 4 ? "KMC" : all;
+                        if (mouseEntered.current) {
+                          (el0.firstChild as HTMLElement).textContent = target;
+                        } else {
+                          (el0.firstChild as HTMLElement).textContent = all;
+                        }
+                        el0.style.textIndent = `${Math.max(h - el0.offsetWidth, 0)}px`;
+                      };
+                      update();
+                      window.addEventListener("resize", update, { passive: true });
+                      return () => window.removeEventListener("resize", update);
+                    }}
+                    style={{ textIndent: "0px" }}
+                  >
+                    {taglineRef.current ? (
+                      taglineRef.current.textContent?.split("\n").map((line, i) => (
+                        <React.Fragment key={i}>
+                          {line}
+                          {i < 1 && <br />}
+                        </React.Fragment>
+                      ))
+                    ) : null}
+              </span>
+              <span className="text-[10px] font-black uppercase tracking-[0.18em] text-muted-foreground">
+                Role: {roleLabel}
+              </span>
+            </div>
           ) : (
             <Button
-              variant="destructive"
-              size="sm"
+              variant="ghost"
               className="w-full"
-              onClick={() => void signOut().then(() => navigate("/auth"))}
+              style={{ fontFamily: "inherit", color: "#F07800", fontWeight: 800, letterSpacing: "0.06em", cursor: "pointer", opacity: 1, borderRadius: 0 }}
+              onMouseEnter={() => setKmc(true)}
+              onMouseLeave={() => setKmc(false)}
+              onClick={() => {
+                setSidebarOpen((v) => !v);
+                setKmc(false);
+              }}
+              aria-label={sidebarOpen ? "Hide menu and show tagline" : "Show menu and hide tagline"}
+              aria-expanded={sidebarOpen}
             >
-              <LogOut className="size-4" /> Sign out
+              <span
+                className="relative inline-flex items-center gap-0.5 select-none"
+                style={{ fontFamily: "inherit", fontSize: "1.05em", color: "#F07800", fontWeight: 800, letterSpacing: "0.06em" }}
+              >
+                <span
+                  className="absolute inset-0 flex items-center justify-center transition-all duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]"
+                  style={{ background: "#E88900", boxShadow: "0 2px 8px rgba(240,120,0,0.45)", borderRadius: "0.375rem" }}
+                  aria-hidden="true"
+                >
+                  <span
+                    className="relative inline-flex items-center justify-center h-5 w-12 text-white font-black uppercase tracking-[0.06em]"
+                    style={{ transition: "all 300ms ease" }}
+                  >
+                    {kmc ? "KMC" : "START"}
+                  </span>
+                </span>
+                <span
+                  className="absolute inset-0 flex items-center justify-center transition-all duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]"
+                  style={{ background: "#F07800", boxShadow: "0 2px 8px rgba(240,120,0,0.5)", borderRadius: "0.375rem", opacity: kmc ? 0 : 1 }}
+                >
+                  <span
+                    className="relative inline-flex items-center justify-center h-5 w-12 text-ink font-black uppercase tracking-[0.06em]"
+                    style={{ transition: "all 300ms ease" }}
+                  >
+                    {kmc ? "START" : "KMC"}
+                  </span>
+                </span>
+              </span>
             </Button>
           )}
         </div>
@@ -331,7 +404,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
       <div
         className={cn(
           "transition-[padding] duration-300 ease-in-out lg:pl-64",
-          sidebarCollapsed && "lg:pl-[72px]",
+          sidebarOpen && "lg:pointer-events-none lg:opacity-0 lg:relative lg:translate-x-[-2px]",
         )}
       >
         <header className="sticky top-0 z-30 flex items-center gap-3 border-b-2 border-ink bg-card px-3 py-3 lg:px-6">
@@ -345,16 +418,25 @@ export function AdminShell({ children }: { children: ReactNode }) {
           {/* Desktop sidebar expand/collapse toggle */}
           <button
             className="hidden size-10 place-items-center border-2 border-ink bg-white shadow-hard-sm active:translate-x-[2px] active:translate-y-[2px] active:shadow-none lg:grid"
-            onClick={() => setSidebarCollapsed((v) => !v)}
-            aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-            aria-expanded={!sidebarCollapsed}
+            onClick={() => {
+              setSidebarOpen((v) => !v);
+              setKmc(false);
+            }}
+            aria-label={sidebarOpen ? "Hide menu and show tagline" : "Show menu and hide tagline"}
+            aria-expanded={!sidebarOpen}
             aria-controls="desktop-sidebar"
           >
-            {sidebarCollapsed ? (
-              <PanelLeftOpen className="size-4" />
-            ) : (
-              <PanelLeftClose className="size-4" />
-            )}
+            <span
+              className="relative inline-flex items-center justify-center w-12 h-12"
+              style={{ background: "#F07800", boxShadow: "0 2px 8px rgba(240,120,0,0.45)", borderRadius: "0.375rem" }}
+              aria-hidden="true"
+            >
+              {sidebarOpen ? (
+                <PanelLeftOpen className="size-5 text-white" />
+              ) : (
+                <PanelLeftClose className="size-5 text-white" />
+              )}
+            </span>
           </button>
           <div className="min-w-0 flex-1">
             <h1 className="truncate text-base font-black uppercase tracking-tight lg:text-lg">
