@@ -14,6 +14,7 @@ import {
   BookOpen,
   Banknote,
   FileBarChart,
+  IndianRupee,
   LayoutDashboard,
   Loader2,
   LogOut,
@@ -42,6 +43,86 @@ function BrandWordmark({ className }: { className?: string }) {
   );
 }
 import { useEffect, useState, type ReactNode, useRef } from "react";
+
+/** Custom keyboard-accessible animated START/KMC button for the desktop
+ *  sidebar. Uses two stacked spans so the label cross-fade is smooth and
+ *  the background glow can pulse independently of the text. */
+function StartButton({
+  kmc,
+  onClick,
+  onMouseEnter,
+  onMouseLeave,
+}: {
+  kmc: boolean;
+  onClick: () => void;
+  onMouseEnter: () => void;
+  onMouseLeave: () => void;
+}) {
+  // Choose the label that should keep the button's visible colour:
+  // START keeps saffron text, KMC keeps ink text after the cross-fade.
+  const startLabelColor = "#F07800";
+  const kmcLabelColor = "#141414";
+  const defaultColor = startLabelColor;
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      className="w-full"
+      aria-label="Show tagline"
+      aria-expanded={false}
+      style={{ fontFamily: "inherit", borderRadius: 0, cursor: "pointer" }}
+    >
+      <span
+        className="relative inline-flex items-center justify-center"
+        style={{
+          background: "#F07800",
+          boxShadow: "0 2px 8px rgba(240,120,0,0.45)",
+          borderRadius: "0.375rem",
+        }}
+      >
+        {/* Ink-coloured backup layer, fades in on hover */}
+        <span
+          className="absolute inset-0 flex items-center justify-center transition-all duration-300 ease-out"
+          style={{
+            background: "#F07800",
+            boxShadow:
+              "0 2px 8px rgba(240,120,0,0.5)",
+            borderRadius: "0.375rem",
+            opacity: kmc ? 1 : 0,
+          }}
+        >
+          <span
+            className="relative inline-flex items-center justify-center h-9 w-[9.5rem] text-ink font-black uppercase tracking-[0.08em]"
+            style={{ transition: "all 300ms ease" }}
+          >
+            KMC
+          </span>
+        </span>
+
+        {/* Saffron START layer, fades out on hover */}
+        <span
+          className="absolute inset-0 flex items-center justify-center transition-all duration-300 ease-out"
+          style={{
+            background: "#E88900",
+            boxShadow: "0 2px 8px rgba(240,120,0,0.45)",
+            borderRadius: "0.375rem",
+            opacity: kmc ? 0 : 1,
+          }}
+        >
+          <span
+            className="relative inline-flex items-center justify-center h-5 w-12 text-white font-black uppercase tracking-[0.06em]"
+            style={{ transition: "all 300ms ease" }}
+          >
+            START
+          </span>
+        </span>
+      </span>
+    </button>
+  );
+}
 import React from "react";
 import { useLocation, useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
@@ -179,22 +260,16 @@ export function AdminShell({ children }: { children: ReactNode }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [debounced, setDebounced] = useState("");
+  // Desktop-only 2-state sidebar (mobile Sheet navigation is separate
+  // and unaffected by this state). Cycle: expanded / tagline / expanded ...
   // Desktop-only 2-state sidebar (mobile Sheet navigation is separate
   // and unaffected by this state). Cycle: expanded / tagline / expanded ...
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [kmc, setKmc] = useState(false);
-  const [mouseEntered, setMouseEntered] = useState(false);
-  const [mouseLeft, setMouseLeft] = useState(false);
   const roleLabel = profileRole?.replace("_", " ").toLowerCase() ?? "user";
-  const notifications = useQuery(api.admin.notifications, { limit: 20 });
-  const markRead = useMutation(api.admin.markRead);
-  const markAllRead = useMutation(api.admin.markAllRead);
-
-  useEffect(() => {
-    const t = setTimeout(() => setDebounced(q), 250);
-    return () => clearTimeout(t);
-  }, [q]);
-  const roleLabel = profileRole?.replace("_", " ").toLowerCase() ?? "user";
+  const taglineRef = useRef<HTMLSpanElement>(null);
   const notifications = useQuery(api.admin.notifications, { limit: 20 });
   const markRead = useMutation(api.admin.markRead);
   const markAllRead = useMutation(api.admin.markAllRead);
@@ -220,13 +295,16 @@ export function AdminShell({ children }: { children: ReactNode }) {
     TITLES[location.pathname] ??
     (location.pathname.startsWith("/dashboard/clients/")
       ? "Client 360°"
-      : location.pathname.startsWith("/dashboard/loans/")
-        ? "Loan file"
+      : location.pathname.startsWith("/dashboard/loans/")          ? "Loan file"
         : location.pathname.startsWith("/dashboard/staff/")
           ? "Staff 360°"
           : location.pathname.startsWith("/dashboard/receipts/")
             ? "Receipt"
             : "KIRAT MICRO CREDIT");
+
+  /** Exact tagline displayed in the sidebar's State B (menu hidden). */
+  const EXACT_TAGLINE = "सपने आपके, भरोसा हमारा — KIRAT MICRO CREDIT";
+  const taglineLines = EXACT_TAGLINE.split(/\n/);
 
   return (
     <div className="min-h-screen bg-paper">
@@ -240,7 +318,8 @@ export function AdminShell({ children }: { children: ReactNode }) {
       >
         <div
           className={cn(
-            "border-b-2 border-paper/20 px-4 py-4",              sidebarOpen && "flex justify-center px-2",
+            "border-b-2 border-paper/20 px-4 py-4",
+            sidebarOpen && "flex justify-center px-2",
           )}
         >
           {sidebarOpen ? (
@@ -250,12 +329,17 @@ export function AdminShell({ children }: { children: ReactNode }) {
           )}
         </div>
         <div className="flex-1 overflow-y-auto p-3">
-          <NavList
-            pathname={location.pathname}
-            allowed={allowed}
-            approvalsBadge={pending?.length ?? 0}
-            collapsed={!sidebarOpen}
-          />
+          {/* State A: expanded menu. State B (tagline) is rendered at the
+              very bottom of the sidebar when sidebarOpen is false; the NavList
+              itself is never rendered in State B. */}
+          {sidebarOpen && (
+            <NavList
+              pathname={location.pathname}
+              allowed={allowed}
+              approvalsBadge={notifications?.unread ?? 0}
+              collapsed={false}
+            />
+          )}
         </div>
         <div className="border-t-2 border-paper/20 p-3">
           <div
@@ -284,91 +368,62 @@ export function AdminShell({ children }: { children: ReactNode }) {
             >
               <span className="grid size-9 shrink-0 place-items-center border-2 border-ink bg-royal text-xs font-black text-white shadow-hard-sm">
                 <IndianRupee className="size-4" />
-              </span                >
-                  <span
-                    className="relative text-base font-black tracking-tight text-ink"
-                    ref={(el) => {
-                      const el0 = el;
-                      if (!el0) return;
-                      const update = () => {
-                        const h = el0.offsetWidth;
-                        const all = el0.textContent ?? "";
-                        if (!all.trim()) return;
-                        const target = all.length > 4 ? "KMC" : all;
-                        if (mouseEntered.current) {
-                          (el0.firstChild as HTMLElement).textContent = target;
-                        } else {
-                          (el0.firstChild as HTMLElement).textContent = all;
-                        }
-                        el0.style.textIndent = `${Math.max(h - el0.offsetWidth, 0)}px`;
-                      };
-                      update();
-                      window.addEventListener("resize", update, { passive: true });
-                      return () => window.removeEventListener("resize", update);
-                    }}
-                    style={{ textIndent: "0px" }}
-                  >
-                    {taglineRef.current ? (
-                      taglineRef.current.textContent?.split("\n").map((line, i) => (
-                        <React.Fragment key={i}>
-                          {line}
-                          {i < 1 && <br />}
-                        </React.Fragment>
-                      ))
-                    ) : null}
               </span>
+              <span
+                className="relative text-base font-black leading-[1.4] tracking-wide text-ink"
+                ref={(el) => {
+                  const el0 = el;
+                  if (!el0) return;
+                  const h = el0.offsetWidth;
+                  (el0.firstChild as HTMLElement).textContent = roleLabel;
+                  el0.style.textIndent = `${Math.min(0, h - el0.offsetWidth)}px`;
+                }}
+                style={{ textIndent: "0px" }}
+              >
+                {""}
+              </span              >
               <span className="text-[10px] font-black uppercase tracking-[0.18em] text-muted-foreground">
-                Role: {roleLabel}
+                {roleLabel}
               </span>
             </div>
           ) : (
-            <Button
-              variant="ghost"
-              className="w-full"
-              style={{ fontFamily: "inherit", color: "#F07800", fontWeight: 800, letterSpacing: "0.06em", cursor: "pointer", opacity: 1, borderRadius: 0 }}
-              onMouseEnter={() => setKmc(true)}
-              onMouseLeave={() => setKmc(false)}
-              onClick={() => {
-                setSidebarOpen((v) => !v);
-                setKmc(false);
-              }}
-              aria-label={sidebarOpen ? "Hide menu and show tagline" : "Show menu and hide tagline"}
-              aria-expanded={sidebarOpen}
-            >
+            <div className="relative">
+              <StartButton
+                kmc={kmc}
+                onMouseEnter={() => setKmc(true)}
+                onMouseLeave={() => setKmc(false)}
+                onClick={() => {
+                  setSidebarOpen((v) => !v);
+                  setKmc(false);
+                }}
+              />
+            </StartButton>
+              {/* Keep keyboard focus visible even over the glow */}
               <span
-                className="relative inline-flex items-center gap-0.5 select-none"
-                style={{ fontFamily: "inherit", fontSize: "1.05em", color: "#F07800", fontWeight: 800, letterSpacing: "0.06em" }}
-              >
-                <span
-                  className="absolute inset-0 flex items-center justify-center transition-all duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]"
-                  style={{ background: "#E88900", boxShadow: "0 2px 8px rgba(240,120,0,0.45)", borderRadius: "0.375rem" }}
-                  aria-hidden="true"
-                >
-                  <span
-                    className="relative inline-flex items-center justify-center h-5 w-12 text-white font-black uppercase tracking-[0.06em]"
-                    style={{ transition: "all 300ms ease" }}
-                  >
-                    {kmc ? "KMC" : "START"}
-                  </span>
-                </span>
-                <span
-                  className="absolute inset-0 flex items-center justify-center transition-all duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]"
-                  style={{ background: "#F07800", boxShadow: "0 2px 8px rgba(240,120,0,0.5)", borderRadius: "0.375rem", opacity: kmc ? 0 : 1 }}
-                >
-                  <span
-                    className="relative inline-flex items-center justify-center h-5 w-12 text-ink font-black uppercase tracking-[0.06em]"
-                    style={{ transition: "all 300ms ease" }}
-                  >
-                    {kmc ? "START" : "KMC"}
-                  </span>
-                </span>
-              </span>
-            </Button>
+                className="absolute inset-0"
+                onFocus={(e) => e.currentTarget.parentElement?.focus()}
+                onBlur={(e) => e.currentTarget.parentElement?.blur()}
+                style={{ outline: "none" }}
+              />
+            </div>
           )}
         </div>
+
+        {/* Close button for the tagline-only state */}
+        {!sidebarOpen && (
+          <button
+            onClick={() => setSidebarOpen(true)}
+            className="flex w-full items-center justify-center gap-2 border-2 border-ink bg-white px-3 py-2 text-xs font-black uppercase text-ink shadow-hard-sm hover:border-paper/40 hover:bg-white/60 active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-colors"
+            aria-label="Return to menu"
+          >
+            <Menu className="size-4" />
+            Show menu
+          </button>
+        )}
+
       </aside>
 
-      {/* Mobile drawer */}
+      {/* Mobile drawer — unchanged */}
       <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
         <SheetContent
           side="left"
@@ -386,19 +441,31 @@ export function AdminShell({ children }: { children: ReactNode }) {
               pathname={location.pathname}
               onNavigate={() => setDrawerOpen(false)}
               allowed={allowed}
-              approvalsBadge={pending?.length ?? 0}
+              approvalsBadge={notifications?.unread ?? 0}
             />
-          <Button
-            variant="destructive"
-            size="sm"
-            className="mt-4 w-full"
-            onClick={() => void signOut().then(() => navigate("/auth"))}
-          >
-            <LogOut className="size-4" /> Sign out
-          </Button>
+
+            <Button
+              variant="destructive"
+              size="sm"
+              className="mt-4 w-full"
+              onClick={() => void signOut().then(() => navigate("/auth"))}
+            >
+              <LogOut className="size-4" /> Sign out
+            </Button>
           </div>
         </SheetContent>
       </Sheet>
+
+      {/* Content column — width adjusts to desktop sidebar state via the
+          existing transition-[padding] class; no horizontal overflow is
+          introduced because the content column is constrained to a max-width
+          and the sidebar shift is purely visual padding. */}
+      <div
+        className={cn(
+          "transition-[padding] duration-300 ease-in-out lg:pl-64",
+          sidebarOpen && "lg:pointer-events-none lg:opacity-0 lg:relative lg:translate-x-[-2px]",
+        )}
+      >
 
       {/* Content column */}
       <div
@@ -626,7 +693,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
           <span>Account {profile.status} — actions are blocked</span>
           <Loader2 className="size-4 animate-spin" />
         </div>
-      )}
+      )
     </div>
   );
 }
