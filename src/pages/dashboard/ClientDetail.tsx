@@ -69,7 +69,7 @@ export default function ClientDetail() {
     );
   }
 
-  const { client, totals, loans, payments, documents, notes, activity, recovery } =
+  const { client, totals, loans, payments, documents, notes, activity, recovery, family, coApplicantPhotoUrl } =
     data;
 
   const act = async (fn: () => Promise<unknown>, ok: string) => {
@@ -240,6 +240,222 @@ export default function ClientDetail() {
                     </a>
                   </Button>
                 </div>
+              </div>
+            )}
+          </section>
+
+          {/* Full saved application — applicant, co-applicant, family,
+              income, loan request, bank, nominee, declaration, office use. */}
+          <section className="space-y-3 border-2 border-ink bg-card p-4 shadow-hard-sm">
+            <SectionTitle>Application</SectionTitle>
+            <KeyValue k="Applicant name" v={client.name} />
+            <KeyValue k="Husband name" v={client.husbandName ?? "—"} />
+            <KeyValue k="Father name" v={client.fatherName ?? "—"} />
+            <KeyValue k="Father's address" v={client.fatherAddress ?? "—"} />
+            <KeyValue k="Date of birth" v={client.dob ? formatDate(client.dob) : "—"} />
+            <KeyValue
+              k="PAN / Voter ID"
+              v={`${client.panNumber ?? "—"} · ${client.voterId ?? "—"}`}
+              mono
+            />
+            <KeyValue
+              k="KYC documents"
+              v={
+                client.kycDocuments && client.kycDocuments.length > 0
+                  ? client.kycDocuments.join(", ")
+                  : "—"
+              }
+            />
+            <KeyValue k="Type of business" v={client.typeOfBusiness ?? client.occupation} />
+            <KeyValue k="Business address" v={client.businessAddress ?? "—"} />
+            <KeyValue
+              k="Other income"
+              v={
+                client.otherIncome !== undefined
+                  ? `₹${client.otherIncome.toLocaleString("en-IN")}`
+                  : "—"
+              }
+            />
+            <KeyValue
+              k="Existing loan / EMI"
+              v={
+                client.existingLoanEmi !== undefined
+                  ? `₹${client.existingLoanEmi.toLocaleString("en-IN")}`
+                  : "—"
+              }
+            />
+
+            {client.coApplicant && (
+              <div className="border-2 border-ink bg-sky p-3">
+                <div className="mb-2 text-[10px] font-black uppercase tracking-[0.14em]">
+                  Co-applicant
+                </div>
+                {coApplicantPhotoUrl && (
+                  <img
+                    src={coApplicantPhotoUrl}
+                    alt={`Co-applicant ${client.coApplicant.name}`}
+                    className="mb-2 w-24 border-2 border-ink object-cover"
+                  />
+                )}
+                <KeyValue k="Name" v={client.coApplicant.name} />
+                <KeyValue k="Relationship" v={client.coApplicant.relationship} />
+                <KeyValue
+                  k="Age / gender"
+                  v={
+                    client.coApplicant.age !== undefined
+                      ? `${client.coApplicant.age}${client.coApplicant.gender ? ` · ${client.coApplicant.gender.toLowerCase()}` : ""}`
+                      : client.coApplicant.gender?.toLowerCase() ?? "—"
+                  }
+                />
+                <KeyValue k="Mobile" v={client.coApplicant.mobile ?? "—"} mono />
+                <KeyValue
+                  k="Aadhaar / PAN / Voter"
+                  v={`${client.coApplicant.aadhaarNumber ?? "—"} · ${client.coApplicant.panNumber ?? "—"} · ${client.coApplicant.voterId ?? "—"}`}
+                  mono
+                />
+                <KeyValue k="Address" v={client.coApplicant.address ?? "—"} />
+              </div>
+            )}
+
+            <div>
+              <div className="mb-1 text-[10px] font-black uppercase tracking-[0.14em] text-muted-foreground">
+                Family members ({family.length || client.familyMembers})
+              </div>
+              {family.length === 0 ? (
+                <p className="text-sm font-semibold text-muted-foreground">—</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full border-2 border-ink text-xs">
+                    <thead>
+                      <tr className="bg-muted text-left text-[10px] font-black uppercase">
+                        <th className="border border-ink px-1.5 py-1">S.No.</th>
+                        <th className="border border-ink px-1.5 py-1">Member</th>
+                        <th className="border border-ink px-1.5 py-1">Age</th>
+                        <th className="border border-ink px-1.5 py-1">Relation</th>
+                        <th className="border border-ink px-1.5 py-1">Occupation</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {family.map((m, i) => (
+                        <tr key={m._id} className="font-semibold">
+                          <td className="border border-ink px-1.5 py-1 font-black">
+                            {i + 1}
+                          </td>
+                          <td className="border border-ink px-1.5 py-1">{m.name}</td>
+                          <td className="border border-ink px-1.5 py-1">{m.age ?? "—"}</td>
+                          <td className="border border-ink px-1.5 py-1">
+                            {m.relationship}
+                          </td>
+                          <td className="border border-ink px-1.5 py-1">
+                            {m.occupation ?? "—"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {client.loanRequest && (
+              <div className="border-2 border-ink bg-white p-3">
+                <div className="mb-2 text-[10px] font-black uppercase tracking-[0.14em]">
+                  Loan request (not a loan — subject to approval)
+                </div>
+                <KeyValue
+                  k="Amount requested"
+                  v={<Money value={client.loanRequest.amountRequested} />}
+                />
+                <KeyValue k="Purpose" v={client.loanRequest.purpose.toLowerCase()} />
+                <KeyValue
+                  k="Tenure"
+                  v={`${client.loanRequest.tenureMonths} months · ${client.loanRequest.repaymentFrequency.toLowerCase()}`}
+                />
+                <KeyValue
+                  k="Est. installment"
+                  v={
+                    client.loanRequest.estimatedInstallment !== undefined ? (
+                      <Money value={client.loanRequest.estimatedInstallment} />
+                    ) : (
+                      "—"
+                    )
+                  }
+                />
+              </div>
+            )}
+
+            {client.bankAccount && (
+              <div className="border-2 border-ink bg-white p-3">
+                <div className="mb-2 text-[10px] font-black uppercase tracking-[0.14em]">
+                  Bank account
+                </div>
+                <KeyValue k="Account holder" v={client.bankAccount.accountHolderName} />
+                <KeyValue
+                  k="Bank / branch"
+                  v={`${client.bankAccount.bankName} · ${client.bankAccount.branch}`}
+                />
+                <KeyValue
+                  k="Account no. / IFSC"
+                  v={`${client.bankAccount.accountNumber} · ${client.bankAccount.ifscCode}`}
+                  mono
+                />
+              </div>
+            )}
+
+            {client.nominee && (
+              <div className="border-2 border-ink bg-white p-3">
+                <div className="mb-2 text-[10px] font-black uppercase tracking-[0.14em]">
+                  Nominee
+                </div>
+                <KeyValue k="Name" v={client.nominee.name} />
+                <KeyValue
+                  k="Relationship / age"
+                  v={`${client.nominee.relationship} · ${client.nominee.age} yrs`}
+                />
+                <KeyValue k="Mobile" v={client.nominee.mobile ?? "—"} mono />
+                <KeyValue k="Address" v={client.nominee.address ?? "—"} />
+              </div>
+            )}
+
+            <KeyValue
+              k="Declaration accepted"
+              v={
+                client.declarationAcceptedAt
+                  ? formatDateTime(client.declarationAcceptedAt)
+                  : "—"
+              }
+            />
+
+            {client.officeUse && (
+              <div className="border-2 border-ink bg-gold p-3">
+                <div className="mb-2 text-[10px] font-black uppercase tracking-[0.14em]">
+                  For office use only
+                </div>
+                <KeyValue k="Field officer" v={client.officeUse.fieldOfficerName ?? "—"} />
+                <KeyValue
+                  k="Customer/group verification"
+                  v={(client.officeUse.customerVerification ?? "not assessed").toLowerCase().replace("_", " ")}
+                />
+                <KeyValue
+                  k="KYC verification"
+                  v={(client.officeUse.kycVerification ?? "not assessed").toLowerCase()}
+                />
+                <KeyValue
+                  k="Credit assessment"
+                  v={(client.officeUse.creditAssessment ?? "not assessed").toLowerCase().replace("_", " ")}
+                />
+                <KeyValue
+                  k="Approved amount"
+                  v={
+                    client.officeUse.approvedLoanAmount !== undefined ? (
+                      <Money value={client.officeUse.approvedLoanAmount} />
+                    ) : (
+                      "—"
+                    )
+                  }
+                />
+                <KeyValue k="Remarks" v={client.officeUse.remarks ?? "—"} />
+                <KeyValue k="Updated" v={formatDateTime(client.officeUse.updatedAt)} />
               </div>
             )}
           </section>

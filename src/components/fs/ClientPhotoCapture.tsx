@@ -20,7 +20,6 @@ import {
   isPlausibleFix,
   type AcquiredFix,
 } from "@/lib/geo";
-import type { GeolocationPosition } from "globalThis";
 
 
 /**
@@ -234,11 +233,14 @@ export function ClientPhotoCapture({
     setPhase("idle");
   }, [stopWatch]);
 
-  const armDeadline = useCallback(() => {
-    if (deadlineRef.current === null) {
-      deadlineRef.current = setTimeout(failAcquisition, GEO_ACQUIRE_WINDOW_MS);
-    }
-  }, [failAcquisition]);
+  const armDeadline = useCallback(
+    (windowMs: number = GEO_ACQUIRE_WINDOW_MS) => {
+      if (deadlineRef.current === null) {
+        deadlineRef.current = setTimeout(failAcquisition, windowMs);
+      }
+    },
+    [failAcquisition],
+  );
 
   const startWatch = useCallback((): boolean => {
     if (watchIdRef.current !== null) return true; // never double-prompt
@@ -382,7 +384,8 @@ export function ClientPhotoCapture({
       return;
     }
     // A fresh accurate fix may already be in hand — accept immediately
-    // (a 47 m fix acquired while the camera was open must NOT be rejected).      if (bestRef.current) {
+    // (a 47 m fix acquired while the camera was open must NOT be rejected).
+    if (bestRef.current) {
       const accepted = acceptableFixAtCaptureWithFutureTolerance(bestRef.current, frameAtRef.current);
       if (accepted) {
         await finalize(accepted);
@@ -417,7 +420,12 @@ export function ClientPhotoCapture({
           void finalize(accepted);
           return;
         }
-      }        armDeadline(photoWaitingForFix ? GEO_ACQUIRE_WINDOW_WITH_FROZEN_FRAME_MS : GEO_ACQUIRE_WINDOW_MS);
+      }
+      armDeadline(
+        photoWaitingForFix
+          ? GEO_ACQUIRE_WINDOW_WITH_FROZEN_FRAME_MS
+          : GEO_ACQUIRE_WINDOW_MS,
+      );
     } else if (!frameRef.current) {
       // No photo frame yet — just begin/continue tracking in the background.
       startWatch();
@@ -444,12 +452,11 @@ export function ClientPhotoCapture({
     if (streamRef.current) void startCamera();
   }, [startCamera]);
 
-  const geoLiveStatus = (
+  const geoLiveStatus =
     gpsStatus ??
     (gpsAccuracy === null
       ? "Getting live location…"
-      : `Location accuracy ${Math.round(gpsAccuracy)} m · Improving…`),
-  );
+      : `Location accuracy ${Math.round(gpsAccuracy)} m · Improving…`);
 
   const remove = useCallback(() => {
     if (value) URL.revokeObjectURL(value.previewUrl);
@@ -539,7 +546,7 @@ export function ClientPhotoCapture({
           />
           <div className="min-w-0 flex-1 space-y-1">
             <span className="flex items-center gap-2 text-[11px] font-black uppercase">
-              <Loader2 className="size-3.5 animate-spin" /> Acquiring GPS…
+              <Loader2 className="size-3.5 animate-spin" /> Getting live location…
               {gpsAccuracy !== null && (
                 <span className="font-mono normal-case text-muted-foreground">
                   best {Math.round(gpsAccuracy)} m
@@ -595,7 +602,7 @@ export function ClientPhotoCapture({
           <div className="flex items-center gap-2">
             {gpsAccuracy === null ? (
               <span className="flex flex-1 items-center gap-1.5 text-[11px] font-black uppercase text-muted-foreground">
-                <Loader2 className="size-3.5 animate-spin" /> GPS acquiring…
+                <Loader2 className="size-3.5 animate-spin" /> Getting live location…
               </span>
             ) : (
               <span
@@ -668,7 +675,10 @@ export function ClientPhotoCapture({
       )}
       {geoError && (
         <div className="flex items-center gap-2 border-2 border-ink bg-blush px-3 py-2 text-[11px] font-bold">
-          <span className="flex-1">{geoError}</span>
+          <span className="flex-1">
+            <span className="block font-black uppercase">Location unavailable</span>
+            {geoError}
+          </span>
           <Button size="sm" variant="outline" onClick={retryGps}>
             <RefreshCw className="size-3.5" /> Retry
           </Button>

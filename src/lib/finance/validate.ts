@@ -80,6 +80,19 @@ export function optionalString(
   return requiredString(value, field, max);
 }
 
+/**
+ * Completed years of age for a date of birth (epoch ms), relative to `now`.
+ * Shared by the client form (auto age display) and the backend (re-validation).
+ */
+export function ageFromDob(dob: number, now: number = Date.now()): number {
+  const b = new Date(dob);
+  const d = new Date(now);
+  let age = d.getFullYear() - b.getFullYear();
+  const m = d.getMonth() - b.getMonth();
+  if (m < 0 || (m === 0 && d.getDate() < b.getDate())) age -= 1;
+  return age;
+}
+
 export function intInRange(
   value: unknown,
   field: string,

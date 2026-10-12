@@ -11,6 +11,7 @@ import {
 } from "../lib/server/convexHelpers";
 import { istDateKey } from "../lib/server/convexHelpers";
 import {
+  ageFromDob,
   mobileNumber,
   optionalString,
   requiredString,
@@ -18,7 +19,15 @@ import {
   money,
   oneOf,
 } from "../lib/finance/validate";
-import { KYC_STATUS, DOC_STATUS } from "../lib/finance/types";
+import {
+  KYC_STATUS,
+  DOC_STATUS,
+  LOAN_PURPOSES,
+  FREQUENCIES,
+  OFFICE_VERIFICATION,
+  OFFICE_KYC,
+  OFFICE_CREDIT,
+} from "../lib/finance/types";
 import {
   geoValidationError,
   MAX_CLIENT_PHOTO_BYTES,
@@ -161,6 +170,16 @@ export const get = query({
     const notes = (await ctx.db.query("clientNotes").collect())
       .filter((n) => n.clientId === clientId)
       .sort((a, b) => b.createdAt - a.createdAt);
+    // Structured family rows from the application form (legacy clients have
+    // only the numeric count on the client document).
+    const family = (await ctx.db.query("clientFamilyMembers").collect())
+      .filter((f) => f.clientId === clientId)
+      .sort((a, b) => a.createdAt - b.createdAt);
+    // Signed URL for the optional co-applicant photo (same access checks as
+    // the rest of this query — never a permanent public link).
+    const coApplicantPhotoUrl = client.coApplicant?.photoStorageId
+      ? await ctx.storage.getUrl(client.coApplicant.photoStorageId)
+      : null;
     const recovery = (await ctx.db.query("recoveryActivities").collect())
       .filter((r) => r.clientId === clientId)
       .sort((a, b) => b.createdAt - a.createdAt);
@@ -231,6 +250,8 @@ export const get = query({
 
     return {
       client,
+      family,
+      coApplicantPhotoUrl,
       assignedStaff: byId.get(client.assignedTo) ?? null,
       createdBy: byId.get(client.createdBy) ?? null,
       loans: loans.map((l) => ({
@@ -269,19 +290,97 @@ export const create = mutation({
   args: {
     name: v.string(),
     fatherName: v.optional(v.string()),
+    husbandName: v.optional(v.string()),
+    fatherAddress: v.optional(v.string()),
+    dob: v.optional(v.number()),
     age: v.number(),
     gender: v.string(),
     mobile: v.string(),
     altMobile: v.optional(v.string()),
-    address: v.optional(v.string()),
-    village: v.string(),
+    address: v.optional(v.string()), // permanent address (full text)
+    village: v.optional(v.string()), // derived from address when omitted
     district: v.optional(v.string()),
     state: v.optional(v.string()),
     pin: v.optional(v.string()),
     occupation: v.string(),
+    typeOfBusiness: v.optional(v.string()),
+    businessAddress: v.optional(v.string()),
     monthlyIncome: v.number(),
     householdIncome: v.number(),
-    familyMembers: v.number(),
+    otherIncome: v.optional(v.number()),
+    existingLoanEmi: v.optional(v.number()),
+    familyMembers: v.optional(v.number()), // legacy count — rows are truth
+    familyRows: v.optional(
+      v.array(
+        v.object({
+          name: v.string(),
+          age: v.optional(v.number()),
+          relationship: v.string(),
+          occupation: v.optional(v.string()),
+        }),
+      ),
+    ),
+    panNumber: v.optional(v.string()),
+    voterId: v.optional(v.string()),
+    kycDocuments: v.optional(v.array(v.string())),
+    coApplicant: v.optional(
+      v.object({
+        name: v.string(),
+        fatherName: v.optional(v.string()),
+        relationship: v.string(),
+        dob: v.optional(v.number()),
+        age: v.optional(v.number()),
+        gender: v.optional(v.string()),
+        mobile: v.optional(v.string()),
+        address: v.optional(v.string()),
+        aadhaarNumber: v.optional(v.string()),
+        panNumber: v.optional(v.string()),
+        voterId: v.optional(v.string()),
+        kycDocuments: v.optional(v.array(v.string())),
+        photoStorageId: v.optional(v.id("_storage")),
+      }),
+    ),
+    // Informational loan request — never creates a loan, approval or
+    // financial transaction. Disbursement stays in the authorized workflow.
+    loanRequest: v.optional(
+      v.object({
+        amountRequested: v.number(),
+        purpose: v.string(),
+        tenureMonths: v.number(),
+        repaymentFrequency: v.string(),
+        estimatedInstallment: v.optional(v.number()),
+      }),
+    ),
+    bankAccount: v.optional(
+      v.object({
+        accountHolderName: v.string(),
+        bankName: v.string(),
+        branch: v.string(),
+        accountNumber: v.string(),
+        ifscCode: v.string(),
+      }),
+    ),
+    nominee: v.optional(
+      v.object({
+        name: v.string(),
+        relationship: v.string(),
+        age: v.number(),
+        mobile: v.optional(v.string()),
+        address: v.optional(v.string()),
+      }),
+    ),
+    declarationAccepted: v.optional(v.boolean()),
+    // FOR OFFICE USE ONLY — honored only for authorized roles (see handler).
+    officeUse: v.optional(
+      v.object({
+        fieldOfficerName: v.optional(v.string()),
+        customerVerification: v.optional(v.string()),
+        kycVerification: v.optional(v.string()),
+        creditAssessment: v.optional(v.string()),
+        approvedLoanAmount: v.optional(v.number()),
+        remarks: v.optional(v.string()),
+      }),
+    ),
     assignedTo: v.optional(v.id("profiles")),
     kycDocType: v.optional(v.string()),
     kycDocRef: v.optional(v.string()),
@@ -295,8 +394,10 @@ export const create = mutation({
     // device-reported GPS fix it was stamped with.
     photoStorageId: v.id("_storage"),
     // Mandatory stamp document (uploaded to private Convex storage via a
-    // server-issued upload URL before this mutation runs).
-    stampStorageId: v.id("_storage"),
+    // server-issued upload URL before this mutation runs). Optional for the
+    // new application form (which has no stamp field) but validated whenever
+    // provided.
+    stampStorageId: v.optional(v.id("_storage")),
     geo: v.object({
       latitude: v.number(),
       longitude: v.number(),
@@ -310,12 +411,40 @@ export const create = mutation({
     const me = await requireProfile(ctx);
     requirePermission(me, "create_client");
 
+    const now = Date.now();
     const name = requiredString(args.name, "name", 80);
-    const village = requiredString(args.village, "village", 80);
-    const occupation = requiredString(args.occupation, "occupation", 80);
     const mobile = mobileNumber(args.mobile);
-    const age = intInRange(args.age, "age", 18, 100);
     const gender = oneOf(args.gender, ["MALE", "FEMALE", "OTHER"], "gender");
+
+    // Age is re-derived from the date of birth whenever provided — a direct
+    // backend call can never smuggle in an age inconsistent with the DOB.
+    let age = intInRange(args.age, "age", 18, 100);
+    let dob: number | undefined;
+    if (args.dob !== undefined) {
+      if (
+        !Number.isFinite(args.dob) ||
+        args.dob > now ||
+        args.dob < now - 100 * 366 * 24 * 3_600_000
+      ) {
+        throw new AppError("Invalid date of birth.");
+      }
+      dob = args.dob;
+      age = intInRange(ageFromDob(dob, now), "age", 18, 100);
+    }
+
+    // Permanent address is mandatory for a new application. The legacy
+    // `village` column (search + display) is derived from its first line
+    // when the form does not collect one explicitly — legacy rows and all
+    // downstream display logic keep working unchanged.
+    const address = optionalString(args.address, "address", 300);
+    const village =
+      optionalString(args.village, "village", 80) ??
+      address?.split(/[,\n]/)[0]?.trim().slice(0, 80) ??
+      "";
+    if (!village) {
+      throw new AppError("Permanent address is required.");
+    }
+    const occupation = requiredString(args.occupation, "occupation", 80);
 
     // KYC — Aadhaar is mandatory for every NEW client (legacy rows are
     // untouched; this only guards creation). Enforced here as well as in the
@@ -329,8 +458,206 @@ export const create = mutation({
     if (kycDocType === "AADHAAR" && !/^\d{12}$/.test(kycDocRef)) {
       throw new AppError("Aadhaar must be exactly 12 digits.");
     }
+    const panNumber = optionalString(args.panNumber, "panNumber", 10)?.toUpperCase();
+    if (panNumber && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(panNumber)) {
+      throw new AppError("PAN number must look like ABCDE1234F.");
+    }
+    const voterId = optionalString(args.voterId, "voterId", 20)?.toUpperCase();
+    if (voterId && !/^[A-Z]{3}[0-9]{7}$/.test(voterId)) {
+      throw new AppError("Voter ID must look like ABC1234567.");
+    }
+    const kycDocuments = (args.kycDocuments ?? [])
+      .slice(0, 4)
+      .map((d) => oneOf(d, ["AADHAAR", "PAN", "VOTER_ID", "OTHER"], "kycDocuments"));
     const monthlyIncome = money(args.monthlyIncome, "monthlyIncome", { allowZero: true });
     const householdIncome = money(args.householdIncome, "householdIncome", { allowZero: true });
+    const otherIncome =
+      args.otherIncome !== undefined
+        ? money(args.otherIncome, "otherIncome", { allowZero: true })
+        : undefined;
+    const existingLoanEmi =
+      args.existingLoanEmi !== undefined
+        ? money(args.existingLoanEmi, "existingLoanEmi", { allowZero: true })
+        : undefined;
+    const typeOfBusiness =
+      optionalString(args.typeOfBusiness, "typeOfBusiness", 120) ?? occupation;
+    const businessAddress = optionalString(args.businessAddress, "businessAddress", 300);
+
+    // Family details — structured rows from the application table. Fully
+    // empty rows are ignored; at least one complete row is required by the
+    // existing "family members ≥ 1" business rule.
+    const familyRows = (args.familyRows ?? [])
+      .slice(0, 20)
+      .map((r) => ({
+        name: requiredString(r.name, "family member name", 80),
+        age:
+          r.age !== undefined
+            ? intInRange(r.age, "family member age", 1, 100)
+            : undefined,
+        relationship: requiredString(r.relationship, "family member relationship", 40),
+        occupation: optionalString(r.occupation, "family member occupation", 120),
+      }));
+    if (familyRows.length === 0) {
+      throw new AppError("Add at least one family member to the application.");
+    }
+
+    // Optional co-applicant — every provided value is validated; nothing is
+    // auto-filled and the whole block is dropped when absent.
+    let coApplicant: Doc<"clients">["coApplicant"];
+    if (args.coApplicant) {
+      const co = args.coApplicant;
+      const coAadhaar = optionalString(co.aadhaarNumber, "coApplicant.aadhaarNumber", 12);
+      if (coAadhaar && !/^\d{12}$/.test(coAadhaar)) {
+        throw new AppError("Co-applicant Aadhaar must be exactly 12 digits.");
+      }
+      const coPan = optionalString(co.panNumber, "coApplicant.panNumber", 10)?.toUpperCase();
+      if (coPan && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(coPan)) {
+        throw new AppError("Co-applicant PAN number must look like ABCDE1234F.");
+      }
+      const coVoter = optionalString(co.voterId, "coApplicant.voterId", 20)?.toUpperCase();
+      if (coVoter && !/^[A-Z]{3}[0-9]{7}$/.test(coVoter)) {
+        throw new AppError("Co-applicant Voter ID must look like ABC1234567.");
+      }
+      let coAge: number | undefined;
+      let coDob: number | undefined;
+      if (co.dob !== undefined) {
+        if (
+          !Number.isFinite(co.dob) ||
+          co.dob > now ||
+          co.dob < now - 100 * 366 * 24 * 3_600_000
+        ) {
+          throw new AppError("Invalid co-applicant date of birth.");
+        }
+        coDob = co.dob;
+        coAge = intInRange(ageFromDob(coDob, now), "coApplicant.age", 18, 100);
+      } else if (co.age !== undefined) {
+        coAge = intInRange(co.age, "coApplicant.age", 18, 100);
+      }
+      coApplicant = {
+        name: requiredString(co.name, "coApplicant.name", 80),
+        fatherName: optionalString(co.fatherName, "coApplicant.fatherName", 80),
+        relationship: requiredString(co.relationship, "coApplicant.relationship", 40),
+        dob: coDob,
+        age: coAge,
+        gender: co.gender
+          ? oneOf(co.gender, ["MALE", "FEMALE", "OTHER"], "coApplicant.gender")
+          : undefined,
+        mobile: co.mobile ? mobileNumber(co.mobile, "coApplicant.mobile") : undefined,
+        address: optionalString(co.address, "coApplicant.address", 300),
+        aadhaarNumber: coAadhaar,
+        panNumber: coPan,
+        voterId: coVoter,
+        kycDocuments: co.kycDocuments
+          ?.slice(0, 4)
+          .map((d) => oneOf(d, ["AADHAAR", "PAN", "VOTER_ID", "OTHER"], "coApplicant.kycDocuments")),
+        photoStorageId: co.photoStorageId,
+      };
+    }
+
+    // Loan request — recorded on the application only. No loan, approval or
+    // journal entry is created here; that stays in the loan workflow.
+    let loanRequest: Doc<"clients">["loanRequest"];
+    if (args.loanRequest) {
+      const lr = args.loanRequest;
+      loanRequest = {
+        amountRequested: money(lr.amountRequested, "loanRequest.amountRequested"),
+        purpose: oneOf(lr.purpose, LOAN_PURPOSES, "loanRequest.purpose"),
+        tenureMonths: intInRange(lr.tenureMonths, "loanRequest.tenureMonths", 1, 120),
+        repaymentFrequency: oneOf(
+          lr.repaymentFrequency,
+          FREQUENCIES,
+          "loanRequest.repaymentFrequency",
+        ),
+        estimatedInstallment:
+          lr.estimatedInstallment !== undefined
+            ? money(lr.estimatedInstallment, "loanRequest.estimatedInstallment", {
+                allowZero: true,
+              })
+            : undefined,
+      };
+    }
+
+    let bankAccount: Doc<"clients">["bankAccount"];
+    if (args.bankAccount) {
+      const b = args.bankAccount;
+      const accountNumber = requiredString(
+        b.accountNumber,
+        "bankAccount.accountNumber",
+        24,
+      ).replace(/\s/g, "");
+      if (!/^\d{6,20}$/.test(accountNumber)) {
+        throw new AppError("Bank account number must be 6-20 digits.");
+      }
+      const ifscCode = requiredString(b.ifscCode, "bankAccount.ifscCode", 11).toUpperCase();
+      if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifscCode)) {
+        throw new AppError("Invalid IFSC code — expected e.g. SBIN0001234.");
+      }
+      bankAccount = {
+        accountHolderName: requiredString(
+          b.accountHolderName,
+          "bankAccount.accountHolderName",
+          80,
+        ),
+        bankName: requiredString(b.bankName, "bankAccount.bankName", 80),
+        branch: requiredString(b.branch, "bankAccount.branch", 80),
+        accountNumber,
+        ifscCode,
+      };
+    }
+
+    let nominee: Doc<"clients">["nominee"];
+    if (args.nominee) {
+      nominee = {
+        name: requiredString(args.nominee.name, "nominee.name", 80),
+        relationship: requiredString(args.nominee.relationship, "nominee.relationship", 40),
+        age: intInRange(args.nominee.age, "nominee.age", 1, 120),
+        mobile: args.nominee.mobile
+          ? mobileNumber(args.nominee.mobile, "nominee.mobile")
+          : undefined,
+        address: optionalString(args.nominee.address, "nominee.address", 300),
+      };
+    }
+
+    // The declaration must be accepted; the timestamp stored is the
+    // server's receipt time — tamper-proof.
+    if (!args.declarationAccepted) {
+      throw new AppError(
+        "The declaration must be accepted before the application can be submitted.",
+      );
+    }
+
+    // FOR OFFICE USE ONLY: honored only when the creator is an authorized
+    // role — a field officer's submission can never mark a client verified,
+    // recommended or approved.
+    let officeUse: Doc<"clients">["officeUse"];
+    if (
+      args.officeUse &&
+      (me.role === "SUPER_ADMIN" || me.role === "BRANCH_MANAGER")
+    ) {
+      const o = args.officeUse;
+      officeUse = {
+        fieldOfficerName: optionalString(o.fieldOfficerName, "officeUse.fieldOfficerName", 80),
+        customerVerification:
+          o.customerVerification !== undefined
+            ? oneOf(o.customerVerification, OFFICE_VERIFICATION, "officeUse.customerVerification")
+            : undefined,
+        kycVerification:
+          o.kycVerification !== undefined
+            ? oneOf(o.kycVerification, OFFICE_KYC, "officeUse.kycVerification")
+            : undefined,
+        creditAssessment:
+          o.creditAssessment !== undefined
+            ? oneOf(o.creditAssessment, OFFICE_CREDIT, "officeUse.creditAssessment")
+            : undefined,
+        approvedLoanAmount:
+          o.approvedLoanAmount !== undefined
+            ? money(o.approvedLoanAmount, "officeUse.approvedLoanAmount", { allowZero: true })
+            : undefined,
+        remarks: optionalString(o.remarks, "officeUse.remarks", 500),
+        updatedAt: now,
+        updatedBy: me._id,
+      };
+    }
 
     let branchId = me.branchId;
     if (!branchId) {
@@ -372,24 +699,39 @@ export const create = mutation({
     }, 0);
     const code = `C-${String(maxCode + 1).padStart(6, "0")}`;
 
-    const now = Date.now();
     const clientId = await ctx.db.insert("clients", {
       code,
       name,
       fatherName: optionalString(args.fatherName, "fatherName", 80),
+      husbandName: optionalString(args.husbandName, "husbandName", 80),
+      fatherAddress: optionalString(args.fatherAddress, "fatherAddress", 300),
+      dob,
       age,
       gender,
       mobile,
       altMobile: args.altMobile ? mobileNumber(args.altMobile, "altMobile") : undefined,
-      address: optionalString(args.address, "address", 200),
+      address,
       village,
       district: optionalString(args.district, "district", 80) ?? "—",
       state: optionalString(args.state, "state", 80) ?? "Uttar Pradesh",
       pin: optionalString(args.pin, "pin", 8) ?? "000000",
       occupation,
+      typeOfBusiness,
+      businessAddress,
       monthlyIncome,
       householdIncome: householdIncome || monthlyIncome,
-      familyMembers: intInRange(args.familyMembers, "familyMembers", 1, 30),
+      otherIncome,
+      existingLoanEmi,
+      familyMembers: familyRows.length,
+      coApplicant,
+      loanRequest,
+      bankAccount,
+      nominee,
+      declarationAcceptedAt: now,
+      officeUse,
+      panNumber,
+      voterId,
+      kycDocuments: kycDocuments.length > 0 ? kycDocuments : undefined,
       branchId,
       assignedTo: assignee,
       createdBy: me._id,
@@ -410,6 +752,18 @@ export const create = mutation({
       createdBy: me._id,
       createdAt: now,
     });
+
+    // Structured family rows — one record per member, linked to the client.
+    for (const row of familyRows) {
+      await ctx.db.insert("clientFamilyMembers", {
+        clientId,
+        name: row.name,
+        age: row.age,
+        relationship: row.relationship,
+        occupation: row.occupation,
+        createdAt: now,
+      });
+    }
 
     if (args.documentName) {
       await ctx.db.insert("clientDocuments", {
@@ -470,31 +824,33 @@ export const create = mutation({
       );
     }
 
-    // ---- Mandatory stamp document -----------------------------------------
+    // ---- Optional stamp document (validated whenever provided) -----------
     const MAX_STAMP_BYTES = 5 * 1024 * 1024;
-    const stampMeta = await ctx.db.system.get("_storage", args.stampStorageId);
-    if (!stampMeta) {
-      throw new AppError(
-        "Uploaded stamp document not found — upload it again.",
-      );
-    }
-    const stampTypes = [
-      "image/jpeg",
-      "image/png",
-      "image/webp",
-      "application/pdf",
-    ];
-    if (!stampMeta.contentType || !stampTypes.includes(stampMeta.contentType)) {
-      await ctx.storage.delete(args.stampStorageId);
-      throw new AppError(
-        "Stamp must be a JPEG, PNG, WebP or PDF file.",
-      );
-    }
-    if (stampMeta.size <= 0 || stampMeta.size > MAX_STAMP_BYTES) {
-      await ctx.storage.delete(args.stampStorageId);
-      throw new AppError(
-        `Stamp must be between 1 byte and ${Math.round(MAX_STAMP_BYTES / 1024 / 1024)} MB.`,
-      );
+    if (args.stampStorageId) {
+      const stampMeta = await ctx.db.system.get("_storage", args.stampStorageId);
+      if (!stampMeta) {
+        throw new AppError(
+          "Uploaded stamp document not found — upload it again.",
+        );
+      }
+      const stampTypes = [
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "application/pdf",
+      ];
+      if (!stampMeta.contentType || !stampTypes.includes(stampMeta.contentType)) {
+        await ctx.storage.delete(args.stampStorageId);
+        throw new AppError(
+          "Stamp must be a JPEG, PNG, WebP or PDF file.",
+        );
+      }
+      if (stampMeta.size <= 0 || stampMeta.size > MAX_STAMP_BYTES) {
+        await ctx.storage.delete(args.stampStorageId);
+        throw new AppError(
+          `Stamp must be between 1 byte and ${Math.round(MAX_STAMP_BYTES / 1024 / 1024)} MB.`,
+        );
+      }
     }
 
     const fileName = `client-photo-${code}.jpg`;
@@ -517,20 +873,53 @@ export const create = mutation({
       status: "GEO_TAGGED",
     });
 
-    const stampFileName = `client-stamp-${code}.${
-      stampMeta.contentType === "application/pdf" ? "pdf" : "jpg"
-    }`;
-    await ctx.db.insert("clientDocuments", {
-      clientId,
-      type: "STAMP",
-      fileName: stampFileName,
-      status: "UPLOADED",
-      uploadedBy: me._id,
-      storageId: args.stampStorageId,
-      sizeBytes: stampMeta.size,
-      mimeType: stampMeta.contentType,
-      createdAt: now,
-    });
+    let stampFileName: string | undefined;
+    if (args.stampStorageId) {
+      const stampMeta = await ctx.db.system.get("_storage", args.stampStorageId);
+      stampFileName = `client-stamp-${code}.${
+        stampMeta?.contentType === "application/pdf" ? "pdf" : "jpg"
+      }`;
+      await ctx.db.insert("clientDocuments", {
+        clientId,
+        type: "STAMP",
+        fileName: stampFileName,
+        status: "UPLOADED",
+        uploadedBy: me._id,
+        storageId: args.stampStorageId,
+        sizeBytes: stampMeta?.size ?? 0,
+        mimeType: stampMeta?.contentType,
+        createdAt: now,
+      });
+    }
+
+    // ---- Optional co-applicant photo (real upload, never a file name) ----
+    if (args.coApplicant?.photoStorageId) {
+      const coMeta = await ctx.db.system.get("_storage", args.coApplicant.photoStorageId);
+      const coTypes = ["image/jpeg", "image/png", "image/webp"];
+      if (
+        !coMeta ||
+        !coMeta.contentType ||
+        !coTypes.includes(coMeta.contentType) ||
+        coMeta.size <= 0 ||
+        coMeta.size > MAX_CLIENT_PHOTO_BYTES
+      ) {
+        if (coMeta) await ctx.storage.delete(args.coApplicant.photoStorageId);
+        throw new AppError(
+          "Co-applicant photo must be a JPEG, PNG or WebP image under 5 MB — capture it again.",
+        );
+      }
+      await ctx.db.insert("clientDocuments", {
+        clientId,
+        type: "OTHER",
+        fileName: `co-applicant-photo-${code}.jpg`,
+        status: "UPLOADED",
+        uploadedBy: me._id,
+        storageId: args.coApplicant.photoStorageId,
+        sizeBytes: coMeta.size,
+        mimeType: coMeta.contentType,
+        createdAt: now,
+      });
+    }
 
     await logAudit(ctx, {
       actorId: me._id,
@@ -570,6 +959,12 @@ export const create = mutation({
         // Masked in the audit trail — full Aadhaar stays on the client record.
         kycDocRefTail: `xxxx${kycDocRef.slice(-4)}`,
         stampFileName,
+        familyMembers: familyRows.length,
+        hasCoApplicant: Boolean(coApplicant),
+        hasLoanRequest: Boolean(loanRequest),
+        hasBankAccount: Boolean(bankAccount),
+        hasNominee: Boolean(nominee),
+        declarationAcceptedAt: now,
       },
       referenceId: code,
       branchId,
@@ -753,6 +1148,77 @@ export const verifyKyc = mutation({
       after: { kycStatus: next, note },
       referenceId: client.code,
       branchId: client.branchId,
+    });
+    return { ok: true };
+  },
+});
+
+/**
+ * FOR OFFICE USE ONLY — verification, credit assessment, approved amount and
+ * branch-manager remarks. Authorized roles only (SUPER_ADMIN / BRANCH_MANAGER);
+ * every change is audit-logged with the actor's name. Never called
+ * automatically: a client is never marked verified/approved by submission.
+ */
+export const updateOfficeUse = mutation({
+  args: {
+    clientId: v.id("clients"),
+    fieldOfficerName: v.optional(v.string()),
+    customerVerification: v.optional(v.string()),
+    kycVerification: v.optional(v.string()),
+    creditAssessment: v.optional(v.string()),
+    approvedLoanAmount: v.optional(v.number()),
+    remarks: v.optional(v.string()),
+    device: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx);
+    requireRole(me, "SUPER_ADMIN", "BRANCH_MANAGER");
+    const client = await ctx.db.get(args.clientId);
+    if (!client) throw new AppError("Client not found.");
+    const prev = client.officeUse;
+
+    const next: NonNullable<Doc<"clients">["officeUse"]> = {
+      fieldOfficerName:
+        args.fieldOfficerName !== undefined
+          ? optionalString(args.fieldOfficerName, "fieldOfficerName", 80)
+          : prev?.fieldOfficerName,
+      customerVerification:
+        args.customerVerification !== undefined
+          ? oneOf(args.customerVerification, OFFICE_VERIFICATION, "customerVerification")
+          : prev?.customerVerification,
+      kycVerification:
+        args.kycVerification !== undefined
+          ? oneOf(args.kycVerification, OFFICE_KYC, "kycVerification")
+          : prev?.kycVerification,
+      creditAssessment:
+        args.creditAssessment !== undefined
+          ? oneOf(args.creditAssessment, OFFICE_CREDIT, "creditAssessment")
+          : prev?.creditAssessment,
+      approvedLoanAmount:
+        args.approvedLoanAmount !== undefined
+          ? money(args.approvedLoanAmount, "approvedLoanAmount", { allowZero: true })
+          : prev?.approvedLoanAmount,
+      remarks:
+        args.remarks !== undefined
+          ? optionalString(args.remarks, "remarks", 500)
+          : prev?.remarks,
+      updatedAt: Date.now(),
+      updatedBy: me._id,
+    };
+
+    await ctx.db.patch(args.clientId, { officeUse: next });
+    await logAudit(ctx, {
+      actorId: me._id,
+      actorName: me.name,
+      role: me.role,
+      action: "CLIENT_OFFICE_USE_UPDATED",
+      entity: "clients",
+      entityId: client.code,
+      before: { officeUse: prev ?? null },
+      after: { officeUse: next },
+      referenceId: client.code,
+      branchId: client.branchId,
+      device: args.device,
     });
     return { ok: true };
   },

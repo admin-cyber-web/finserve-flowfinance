@@ -134,7 +134,12 @@ const schema = defineSchema(
       gender: v.string(), // MALE | FEMALE | OTHER
       mobile: v.string(),
       altMobile: v.optional(v.string()),
-      address: v.optional(v.string()),
+      address: v.optional(v.string()), // permanent address (full text)
+      fatherAddress: v.optional(v.string()),
+      husbandName: v.optional(v.string()),
+      panNumber: v.optional(v.string()),
+      voterId: v.optional(v.string()),
+      kycDocuments: v.optional(v.array(v.string())), // AADHAAR | PAN | VOTER_ID | OTHER
       village: v.string(),
       district: v.string(),
       state: v.string(),
@@ -142,7 +147,74 @@ const schema = defineSchema(
       occupation: v.string(),
       monthlyIncome: v.number(),
       householdIncome: v.number(),
-      familyMembers: v.number(),
+      familyMembers: v.number(), // count — rows live in clientFamilyMembers
+      typeOfBusiness: v.optional(v.string()),
+      businessAddress: v.optional(v.string()),
+      otherIncome: v.optional(v.number()),
+      existingLoanEmi: v.optional(v.number()),
+      // Optional co-applicant — validated when present, never auto-filled.
+      coApplicant: v.optional(
+        v.object({
+          name: v.string(),
+          fatherName: v.optional(v.string()),
+          relationship: v.string(),
+          dob: v.optional(v.number()),
+          age: v.optional(v.number()),
+          gender: v.optional(v.string()),
+          mobile: v.optional(v.string()),
+          address: v.optional(v.string()),
+          aadhaarNumber: v.optional(v.string()),
+          panNumber: v.optional(v.string()),
+          voterId: v.optional(v.string()),
+          kycDocuments: v.optional(v.array(v.string())),
+          photoStorageId: v.optional(v.id("_storage")),
+        }),
+      ),
+      // Loan request captured with the application — informational only.
+      // It never creates a loan, approval or financial transaction.
+      loanRequest: v.optional(
+        v.object({
+          amountRequested: v.number(),
+          purpose: v.string(), // BUSINESS | AGRICULTURE | EDUCATION | MEDICAL | HOUSEHOLD | OTHER
+          tenureMonths: v.number(),
+          repaymentFrequency: v.string(), // WEEKLY | FORTNIGHTLY | MONTHLY
+          estimatedInstallment: v.optional(v.number()),
+        }),
+      ),
+      bankAccount: v.optional(
+        v.object({
+          accountHolderName: v.string(),
+          bankName: v.string(),
+          branch: v.string(),
+          accountNumber: v.string(),
+          ifscCode: v.string(),
+        }),
+      ),
+      nominee: v.optional(
+        v.object({
+          name: v.string(),
+          relationship: v.string(),
+          age: v.number(),
+          mobile: v.optional(v.string()),
+          address: v.optional(v.string()),
+        }),
+      ),
+      declarationAcceptedAt: v.optional(v.number()),
+      // FOR OFFICE USE ONLY — written only by authorized roles
+      // (SUPER_ADMIN / BRANCH_MANAGER) via create (when authorized) or
+      // clients.updateOfficeUse. Never auto-set to verified/approved.
+      officeUse: v.optional(
+        v.object({
+          fieldOfficerName: v.optional(v.string()),
+          customerVerification: v.optional(v.string()), // VERIFIED | NOT_VERIFIED
+          kycVerification: v.optional(v.string()), // COMPLETE | INCOMPLETE
+          creditAssessment: v.optional(v.string()), // RECOMMENDED | NOT_RECOMMENDED
+          approvedLoanAmount: v.optional(v.number()),
+          remarks: v.optional(v.string()),
+          updatedAt: v.number(),
+          updatedBy: v.optional(v.id("profiles")),
+        }),
+      ),
       branchId: v.id("branches"),
       assignedTo: v.id("profiles"),
       createdBy: v.id("profiles"),
@@ -183,6 +255,17 @@ const schema = defineSchema(
       permissionStatus: v.optional(v.string()), // geolocation permission at capture
       device: v.optional(v.string()),
       status: v.string(), // GEO_TAGGED
+    }).index("by_client", ["clientId"]),
+
+    // Family members of an applicant, captured as structured rows on the
+    // client application (S.No. / name / age / relationship / occupation).
+    clientFamilyMembers: defineTable({
+      clientId: v.id("clients"),
+      name: v.string(),
+      age: v.optional(v.number()),
+      relationship: v.string(),
+      occupation: v.optional(v.string()),
+      createdAt: v.number(),
     }).index("by_client", ["clientId"]),
 
     clientStaffHistory: defineTable({

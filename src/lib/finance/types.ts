@@ -71,6 +71,31 @@ export type ScheduleStatus = (typeof SCHEDULE_STATUSES)[number];
 export const FREQUENCIES = ["WEEKLY", "FORTNIGHTLY", "MONTHLY"] as const;
 export type Frequency = (typeof FREQUENCIES)[number];
 
+/** Loan purpose declared on the client application (informational). */
+export const LOAN_PURPOSES = [
+  "BUSINESS",
+  "AGRICULTURE",
+  "EDUCATION",
+  "MEDICAL",
+  "HOUSEHOLD",
+  "OTHER",
+] as const;
+export type LoanPurpose = (typeof LOAN_PURPOSES)[number];
+
+export const LOAN_PURPOSE_LABELS: Record<LoanPurpose, string> = {
+  BUSINESS: "Business",
+  AGRICULTURE: "Agriculture",
+  EDUCATION: "Education",
+  MEDICAL: "Medical",
+  HOUSEHOLD: "Household",
+  OTHER: "Other",
+};
+
+/** "For office use only" vocabularies — never auto-set to a pass value. */
+export const OFFICE_VERIFICATION = ["VERIFIED", "NOT_VERIFIED"] as const;
+export const OFFICE_KYC = ["COMPLETE", "INCOMPLETE"] as const;
+export const OFFICE_CREDIT = ["RECOMMENDED", "NOT_RECOMMENDED"] as const;
+
 export const INTEREST_METHODS = ["FLAT", "REDUCING"] as const;
 export type InterestMethod = (typeof INTEREST_METHODS)[number];
 
