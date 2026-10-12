@@ -197,7 +197,7 @@ export default function ClientNew() {
             accuracyMeters: photo.geo.accuracyMeters,
             capturedAt: photo.geo.capturedAt,
             photoCapturedAt: photo.frameAt,
-            permissionStatus: photo.geo.permissionStatus,
+            permissionStatus: photo.geo.permissionStatus ?? "granted",
           },
           device: navigator.userAgent.slice(0, 60),
         }),

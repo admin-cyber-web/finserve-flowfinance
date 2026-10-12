@@ -81,6 +81,19 @@ export const GEO_ACQUIRE_WINDOW_MS = 40_000;
  * fix arriving shortly after the photo is equally valid.
  */
 export const GEO_FIX_FRAME_WINDOW_MS = 60_000;
+/**
+ * When a frozen frame is already waiting for a fresh fix (photo captured
+ * before an accurate fix landed), keep the acquisition window open longer so
+ * a valid reading that arrives at 40–80 s is still accepted instead of
+ * surfacing a misleading "best accuracy was … m" failure.
+ *
+ * Accuracy requirement itself is never relaxed — this only affects how long
+ * we wait for the device to produce an acceptable reading.
+ */
+export const GEO_ACQUIRE_EXTRA_MS = 40_000;
+/** Total patience while a frozen frame is awaiting a fresh GPS fix. */
+export const GEO_ACQUIRE_WINDOW_WITH_FROZEN_FRAME_MS =
+  GEO_ACQUIRE_WINDOW_MS + GEO_ACQUIRE_EXTRA_MS;
 
 export interface AcquiredFix {
   latitude: number;
@@ -136,6 +149,27 @@ export function acceptableFixAtCapture(
   const skew = frameAt - fix.capturedAt;
   if (skew > GEO_FIX_FRAME_WINDOW_MS) return null; // fix too old for this frame
   if (skew < -GEO_FIX_FRAME_WINDOW_MS) return null; // fix absurdly ahead (clock skew)
+  return fix;
+}
+
+/**
+ * Like `acceptableFixAtCapture`, but permits a fix whose timestamp is future-
+ * relative to the frame instant by up to `GEO_FIX_FUTURE_TOLERANCE_MS`. This
+ * is used only for the frozen-frame-while-waiting path, where the phone's
+ * clock may drift a little relative to the capture instant and we still want
+ * to accept a genuinely fresh fix rather than failing the whole flow.
+ */
+export function acceptableFixAtCaptureWithFutureTolerance(
+  fix: AcquiredFix | null,
+  frameAt: number,
+  toleranceMs: number = 40_000,
+): AcquiredFix | null {
+  if (!fix) return null;
+  if (!isPlausibleFix(fix)) return null;
+  if (fix.accuracyMeters > MAX_GEO_ACCURACY_M) return null;
+  const skew = frameAt - fix.capturedAt;
+  if (skew > GEO_FIX_FRAME_WINDOW_MS) return null; // fix too old for this frame
+  if (skew < -toleranceMs) return null; // fix too far ahead (clock drift)
   return fix;
 }
 

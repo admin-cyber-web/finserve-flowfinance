@@ -10,9 +10,11 @@ import {
 } from "lucide-react";
 import {
   GEO_ACQUIRE_WINDOW_MS,
+  GEO_ACQUIRE_WINDOW_WITH_FROZEN_FRAME_MS,
   GEO_TIMEOUT_MS,
   MAX_GEO_ACCURACY_M,
   acceptableFixAtCapture,
+  acceptableFixAtCaptureWithFutureTolerance,
   betterFix,
   geoStampLines,
   isPlausibleFix,
@@ -63,7 +65,8 @@ function drawStamped(
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext("2d")!;
-  ctx.drawImage(source, 0, 0, width, height);    const lines = geoStampLines(geo);
+  ctx.drawImage(source, 0, 0, width, height);
+  const lines = geoStampLines(geo);
   const pad = Math.round(width * 0.03);
   const lineHeight = Math.max(20, Math.round(width * 0.045));
   const boxHeight = lineHeight * lines.length + pad * 2;
@@ -161,14 +164,17 @@ export function ClientPhotoCapture({
         const previewUrl = URL.createObjectURL(blob);
         frameRef.current = null;
         frameAtRef.current = null;
-        bestRef.current = null;        setGeoError(null);
+        bestRef.current = null;
+        setGeoError(null);
         setGpsStatus(null);
         setGpsAccuracy(null);
+        setPhotoWaitingForFix(false);
         setFrozenPreview(null);
         setPhase("idle");
         onChange({ blob, previewUrl, geo, frameAt });
       } finally {
         finalizingRef.current = false;
+        setFrozenPreview(null);
       }
     },
     [onChange, stopWatch],
@@ -205,8 +211,8 @@ export function ClientPhotoCapture({
       // (e.g. 47 m) must never be rejected while waiting for "better".
       if (frameAtRef.current !== null) {
         const accepted =
-          acceptableFixAtCapture(candidate, frameAtRef.current) ??
-          acceptableFixAtCapture(bestRef.current, frameAtRef.current);
+          acceptableFixAtCaptureWithFutureTolerance(candidate, frameAtRef.current) ??
+          acceptableFixAtCaptureWithFutureTolerance(bestRef.current, frameAtRef.current);
         if (accepted) void finalize(accepted);
       }
     },
@@ -258,9 +264,11 @@ export function ClientPhotoCapture({
         // UNAVAILABLE / TIMEOUT: keep watching — a better reading may arrive.
       },
       { enableHighAccuracy: true, timeout: GEO_TIMEOUT_MS, maximumAge: 0 },
-    );
-    // Reset the live status readout the moment tracking starts so a previous
-    // frozen-frame "best N m" label cannot be shown again by a stale render.      setGpsStatus(null);
+    );    // Reset the live status readout the moment tracking starts so a previous
+    // frozen-frame "best N m" label cannot be shown again by a stale render.
+    // also a guard against the stale-while-tripping path that can leave a
+    // previously-frozen "best N m" caption rendered after camera close.
+    setGpsStatus(null);
     return true;
   }, [onPosition, stopWatch]);
 
@@ -336,6 +344,11 @@ export function ClientPhotoCapture({
     }
   }, [facing, startWatch, stopStream]);
 
+  // Keep a stable flag so the component never flips into "frozen frame
+  // waiting for fix" behaviour just because the live camera re-rendered.
+  // Only an actual photo capture sets this.
+  const [photoWaitingForFix, setPhotoWaitingForFix] = useState(false);
+
   const captureFrame = useCallback(async () => {
     const video = videoRef.current;
     if (!video || !video.videoWidth) {
@@ -356,18 +369,21 @@ export function ClientPhotoCapture({
     streamRef.current = null;
     setGeoError(null);
     setPhase("locating");
+    // Mark that we are now waiting on a fresh fix for an already-captured
+    // photo. This is the ONLY path that extends the GPS patience window.
+    setPhotoWaitingForFix(true);
     if (!startWatch()) {
       // No location services at all — surface the error, skip the wait.
       frameRef.current = null;
       frameAtRef.current = null;
+      setPhotoWaitingForFix(false);
       setFrozenPreview(null);
       setPhase("idle");
       return;
     }
     // A fresh accurate fix may already be in hand — accept immediately
-    // (a 47 m fix acquired while the camera was open must NOT be rejected).
-    if (bestRef.current) {
-      const accepted = acceptableFixAtCapture(bestRef.current, frameAtRef.current);
+    // (a 47 m fix acquired while the camera was open must NOT be rejected).      if (bestRef.current) {
+      const accepted = acceptableFixAtCaptureWithFutureTolerance(bestRef.current, frameAtRef.current);
       if (accepted) {
         await finalize(accepted);
         return;
@@ -381,8 +397,8 @@ export function ClientPhotoCapture({
       watchIdRef.current = null;
     }
     startWatch();
-    armDeadline();
-  }, [armDeadline, finalize, startWatch, stopStream]);
+    armDeadline(photoWaitingForFix ? GEO_ACQUIRE_WINDOW_WITH_FROZEN_FRAME_MS : GEO_ACQUIRE_WINDOW_MS);
+  }, [armDeadline, finalize, photoWaitingForFix, startWatch, stopStream]);
 
   const retryGps = useCallback(() => {
     setGeoError(null);
@@ -396,18 +412,17 @@ export function ClientPhotoCapture({
       }
       startWatch();
       if (bestRef.current && frameAtRef.current !== null) {
-        const accepted = acceptableFixAtCapture(bestRef.current, frameAtRef.current);
+        const accepted = acceptableFixAtCaptureWithFutureTolerance(bestRef.current, frameAtRef.current);
         if (accepted) {
           void finalize(accepted);
           return;
         }
-      }
-      armDeadline();
+      }        armDeadline(photoWaitingForFix ? GEO_ACQUIRE_WINDOW_WITH_FROZEN_FRAME_MS : GEO_ACQUIRE_WINDOW_MS);
     } else if (!frameRef.current) {
       // No photo frame yet — just begin/continue tracking in the background.
       startWatch();
     }
-  }, [armDeadline, finalize, startWatch]);
+  }, [armDeadline, finalize, photoWaitingForFix, startWatch]);
 
   const retake = useCallback(() => {
     if (value) URL.revokeObjectURL(value.previewUrl);
@@ -418,6 +433,7 @@ export function ClientPhotoCapture({
     setGeoError(null);
     setGpsStatus(null);
     setGpsAccuracy(null);
+    setPhotoWaitingForFix(false);
     setFrozenPreview(null);
     void startCamera();
   }, [onChange, startCamera, value]);
@@ -442,6 +458,7 @@ export function ClientPhotoCapture({
     setCameraError(null);
     setGpsStatus(null);
     setGpsAccuracy(null);
+    setPhotoWaitingForFix(false);
   }, [onChange, value]);
 
   const cancelFrozen = useCallback(() => {
@@ -451,6 +468,7 @@ export function ClientPhotoCapture({
     bestRef.current = null;
     setGpsStatus(null);
     setGpsAccuracy(null);
+    setPhotoWaitingForFix(false);
     setFrozenPreview(null);
     setGeoError(null);
     setPhase("idle");
@@ -519,7 +537,8 @@ export function ClientPhotoCapture({
             className="w-24 shrink-0 border-2 border-ink object-cover"
             src={frozenPreview}
           />
-          <div className="min-w-0 flex-1 space-y-1">            <span className="flex items-center gap-2 text-[11px] font-black uppercase">
+          <div className="min-w-0 flex-1 space-y-1">
+            <span className="flex items-center gap-2 text-[11px] font-black uppercase">
               <Loader2 className="size-3.5 animate-spin" /> Acquiring GPS…
               {gpsAccuracy !== null && (
                 <span className="font-mono normal-case text-muted-foreground">
@@ -588,7 +607,7 @@ export function ClientPhotoCapture({
               >
                 <span className="font-mono normal-case">
                   GPS {Math.round(gpsAccuracy)} m
-                  {gpsAccuracy <= MAX_GEO_ACCURACY_M ? " ✓" : " — waiting for better"}
+                  {gpsAccuracy <= MAX_GEO_ACCURACY_M ? " ✓" : " — improving…"}
                 </span>
               </span>
             )}
