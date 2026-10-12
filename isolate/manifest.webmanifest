@@ -1,11 +1,12 @@
 {
-  "name": "freebuff.com application",
-  "short_name": "freebuff.com",
-  "description": "freebuff.com application",
+  "name": "KIRAT MICRO CREDIT",
+  "short_name": "KIRAT",
+  "description": "KIRAT MICRO CREDIT — mobile-first microfinance banking for staff, wallets, loans and collections.",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
-  "background_color": "#ffffff",
-  "theme_color": "#000000",
+  "background_color": "#fff4e5",
+  "theme_color": "#a34400",
   "icons": [
     {
       "src": "/logo.svg",
