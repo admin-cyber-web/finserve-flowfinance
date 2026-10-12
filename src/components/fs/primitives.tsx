@@ -27,13 +27,16 @@ export function Logo({
   withWordmark?: boolean;
 }) {
   return (
-    <span className={cn("inline-flex items-center gap-2", className)}>
-      <span className="grid size-9 place-items-center border-2 border-ink bg-navy font-black text-gold shadow-hard-sm">
+    <span className={cn("inline-flex items-center gap-2.5", className)}>
+      <span className="grid size-9 place-items-center border-2 border-ink bg-gold font-black text-ink shadow-hard-sm">
         ₹
       </span>
       {withWordmark && (
-        <span className="text-lg font-black leading-none tracking-tight">
-          Fin<span className="text-royal">Serve</span>
+        <span className="leading-none tracking-tight">
+          <span className="block text-base font-black">KIRAT</span>
+          <span className="block text-[10px] font-black uppercase tracking-[0.22em]">
+            Micro Credit
+          </span>
         </span>
       )}
     </span>

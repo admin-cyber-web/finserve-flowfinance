@@ -13,7 +13,7 @@ import { effectivePermissions } from "../lib/finance/permissions";
 import { SUPER_ADMIN_EMAIL } from "./users";
 import { FS_ROLES, USER_STATUSES } from "../lib/finance/types";
 import { oneOf, requiredString, optionalString, money } from "../lib/finance/validate";
-import type { Doc, Id } from "./_generated/dataModel";
+import type { Doc } from "./_generated/dataModel";
 
 /** Current identity + workspace profile + effective permissions. */
 export const me = query({
@@ -45,7 +45,9 @@ export const me = query({
         status: profile.status,
         staffId: profile.staffId ?? null,
         image: profile.image ?? null,
-        branch: branch ? { _id: branch._id, name: branch.name } : null,
+        branch: branch
+          ? { _id: branch._id, name: branch.name, code: branch.code }
+          : null,
         joiningDate: profile.joiningDate,
         credentialSet: !!profile.credentialHash,
         mustChangePassword: !!profile.mustChangePassword,
@@ -77,7 +79,7 @@ export const linkByEmail = mutation({
     const email = actor.user.email;
     if (!email) return { ok: false, reason: "no-email" };
 
-    let profile = await ctx.db
+    const profile = await ctx.db
       .query("profiles")
       .withIndex("by_email", (q) => q.eq("email", email.toLowerCase()))
       .unique();

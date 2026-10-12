@@ -79,7 +79,7 @@ export default function Reports() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `finserve-report-${from}-to-${to}.csv`;
+    a.download = `kirat-report-${from}-to-${to}.csv`;
     a.click();
     URL.revokeObjectURL(url);
     toast.success("CSV downloaded");

@@ -3,7 +3,7 @@ import { MobileShell } from "@/app/MobileShell";
 import { Logo } from "@/components/fs/primitives";
 import { Button } from "@/components/ui/button";
 import { useProfile, useSeed } from "@/hooks/use-profile";
-import { Loader2, LogOut, TriangleAlert } from "lucide-react";
+import { Loader2, TriangleAlert } from "lucide-react";
 import { Navigate, Route, Routes } from "react-router";
 
 import AdminHome from "./dashboard/AdminHome";
@@ -69,9 +69,9 @@ function NoWorkspace() {
           No workspace linked
         </h1>
         <p className="mt-2 text-sm font-semibold text-muted-foreground">
-          {user?.email ?? user?.name ?? "This account"} isn't linked to a FinServe
-          workspace yet. Sign in with the email your administrator registered for
-          your account.
+          {user?.email ?? user?.name ?? "This account"} isn't linked to a KIRAT
+          MICRO CREDIT workspace yet. Sign in with the email your administrator
+          registered for your account.
         </p>
         <div className="mt-4 flex flex-col gap-2">
           <Button
@@ -96,15 +96,13 @@ export default function Dashboard() {
   const seedState = useSeed();
   const { profile, loading, signOut } = useProfile();
 
-  const booting =
-    loading || seedState === "idle" || seedState === "seeding" || (seedState !== "error" && profile === null && loading);
-
   if (loading || seedState === "idle" || seedState === "seeding") {
     return (
       <BootScreen
-        label={            seedState === "seeding" || seedState === "idle"
-              ? "Preparing workspace…"
-              : "Loading your workspace…"
+        label={
+          seedState === "seeding" || seedState === "idle"
+            ? "Preparing workspace…"
+            : "Loading your workspace…"
         }
       />
     );
@@ -113,7 +111,6 @@ export default function Dashboard() {
   if (!profile) {
     return <NoWorkspace />;
   }
-  void booting;
 
   const isField = profile.role === "FIELD_STAFF";
   const home =

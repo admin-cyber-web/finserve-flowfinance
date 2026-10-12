@@ -4,11 +4,14 @@ export default function NotFound() {
       <div className="w-full max-w-md border-2 border-ink bg-card p-6 text-center shadow-hard">
         <div className="mx-auto mb-4 w-fit">
           <span className="inline-flex items-center gap-2">
-            <span className="grid size-9 place-items-center border-2 border-ink bg-navy font-black text-gold shadow-hard-sm">
+            <span className="grid size-9 place-items-center border-2 border-ink bg-gold font-black text-ink shadow-hard-sm">
               ₹
             </span>
-            <span className="text-lg font-black leading-none tracking-tight">
-              Fin<span className="text-royal">Serve</span>
+            <span className="leading-none tracking-tight">
+              <span className="block text-base font-black">KIRAT</span>
+              <span className="block text-[10px] font-black uppercase tracking-[0.22em]">
+                Micro Credit
+              </span>
             </span>
           </span>
         </div>
@@ -16,7 +19,7 @@ export default function NotFound() {
           Page not found
         </h1>
         <p className="mb-5 text-sm font-semibold text-muted-foreground">
-          This page does not exist in FinServe.
+          This page does not exist in KIRAT MICRO CREDIT.
         </p>
         <div className="flex flex-col gap-3">
           <button

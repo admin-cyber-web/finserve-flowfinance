@@ -50,7 +50,7 @@ export default function Receipt() {
   const { receipt, client, loan, staff, branch, nextDue, overdueAmount } = data;
 
   const share = async () => {
-    const text = `FinServe receipt ${receipt.number} — ₹${receipt.amount.toLocaleString("en-IN")} (${receipt.mode}) from ${client?.name ?? "client"} on ${formatDate(receipt.createdAt)}. Outstanding after payment: ₹${receipt.outstandingAfter.toLocaleString("en-IN")}.`;
+    const text = `KIRAT MICRO CREDIT receipt ${receipt.number} — ₹${receipt.amount.toLocaleString("en-IN")} (${receipt.mode}) from ${client?.name ?? "client"} on ${formatDate(receipt.createdAt)}. Outstanding after payment: ₹${receipt.outstandingAfter.toLocaleString("en-IN")}.`;
     try {
       if (navigator.share) await navigator.share({ text });
       else await navigator.clipboard.writeText(text);
@@ -74,10 +74,10 @@ export default function Receipt() {
         <div className="flex items-center justify-between border-b-2 border-ink bg-navy px-4 py-3 text-paper">
           <div>
             <div className="text-lg font-black leading-none">
-              Fin<span className="text-gold">Serve</span>
+              KIRAT
             </div>
-            <div className="mt-0.5 text-[9px] font-black uppercase tracking-[0.2em] text-paper/60">
-              Empowering Growth Together
+            <div className="mt-0.5 text-[9px] font-black uppercase tracking-[0.2em] text-paper/70">
+              Micro Credit
             </div>
           </div>
           <div className="text-right">

@@ -27,10 +27,33 @@ import {
   Users,
   X,
 } from "lucide-react";
+
+/** Wordmark for the deep-saffron navigation surfaces. */
+function BrandWordmark({ className }: { className?: string }) {
+  return (
+    <span className={className}>
+      <span className="block text-base font-black leading-none tracking-tight text-paper">
+        KIRAT
+      </span>
+      <span className="block text-[10px] font-black uppercase tracking-[0.22em] text-paper/70">
+        Micro Credit
+      </span>
+    </span>
+  );
+}
 import { useEffect, useState, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { ChevronDown, User } from "lucide-react";
 import type { Permission } from "@/lib/finance/permissions";
 
 interface NavItem {
@@ -167,19 +190,14 @@ export function AdminShell({ children }: { children: ReactNode }) {
           ? "Staff 360°"
           : location.pathname.startsWith("/dashboard/receipts/")
             ? "Receipt"
-            : "FinServe");
+            : "KIRAT MICRO CREDIT");
 
   return (
     <div className="min-h-screen bg-paper">
       {/* Desktop sidebar */}
       <aside className="fixed inset-y-0 left-0 z-40 hidden w-64 flex-col border-r-2 border-ink bg-navy lg:flex">
         <div className="border-b-2 border-paper/20 px-4 py-4">
-          <div className="text-lg font-black tracking-tight text-paper">
-            Fin<span className="text-gold">Serve</span>
-          </div>
-          <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-paper/60">
-            Empowering Growth Together
-          </div>
+          <BrandWordmark className="block" />
         </div>
         <div className="flex-1 overflow-y-auto p-3">
           <NavList
@@ -206,7 +224,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
             variant="destructive"
             size="sm"
             className="w-full"
-            onClick={() => void signOut().then(() => navigate("/"))}
+            onClick={() => void signOut().then(() => navigate("/auth"))}
           >
             <LogOut className="size-4" /> Sign out
           </Button>
@@ -221,9 +239,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
         >
           <SheetTitle className="sr-only">Navigation</SheetTitle>
           <div className="flex items-center justify-between border-b-2 border-paper/20 px-4 py-4">
-            <span className="text-lg font-black">
-              Fin<span className="text-gold">Serve</span>
-            </span>
+            <BrandWordmark className="block" />
             <button onClick={() => setDrawerOpen(false)} aria-label="Close">
               <X className="size-5" />
             </button>
@@ -235,14 +251,14 @@ export function AdminShell({ children }: { children: ReactNode }) {
               allowed={allowed}
               approvalsBadge={pending?.length ?? 0}
             />
-            <Button
-              variant="destructive"
-              size="sm"
-              className="mt-4 w-full"
-              onClick={() => void signOut().then(() => navigate("/"))}
-            >
-              <LogOut className="size-4" /> Sign out
-            </Button>
+          <Button
+            variant="destructive"
+            size="sm"
+            className="mt-4 w-full"
+            onClick={() => void signOut().then(() => navigate("/auth"))}
+          >
+            <LogOut className="size-4" /> Sign out
+          </Button>
           </div>
         </SheetContent>
       </Sheet>
@@ -285,9 +301,66 @@ export function AdminShell({ children }: { children: ReactNode }) {
               </span>
             )}
           </button>
-          <span className="hidden size-10 place-items-center border-2 border-ink bg-navy text-xs font-black text-gold sm:grid">
-            {initials(profile?.name)}
-          </span>
+          {/* Account dropdown — profile info, account links and logout live
+              here; no separate always-visible logout button in the header. */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                className="flex items-center gap-2 border-2 border-ink bg-white px-2 py-1.5 shadow-hard-sm active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
+                aria-label="Account menu"
+              >
+                <span className="grid size-8 shrink-0 place-items-center border-2 border-ink bg-gold text-xs font-black text-ink">
+                  {initials(profile?.name)}
+                </span>
+                <span className="hidden min-w-0 text-left sm:block">
+                  <span className="block max-w-[160px] truncate text-xs font-black">
+                    {profile?.name}
+                  </span>
+                  <span className="block max-w-[160px] truncate font-mono text-[10px] font-bold uppercase text-muted-foreground">
+                    {profile?.staffId}
+                    {profile?.branch?.code ? ` · ${profile.branch.code}` : ""}
+                  </span>
+                </span>
+                <ChevronDown className="size-4 shrink-0" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="end"
+              className="w-64 border-2 border-ink bg-card shadow-hard"
+            >
+              <DropdownMenuLabel className="px-3 py-2.5">
+                <p className="truncate text-sm font-black">{profile?.name}</p>
+                <p className="truncate font-mono text-[10px] font-bold uppercase text-muted-foreground">
+                  {profile?.staffId}
+                </p>
+                <p className="truncate text-[11px] font-semibold text-muted-foreground">
+                  {profile?.branch?.name ?? "Organization-wide"} ·{" "}
+                  {profile?.role?.replace("_", " ").toLowerCase()}
+                </p>
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className="cursor-pointer text-xs font-black uppercase"
+                onSelect={() => navigate("/dashboard/profile")}
+              >
+                <User className="size-4" /> My profile
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="cursor-pointer text-xs font-black uppercase"
+                onSelect={() => navigate("/dashboard/transactions")}
+              >
+                <Banknote className="size-4" /> Transactions
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                variant="destructive"
+                className="cursor-pointer text-xs font-black uppercase"
+                onSelect={() => void signOut().then(() => navigate("/auth"))}
+              >
+                <LogOut className="size-4" /> Logout
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </header>
 
         <main className="mx-auto max-w-[1360px] px-3 py-4 lg:px-6 lg:py-6">

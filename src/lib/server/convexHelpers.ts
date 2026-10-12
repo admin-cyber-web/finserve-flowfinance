@@ -62,7 +62,7 @@ export async function requireProfile(
 ): Promise<Doc<"profiles">> {
   const actor = await requireActor(ctx);
   if (!actor.profile) {
-    throw new AppError("No FinServe workspace is linked to this sign-in.");
+    throw new AppError("No KIRAT MICRO CREDIT workspace is linked to this sign-in.");
   }
   const profile = actor.profile;
   if (!opts.allowInactive && profile.status !== "ACTIVE") {

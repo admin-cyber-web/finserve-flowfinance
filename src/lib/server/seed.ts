@@ -68,14 +68,14 @@ export async function seedOrg(ctx: Mtx): Promise<{ skipped: boolean }> {
 
   /* Staff profiles */
   const profileDefs = [
-    { key: "admin", name: "Aarti Mishra", staffId: "SA-10001", role: "SUPER_ADMIN", email: "admin@finserve.in", mobile: "9811000001", branch: "LKO", persona: "admin", status: "ACTIVE", twofa: true },
-    { key: "bm", name: "Vikram Singh", staffId: "BM-20004", role: "BRANCH_MANAGER", email: "bm@finserve.in", mobile: "9811000002", branch: "LKO", persona: "bm", status: "ACTIVE" },
-    { key: "acct", name: "Deepa Rao", staffId: "AC-30007", role: "ACCOUNTANT", email: "accounts@finserve.in", mobile: "9811000003", branch: "LKO", persona: "accountant", status: "ACTIVE" },
-    { key: "rahul", name: "Rahul Kumar", staffId: "ST10025", role: "FIELD_STAFF", email: "rahul@finserve.in", mobile: "9811000004", branch: "LKO", persona: "staff", status: "ACTIVE" },
-    { key: "amit", name: "Amit Verma", staffId: "ST10031", role: "FIELD_STAFF", email: "amit@finserve.in", mobile: "9811000005", branch: "LKO", status: "ACTIVE" },
-    { key: "suresh", name: "Suresh Yadav", staffId: "ST10042", role: "FIELD_STAFF", email: "suresh@finserve.in", mobile: "9811000006", branch: "LKO", status: "ACTIVE" },
-    { key: "priya", name: "Priya Nair", staffId: "ST10058", role: "FIELD_STAFF", email: "priya@finserve.in", mobile: "9811000007", branch: "KNP", status: "ACTIVE" },
-    { key: "ravi", name: "Ravi Kushwaha", staffId: "ST10061", role: "FIELD_STAFF", email: "ravi@finserve.in", mobile: "9811000008", branch: "LKO", status: "BLOCKED" },
+    { key: "admin", name: "Aarti Mishra", staffId: "SA-10001", role: "SUPER_ADMIN", email: "admin@kiratmicrocredit.in", mobile: "9811000001", branch: "LKO", persona: "admin", status: "ACTIVE", twofa: true },
+    { key: "bm", name: "Vikram Singh", staffId: "BM-20004", role: "BRANCH_MANAGER", email: "bm@kiratmicrocredit.in", mobile: "9811000002", branch: "LKO", persona: "bm", status: "ACTIVE" },
+    { key: "acct", name: "Deepa Rao", staffId: "AC-30007", role: "ACCOUNTANT", email: "accounts@kiratmicrocredit.in", mobile: "9811000003", branch: "LKO", persona: "accountant", status: "ACTIVE" },
+    { key: "rahul", name: "Rahul Kumar", staffId: "ST10025", role: "FIELD_STAFF", email: "rahul@kiratmicrocredit.in", mobile: "9811000004", branch: "LKO", persona: "staff", status: "ACTIVE" },
+    { key: "amit", name: "Amit Verma", staffId: "ST10031", role: "FIELD_STAFF", email: "amit@kiratmicrocredit.in", mobile: "9811000005", branch: "LKO", status: "ACTIVE" },
+    { key: "suresh", name: "Suresh Yadav", staffId: "ST10042", role: "FIELD_STAFF", email: "suresh@kiratmicrocredit.in", mobile: "9811000006", branch: "LKO", status: "ACTIVE" },
+    { key: "priya", name: "Priya Nair", staffId: "ST10058", role: "FIELD_STAFF", email: "priya@kiratmicrocredit.in", mobile: "9811000007", branch: "KNP", status: "ACTIVE" },
+    { key: "ravi", name: "Ravi Kushwaha", staffId: "ST10061", role: "FIELD_STAFF", email: "ravi@kiratmicrocredit.in", mobile: "9811000008", branch: "LKO", status: "BLOCKED" },
   ];
 
   const profiles: Record<string, Doc<"profiles">> = {};
@@ -326,7 +326,7 @@ export async function seedOrg(ctx: Mtx): Promise<{ skipped: boolean }> {
     persona: "client",
     clientId: clients["C-000128"]._id,
     mobile: "9876512345",
-    email: "ramesh@client.finserve.in",
+    email: "ramesh@client.kiratmicrocredit.in",
     createdAt: now - 85 * DAY,
   });
 

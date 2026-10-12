@@ -12,11 +12,12 @@ import { useConvex, useMutation, useQuery } from "convex/react";
 import {
   Bell,
   Building2,
+  ChevronDown,
   Home,
   IndianRupee,
   LayoutList,
   Loader2,
-  Menu,
+  LogOut,
   Plus,
   Search,
   RefreshCw,
@@ -113,7 +114,7 @@ function initials(name?: string | null): string {
 }
 
 export function MobileShell({ children }: { children: ReactNode }) {
-  const { profile } = useProfile();
+  const { profile, signOut } = useProfile();
   const navigate = useNavigate();
   const location = useLocation();
   const online = useOnline();
@@ -216,15 +217,19 @@ export function MobileShell({ children }: { children: ReactNode }) {
           {initials(profile?.name)}
         </button>
         <button
-          className="min-w-0 flex-1 text-left"
+          className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
           onClick={() => setMenuOpen(true)}
+          aria-label="Account menu"
         >
-          <div className="truncate text-sm font-black leading-tight">
-            {profile?.name ?? "—"}
-          </div>
-          <div className="truncate font-mono text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-            {profile?.staffId} · {profile?.branch?.name ?? "No branch"}
-          </div>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-black leading-tight">
+              {profile?.name ?? "—"}
+            </span>
+            <span className="block truncate font-mono text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+              {profile?.staffId} · {profile?.branch?.name ?? "No branch"}
+            </span>
+          </span>
+          <ChevronDown className="size-4 shrink-0" />
         </button>
         <button
           onClick={() => setSearchOpen(true)}
@@ -409,9 +414,9 @@ export function MobileShell({ children }: { children: ReactNode }) {
           <Button
             variant="destructive"
             className="mt-2 w-full"
-            onClick={() => navigate("/dashboard/profile?signout=1")}
+            onClick={() => void signOut().then(() => navigate("/auth"))}
           >
-            Sign out
+            <LogOut className="size-4" /> Logout
           </Button>
         </div>
       </BottomSheet>

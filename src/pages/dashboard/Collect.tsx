@@ -274,7 +274,7 @@ export default function Collect() {
             size="lg"
             disabled={step.queued}
             onClick={async () => {
-              const text = `FinServe receipt ${step.receipt} — ${formatINR(step.amount)}`;
+              const text = `KIRAT MICRO CREDIT receipt ${step.receipt} — ${formatINR(step.amount)}`;
               try {
                 if (navigator.share) await navigator.share({ text });
                 else await navigator.clipboard.writeText(text);

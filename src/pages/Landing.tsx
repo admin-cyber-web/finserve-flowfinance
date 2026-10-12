@@ -7,9 +7,9 @@ import { useNavigate } from "react-router";
 import type { ReactNode } from "react";
 
 /* ---------------------------------------------------------------------------
- * FinServe — landing page
- * Neobrutalist Minimalism: square corners (0 radius), 2px ink borders,
- * flat colour blocks (navy / royal / gold / paper), hard offset shadows.
+ * KIRAT MICRO CREDIT — landing page
+ * Premium saffron banking theme: square corners, 2px ink borders,
+ * flat colour blocks (deep saffron / saffron / sand), hard offset shadows.
  * --------------------------------------------------------------------------- */
 
 const SCROLL_ITEMS = [
@@ -100,7 +100,7 @@ export default function Landing() {
       {/* Sticky wordmark */}
       <header className="sticky top-0 z-50 border-b-2 border-ink bg-card/95 px-4 py-3 backdrop-blur-sm sm:px-8">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-4">
-          <Logo className="text-paper" />
+          <Logo />
           <nav className="hidden items-center gap-6 text-sm font-black uppercase tracking-widest sm:flex">
             <NavLink to="/auth" label="Sign in" />
           </nav>
@@ -135,11 +135,11 @@ export default function Landing() {
             </div>
 
             <h1 className="text-5xl font-black leading-[1.04] tracking-tight text-ink sm:text-7xl">
-              Fin<span className="text-royal">Serve</span>
+              KIRAT <span className="text-royal">MICRO CREDIT</span>
             </h1>
 
             <p className="mx-auto mt-5 max-w-xl text-2xl font-black uppercase tracking-tight text-muted-foreground sm:text-3xl sm:tracking-[0.04em]">
-              Empowering Growth Together
+              Micro Finance · Micro Credit
             </p>
 
             <p className="mx-auto mt-4 max-w-lg text-sm font-bold leading-relaxed text-foreground/80">
@@ -158,7 +158,7 @@ export default function Landing() {
                 <ArrowRight className="ml-2 size-4" />
               </Button>
               <p className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">
-                Email code sign-in · authorized by role on the server
+                Email code or System ID sign-in · authorized by role on the server
               </p>
             </div>
           </div>
@@ -333,7 +333,7 @@ export default function Landing() {
         <div className="mx-auto flex max-w-6xl flex-col items-center gap-3">
           <Logo />
           <p className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">
-            FinServe — Empowering Growth Together
+            KIRAT MICRO CREDIT — Micro Finance · Micro Credit
           </p>
           <p className="text-[11px] font-medium text-muted-foreground/70">
             Finance staff, wallet, loan and collection management — ledger-backed,

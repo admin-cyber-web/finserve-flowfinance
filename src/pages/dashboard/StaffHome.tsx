@@ -308,7 +308,7 @@ export default function StaffHome() {
       </button>
 
       <p className="pb-2 text-center text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-        {profile?.branch?.name} · FinServe field app
+        {profile?.branch?.name} · KIRAT field app
       </p>
     </div>
   );

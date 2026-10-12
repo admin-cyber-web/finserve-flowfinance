@@ -185,7 +185,7 @@ export function geoStampLines(geo: GeoFix): string[] {
     hour12: false,
   });
   return [
-    "FINServe — CLIENT PHOTO",
+    "KIRAT MICRO CREDIT — CLIENT PHOTO",
     `Latitude: ${geo.latitude}`,
     `Longitude: ${geo.longitude}`,
     `Accuracy: ${Math.round(geo.accuracyMeters)} m`,

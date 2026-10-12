@@ -43,45 +43,45 @@
 }
 
 /* ============================================================
-   FinServe design tokens — Neobrutalism Minimalism
-   Square corners, strong black borders, flat colour blocks,
-   bold controlled contrast. Everything below is themable:
-   change these values to re-skin the entire product without
-   touching any business / financial logic.
+   KIRAT MICRO CREDIT design tokens — premium Bhagwa / saffron
+   banking theme. Clean white cards, saffron accents, warm
+   sand borders, deep-saffron navigation. Everything below is
+   themable: change these values to re-skin the entire product
+   without touching any business / financial logic.
    ============================================================ */
 :root {
   --radius: 0rem; /* square corners everywhere */
-  --background: #f4f1e8; /* soft paper white */
-  --foreground: #0b0b0b; /* ink black */
+  --background: #fff9f2; /* soft saffron white */
+  --foreground: #292524; /* warm stone text */
   --card: #ffffff;
-  --card-foreground: #0b0b0b;
+  --card-foreground: #292524;
   --popover: #ffffff;
-  --popover-foreground: #0b0b0b;
-  --primary: #2440e8; /* royal blue */
+  --popover-foreground: #292524;
+  --primary: #c95600; /* deep saffron */
   --primary-foreground: #ffffff;
-  --secondary: #101a3f; /* deep navy */
-  --secondary-foreground: #f4f1e8;
-  --muted: #ece8dd;
-  --muted-foreground: #57534a;
-  --accent: #ffcb2e; /* gold accent */
-  --accent-foreground: #0b0b0b;
-  --destructive: #d12b2b;
-  --border: #0b0b0b;
-  --input: #0b0b0b;
-  --ring: #2440e8;
-  --chart-1: #2440e8;
-  --chart-2: #ffcb2e;
-  --chart-3: #101a3f;
-  --chart-4: #16a34a;
-  --chart-5: #d12b2b;
-  --sidebar: #101a3f;
-  --sidebar-foreground: #f4f1e8;
-  --sidebar-primary: #ffcb2e;
-  --sidebar-primary-foreground: #0b0b0b;
-  --sidebar-accent: #2440e8;
+  --secondary: #f07800; /* primary saffron */
+  --secondary-foreground: #292524;
+  --muted: #f7ecdf; /* warm sand */
+  --muted-foreground: #78716c; /* secondary text */
+  --accent: #f07800; /* saffron accent */
+  --accent-foreground: #292524;
+  --destructive: #c02717;
+  --border: #f0e2d2; /* soft sand borders */
+  --input: #d8c6b0;
+  --ring: #f07800;
+  --chart-1: #f07800;
+  --chart-2: #c95600;
+  --chart-3: #21864a;
+  --chart-4: #a34400;
+  --chart-5: #c02717;
+  --sidebar: #a34400; /* deep saffron sidebar */
+  --sidebar-foreground: #fff4e5;
+  --sidebar-primary: #f07800;
+  --sidebar-primary-foreground: #292524;
+  --sidebar-accent: #c95600;
   --sidebar-accent-foreground: #ffffff;
-  --sidebar-border: #3a4568;
-  --sidebar-ring: #ffcb2e;
+  --sidebar-border: #7c3400;
+  --sidebar-ring: #f07800;
 }
 
 /* Extra flat palette used by product components (bg-royal, text-danger, ...) */
@@ -89,18 +89,18 @@
   --font-sans: "Archivo", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
     Roboto, Helvetica, Arial, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  --color-ink: #0b0b0b;
-  --color-paper: #f4f1e8;
-  --color-royal: #2440e8;
-  --color-navy: #101a3f;
-  --color-gold: #ffcb2e;
-  --color-mint: #b7f0c6;
-  --color-blush: #ffb3b3;
-  --color-sky: #cfe0ff;
-  --color-clay: #efe7d8;
-  --color-success: #0f7a43;
-  --color-warning: #a35c00;
-  --color-danger: #d12b2b;
+  --color-ink: #292524; /* main text + borders */
+  --color-paper: #fff4e5; /* light saffron background */
+  --color-royal: #c95600; /* deep saffron */
+  --color-navy: #a34400; /* darkest saffron — sidebars, headers */
+  --color-gold: #f07800; /* primary saffron accent */
+  --color-mint: #dcf3e2; /* light success chip */
+  --color-blush: #fbe2dd; /* light danger chip */
+  --color-sky: #ffead6; /* light saffron info chip */
+  --color-clay: #f0e2d2; /* warm sand block */
+  --color-success: #21864a;
+  --color-warning: #b45309;
+  --color-danger: #c02717;
 }
 
 /* Hard offset shadows — the signature neobrutalist elevation. */

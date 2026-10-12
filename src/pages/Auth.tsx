@@ -1,7 +1,6 @@
 import { api } from "@/convex/_generated/api";
 import { useMutation } from "convex/react";
 import { useAuth } from "@/hooks/use-auth";
-import { Logo } from "@/components/fs/primitives";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -139,13 +138,23 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
   };
 
   return (
-    <div className="min-h-screen bg-paper">
-      {/* Top ink bar — neobrutalist framing */}
+    <div className="flex min-h-screen flex-col bg-paper">
+      {/* Deep-saffron brand band */}
       <div className="border-b-2 border-ink bg-navy px-4 py-3 sm:px-8">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-4">
-          <Logo className="text-paper" />
-          <p className="text-[11px] font-bold uppercase tracking-widest text-gold">
-            FinServe — Empowering Growth Together
+          <span className="inline-flex items-center gap-2.5">
+            <span className="grid size-10 place-items-center border-2 border-ink bg-gold text-lg font-black text-ink shadow-hard-sm">
+              ₹
+            </span>
+            <span className="leading-none tracking-tight">
+              <span className="block text-lg font-black text-paper">KIRAT</span>
+              <span className="block text-[10px] font-black uppercase tracking-[0.22em] text-paper/80">
+                Micro Credit
+              </span>
+            </span>
+          </span>
+          <p className="hidden text-[11px] font-bold uppercase tracking-widest text-paper/80 sm:block">
+            Premium microfinance banking
           </p>
         </div>
       </div>
@@ -211,7 +220,7 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                             <Mail className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
                             <Input
                               name="email"
-                              placeholder="you@finserve.in"
+                              placeholder="you@kiratmicrocredit.in"
                               type="email"
                               className="pl-9 h-12"
                               disabled={isLoading}
@@ -373,7 +382,7 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
           {/* Footer note */}
           <div className="mt-4 border-t-2 border-ink bg-muted/40 px-4 py-3 text-center">
             <p className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">
-              Every sign-in is email-verified and authorized by role on the server.
+              KIRAT MICRO CREDIT — every sign-in is email-verified and authorized by role on the server.
             </p>
             <p className="mt-1 text-[10px] font-medium text-muted-foreground">
               Field staff run offline-ready collections, cash handovers and receipts.
