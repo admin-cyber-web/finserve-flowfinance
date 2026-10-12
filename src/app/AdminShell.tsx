@@ -1,6 +1,4 @@
-import { api } from "@/convex/_generated/api";
-import {
-  Logo,
+import { api } from "@/convex/_generated/api";import { Logo,
   StatusChip,
   timeAgo,
 } from "@/components/fs/primitives";
@@ -14,7 +12,6 @@ import {
   BookOpen,
   Banknote,
   FileBarChart,
-  IndianRupee,
   LayoutDashboard,
   Loader2,
   LogOut,
@@ -28,6 +25,25 @@ import {
   Users,
   X,
 } from "lucide-react";
+import React from "react";
+import { useLocation, useNavigate } from "react-router";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { ChevronDown, PanelLeftClose, PanelLeftOpen, User } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import type { Permission } from "@/lib/finance/permissions";
 
 /** Wordmark for the deep-saffron navigation surfaces. */
 function BrandWordmark({ className }: { className?: string }) {
@@ -58,12 +74,6 @@ function StartButton({
   onMouseEnter: () => void;
   onMouseLeave: () => void;
 }) {
-  // Choose the label that should keep the button's visible colour:
-  // START keeps saffron text, KMC keeps ink text after the cross-fade.
-  const startLabelColor = "#F07800";
-  const kmcLabelColor = "#141414";
-  const defaultColor = startLabelColor;
-
   return (
     <button
       type="button"
@@ -88,8 +98,7 @@ function StartButton({
           className="absolute inset-0 flex items-center justify-center transition-all duration-300 ease-out"
           style={{
             background: "#F07800",
-            boxShadow:
-              "0 2px 8px rgba(240,120,0,0.5)",
+            boxShadow: "0 2px 8px rgba(240,120,0,0.5)",
             borderRadius: "0.375rem",
             opacity: kmc ? 1 : 0,
           }}
@@ -295,7 +304,8 @@ export function AdminShell({ children }: { children: ReactNode }) {
     TITLES[location.pathname] ??
     (location.pathname.startsWith("/dashboard/clients/")
       ? "Client 360°"
-      : location.pathname.startsWith("/dashboard/loans/")          ? "Loan file"
+      : location.pathname.startsWith("/dashboard/loans/")
+        ? "Loan file"
         : location.pathname.startsWith("/dashboard/staff/")
           ? "Staff 360°"
           : location.pathname.startsWith("/dashboard/receipts/")
@@ -381,7 +391,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
                 style={{ textIndent: "0px" }}
               >
                 {""}
-              </span              >
+              </span>
               <span className="text-[10px] font-black uppercase tracking-[0.18em] text-muted-foreground">
                 {roleLabel}
               </span>
@@ -397,7 +407,6 @@ export function AdminShell({ children }: { children: ReactNode }) {
                   setKmc(false);
                 }}
               />
-            </StartButton>
               {/* Keep keyboard focus visible even over the glow */}
               <span
                 className="absolute inset-0"
@@ -408,19 +417,6 @@ export function AdminShell({ children }: { children: ReactNode }) {
             </div>
           )}
         </div>
-
-        {/* Close button for the tagline-only state */}
-        {!sidebarOpen && (
-          <button
-            onClick={() => setSidebarOpen(true)}
-            className="flex w-full items-center justify-center gap-2 border-2 border-ink bg-white px-3 py-2 text-xs font-black uppercase text-ink shadow-hard-sm hover:border-paper/40 hover:bg-white/60 active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-colors"
-            aria-label="Return to menu"
-          >
-            <Menu className="size-4" />
-            Show menu
-          </button>
-        )}
-
       </aside>
 
       {/* Mobile drawer — unchanged */}
