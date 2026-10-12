@@ -53,7 +53,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
-import { ChevronDown, User } from "lucide-react";
+import { ChevronDown, PanelLeftClose, PanelLeftOpen, User } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type { Permission } from "@/lib/finance/permissions";
 
 interface NavItem {
@@ -107,11 +112,13 @@ function NavList({
   onNavigate,
   allowed,
   approvalsBadge,
+  collapsed = false,
 }: {
   pathname: string;
   onNavigate?: () => void;
   allowed: (p?: Permission) => boolean;
   approvalsBadge: number;
+  collapsed?: boolean;
 }) {
   const navigate = useNavigate();
   return (
@@ -120,7 +127,7 @@ function NavList({
         const active = item.end
           ? pathname === item.to
           : pathname.startsWith(item.to);
-        return (
+        const button = (
           <button
             key={item.to}
             onClick={() => {
@@ -129,19 +136,35 @@ function NavList({
             }}
             className={cn(
               "flex items-center gap-3 border-2 px-3 py-2.5 text-left text-sm font-black uppercase tracking-wide transition-colors",
+              collapsed && "relative justify-center px-0",
               active
                 ? "border-ink bg-gold text-ink shadow-hard-sm"
                 : "border-transparent text-paper/80 hover:border-paper/30 hover:bg-white/10",
             )}
           >
             <item.icon className="size-4 shrink-0" />
-            <span className="flex-1">{item.label}</span>
+            <span className={cn("flex-1", collapsed && "sr-only")}>
+              {item.label}
+            </span>
             {item.to === "/dashboard/approvals" && approvalsBadge > 0 && (
-              <span className="grid min-w-5 place-items-center border-2 border-ink bg-destructive px-1 text-[10px] font-black text-white">
+              <span
+                className={cn(
+                  "grid min-w-5 place-items-center border-2 border-ink bg-destructive px-1 text-[10px] font-black text-white",
+                  collapsed && "absolute right-1 top-1 min-w-4 px-0.5 text-[9px]",
+                )}
+              >
                 {approvalsBadge}
               </span>
             )}
           </button>
+        );
+        return collapsed ? (
+          <Tooltip key={item.to}>
+            <TooltipTrigger asChild>{button}</TooltipTrigger>
+            <TooltipContent side="right">{item.label}</TooltipContent>
+          </Tooltip>
+        ) : (
+          button
         );
       })}
     </nav>
@@ -155,6 +178,9 @@ export function AdminShell({ children }: { children: ReactNode }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  // Desktop-only sidebar expand/collapse (mobile Sheet navigation is separate
+  // and unaffected by this state).
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [q, setQ] = useState("");
   const [debounced, setDebounced] = useState("");
 
@@ -195,23 +221,44 @@ export function AdminShell({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen bg-paper">
       {/* Desktop sidebar */}
-      <aside className="fixed inset-y-0 left-0 z-40 hidden w-64 flex-col border-r-2 border-ink bg-navy lg:flex">
-        <div className="border-b-2 border-paper/20 px-4 py-4">
-          <BrandWordmark className="block" />
+      <aside
+        id="desktop-sidebar"
+        className={cn(
+          "fixed inset-y-0 left-0 z-40 hidden w-64 flex-col overflow-hidden border-r-2 border-ink bg-navy transition-[width] duration-300 ease-in-out lg:flex",
+          sidebarCollapsed && "lg:w-[72px]",
+        )}
+      >
+        <div
+          className={cn(
+            "border-b-2 border-paper/20 px-4 py-4",
+            sidebarCollapsed && "flex justify-center px-2",
+          )}
+        >
+          {sidebarCollapsed ? (
+            <Logo withWordmark={false} />
+          ) : (
+            <BrandWordmark className="block" />
+          )}
         </div>
         <div className="flex-1 overflow-y-auto p-3">
           <NavList
             pathname={location.pathname}
             allowed={allowed}
             approvalsBadge={pending?.length ?? 0}
+            collapsed={sidebarCollapsed}
           />
         </div>
         <div className="border-t-2 border-paper/20 p-3">
-          <div className="mb-2 flex items-center gap-2">
+          <div
+            className={cn(
+              "mb-2 flex items-center gap-2",
+              sidebarCollapsed && "justify-center",
+            )}
+          >
             <span className="grid size-9 shrink-0 place-items-center border-2 border-paper bg-gold text-xs font-black text-ink">
               {initials(profile?.name)}
             </span>
-            <div className="min-w-0">
+            <div className={cn("min-w-0", sidebarCollapsed && "hidden")}>
               <div className="truncate text-xs font-black text-paper">
                 {profile?.name}
               </div>
@@ -220,14 +267,31 @@ export function AdminShell({ children }: { children: ReactNode }) {
               </div>
             </div>
           </div>
-          <Button
-            variant="destructive"
-            size="sm"
-            className="w-full"
-            onClick={() => void signOut().then(() => navigate("/auth"))}
-          >
-            <LogOut className="size-4" /> Sign out
-          </Button>
+          {sidebarCollapsed ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  className="w-full"
+                  onClick={() => void signOut().then(() => navigate("/auth"))}
+                >
+                  <LogOut className="size-4" />
+                  <span className="sr-only">Sign out</span>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="right">Sign out</TooltipContent>
+            </Tooltip>
+          ) : (
+            <Button
+              variant="destructive"
+              size="sm"
+              className="w-full"
+              onClick={() => void signOut().then(() => navigate("/auth"))}
+            >
+              <LogOut className="size-4" /> Sign out
+            </Button>
+          )}
         </div>
       </aside>
 
@@ -264,7 +328,12 @@ export function AdminShell({ children }: { children: ReactNode }) {
       </Sheet>
 
       {/* Content column */}
-      <div className="lg:pl-64">
+      <div
+        className={cn(
+          "transition-[padding] duration-300 ease-in-out lg:pl-64",
+          sidebarCollapsed && "lg:pl-[72px]",
+        )}
+      >
         <header className="sticky top-0 z-30 flex items-center gap-3 border-b-2 border-ink bg-card px-3 py-3 lg:px-6">
           <button
             className="grid size-10 place-items-center border-2 border-ink bg-white shadow-hard-sm lg:hidden"
@@ -272,6 +341,20 @@ export function AdminShell({ children }: { children: ReactNode }) {
             aria-label="Open menu"
           >
             <Menu className="size-4" />
+          </button>
+          {/* Desktop sidebar expand/collapse toggle */}
+          <button
+            className="hidden size-10 place-items-center border-2 border-ink bg-white shadow-hard-sm active:translate-x-[2px] active:translate-y-[2px] active:shadow-none lg:grid"
+            onClick={() => setSidebarCollapsed((v) => !v)}
+            aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            aria-expanded={!sidebarCollapsed}
+            aria-controls="desktop-sidebar"
+          >
+            {sidebarCollapsed ? (
+              <PanelLeftOpen className="size-4" />
+            ) : (
+              <PanelLeftClose className="size-4" />
+            )}
           </button>
           <div className="min-w-0 flex-1">
             <h1 className="truncate text-base font-black uppercase tracking-tight lg:text-lg">
