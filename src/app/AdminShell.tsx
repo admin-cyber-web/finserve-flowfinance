@@ -143,7 +143,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { ChevronDown, PanelLeftClose, PanelLeftOpen, User } from "lucide-react";
 import {
   Tooltip,
@@ -273,8 +273,6 @@ export function AdminShell({ children }: { children: ReactNode }) {
   const [debounced, setDebounced] = useState("");
   // Desktop-only 2-state sidebar (mobile Sheet navigation is separate
   // and unaffected by this state). Cycle: expanded / tagline / expanded ...
-  // Desktop-only 2-state sidebar (mobile Sheet navigation is separate
-  // and unaffected by this state). Cycle: expanded / tagline / expanded ...
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [kmc, setKmc] = useState(false);
   const roleLabel = profileRole?.replace("_", " ").toLowerCase() ?? "user";
@@ -389,16 +387,14 @@ export function AdminShell({ children }: { children: ReactNode }) {
                   el0.style.textIndent = `${Math.min(0, h - el0.offsetWidth)}px`;
                 }}
                 style={{ textIndent: "0px" }}
-              >
-                {""}
+              >                {""}
               </span>
               <span className="text-[10px] font-black uppercase tracking-[0.18em] text-muted-foreground">
                 {roleLabel}
               </span>
             </div>
           ) : (
-            <div className="relative">
-              <StartButton
+            <div className="relative">              <StartButton
                 kmc={kmc}
                 onMouseEnter={() => setKmc(true)}
                 onMouseLeave={() => setKmc(false)}
@@ -407,7 +403,8 @@ export function AdminShell({ children }: { children: ReactNode }) {
                   setKmc(false);
                 }}
               />
-              {/* Keep keyboard focus visible even over the glow */}
+            </StartButton>
+            {/* Keep keyboard focus visible even over the glow */}
               <span
                 className="absolute inset-0"
                 onFocus={(e) => e.currentTarget.parentElement?.focus()}
