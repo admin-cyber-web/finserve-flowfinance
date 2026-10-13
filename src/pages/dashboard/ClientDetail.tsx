@@ -72,6 +72,12 @@ export default function ClientDetail() {
   const { client, totals, loans, payments, documents, notes, activity, recovery, family, coApplicantPhotoUrl } =
     data;
 
+  // Co-applicant uploads live alongside the application's documents; they are
+  // rendered inside the Co-applicant card (Overview) rather than mixed into
+  // the applicant's Docs list.
+  const coApplicantDocs = documents.filter((d) => d.coApplicant);
+  const ownDocs = documents.filter((d) => !d.coApplicant);
+
   const act = async (fn: () => Promise<unknown>, ok: string) => {
     setBusy(true);
     try {
@@ -160,7 +166,7 @@ export default function ClientDetail() {
             Payments ({payments.length})
           </TabsTrigger>
           <TabsTrigger value="docs" className="flex-1 text-xs font-black uppercase">
-            Docs ({documents.length})
+            Docs ({ownDocs.length})
           </TabsTrigger>
           <TabsTrigger value="notes" className="flex-1 text-xs font-black uppercase">
             Notes ({notes.length})
@@ -314,6 +320,34 @@ export default function ClientDetail() {
                   mono
                 />
                 <KeyValue k="Address" v={client.coApplicant.address ?? "—"} />
+                {coApplicantDocs.length > 0 && (
+                  <div className="mt-2 space-y-1.5">
+                    <div className="text-[10px] font-black uppercase tracking-[0.14em]">
+                      Documents ({coApplicantDocs.length})
+                    </div>
+                    {coApplicantDocs.map((d) => (
+                      <div
+                        key={d._id}
+                        className="flex items-center justify-between gap-2 border border-ink bg-white px-2 py-1"
+                      >
+                        <span className="min-w-0 flex-1 truncate text-[11px] font-bold">
+                          {(d.docKind ?? d.type).replace(/_/g, " ")} · {d.fileName}
+                        </span>
+                        {d.url && (
+                          <a
+                            href={d.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="shrink-0 border border-ink bg-gold px-1.5 py-0.5 text-[10px] font-black uppercase"
+                          >
+                            View
+                          </a>
+                        )}
+                        <StatusChip status={d.status} className="shrink-0" />
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
@@ -660,10 +694,17 @@ export default function ClientDetail() {
               </Button>
             </section>
           )}
-          {documents.length === 0 ? (
-            <EmptyState title="No documents" hint="Record KYC and address proofs above." />
+          {ownDocs.length === 0 ? (
+            <EmptyState
+              title="No documents"
+              hint={
+                coApplicantDocs.length > 0
+                  ? "No applicant documents yet — co-applicant files are shown in the Co-applicant card."
+                  : "Record KYC and address proofs above."
+              }
+            />
           ) : (
-            documents.map((d) => (
+            ownDocs.map((d) => (
               <div
                 key={d._id}
                 className="flex items-center justify-between gap-3 border-2 border-ink bg-card px-3 py-2 shadow-hard-sm"

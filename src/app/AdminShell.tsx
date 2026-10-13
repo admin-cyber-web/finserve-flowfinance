@@ -1,4 +1,6 @@
-import { api } from "@/convex/_generated/api";import { Logo,
+import { api } from "@/convex/_generated/api";
+import {
+  Logo,
   StatusChip,
   timeAgo,
 } from "@/components/fs/primitives";
@@ -12,6 +14,7 @@ import {
   BookOpen,
   Banknote,
   FileBarChart,
+  IndianRupee,
   LayoutDashboard,
   Loader2,
   LogOut,
@@ -24,8 +27,10 @@ import {
   UserCog,
   Users,
   X,
+  ChevronDown,
+  User,
 } from "lucide-react";
-import React from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
 import {
@@ -36,13 +41,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Sheet, SheetContent } from "@/components/ui/sheet";
-import { ChevronDown, PanelLeftClose, PanelLeftOpen, User } from "lucide-react";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import type { Permission } from "@/lib/finance/permissions";
 
 /** Wordmark for the deep-saffron navigation surfaces. */
@@ -58,18 +57,19 @@ function BrandWordmark({ className }: { className?: string }) {
     </span>
   );
 }
-import { useEffect, useState, type ReactNode, useRef } from "react";
 
-/** Custom keyboard-accessible animated START/KMC button for the desktop
- *  sidebar. Uses two stacked spans so the label cross-fade is smooth and
- *  the background glow can pulse independently of the text. */
+/** Premium animated START/KMC toggle button for the desktop sidebar.
+ *  Hover cross-fades the label START → KMC (and back on mouse leave);
+ *  clicking toggles the desktop sidebar between its two states. */
 function StartButton({
   kmc,
+  expanded,
   onClick,
   onMouseEnter,
   onMouseLeave,
 }: {
   kmc: boolean;
+  expanded: boolean;
   onClick: () => void;
   onMouseEnter: () => void;
   onMouseLeave: () => void;
@@ -80,77 +80,46 @@ function StartButton({
       onClick={onClick}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
-      className="w-full"
-      aria-label="Show tagline"
-      aria-expanded={false}
-      style={{ fontFamily: "inherit", borderRadius: 0, cursor: "pointer" }}
+      className="w-full rounded-[0.375rem] transition-shadow duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold focus-visible:ring-offset-2 focus-visible:ring-offset-navy"
+      aria-label={expanded ? "Hide menu and show tagline" : "Show menu and hide tagline"}
+      aria-expanded={expanded}
+      aria-controls="desktop-sidebar"
+      style={{ cursor: "pointer" }}
     >
       <span
-        className="relative inline-flex items-center justify-center"
+        className="relative flex h-10 w-full items-center justify-center overflow-hidden rounded-[0.375rem]"
         style={{
           background: "#F07800",
-          boxShadow: "0 2px 8px rgba(240,120,0,0.45)",
-          borderRadius: "0.375rem",
+          boxShadow: kmc
+            ? "0 0 16px 2px rgba(240,120,0,0.55), 0 2px 8px rgba(240,120,0,0.45)"
+            : "0 2px 8px rgba(240,120,0,0.45)",
+          transition: "box-shadow 300ms ease",
         }}
       >
-        {/* Ink-coloured backup layer, fades in on hover */}
+        {/* START label — visible at rest, fades out on hover */}
         <span
-          className="absolute inset-0 flex items-center justify-center transition-all duration-300 ease-out"
-          style={{
-            background: "#F07800",
-            boxShadow: "0 2px 8px rgba(240,120,0,0.5)",
-            borderRadius: "0.375rem",
-            opacity: kmc ? 1 : 0,
-          }}
+          className={cn(
+            "absolute inset-0 flex items-center justify-center text-sm font-black uppercase tracking-[0.18em] text-white transition-all duration-300 ease-out",
+            kmc ? "opacity-0 blur-[2px]" : "opacity-100 blur-0",
+          )}
+          aria-hidden={kmc}
         >
-          <span
-            className="relative inline-flex items-center justify-center h-9 w-[9.5rem] text-ink font-black uppercase tracking-[0.08em]"
-            style={{ transition: "all 300ms ease" }}
-          >
-            KMC
-          </span>
+          START
         </span>
-
-        {/* Saffron START layer, fades out on hover */}
+        {/* KMC label — fades in on hover */}
         <span
-          className="absolute inset-0 flex items-center justify-center transition-all duration-300 ease-out"
-          style={{
-            background: "#E88900",
-            boxShadow: "0 2px 8px rgba(240,120,0,0.45)",
-            borderRadius: "0.375rem",
-            opacity: kmc ? 0 : 1,
-          }}
+          className={cn(
+            "absolute inset-0 flex items-center justify-center text-sm font-black uppercase tracking-[0.18em] text-ink transition-all duration-300 ease-out",
+            kmc ? "opacity-100 blur-0" : "opacity-0 blur-[2px]",
+          )}
+          aria-hidden={!kmc}
         >
-          <span
-            className="relative inline-flex items-center justify-center h-5 w-12 text-white font-black uppercase tracking-[0.06em]"
-            style={{ transition: "all 300ms ease" }}
-          >
-            START
-          </span>
+          KMC
         </span>
       </span>
     </button>
   );
 }
-import React from "react";
-import { useLocation, useNavigate } from "react-router";
-import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Sheet, SheetContent } from "@/components/ui/sheet";
-import { ChevronDown, PanelLeftClose, PanelLeftOpen, User } from "lucide-react";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import type { Permission } from "@/lib/finance/permissions";
 
 interface NavItem {
   to: string;
@@ -203,13 +172,13 @@ function NavList({
   onNavigate,
   allowed,
   approvalsBadge,
-  collapsed = false,
+  saffronHover = false,
 }: {
   pathname: string;
   onNavigate?: () => void;
   allowed: (p?: Permission) => boolean;
   approvalsBadge: number;
-  collapsed?: boolean;
+  saffronHover?: boolean;
 }) {
   const navigate = useNavigate();
   return (
@@ -218,7 +187,7 @@ function NavList({
         const active = item.end
           ? pathname === item.to
           : pathname.startsWith(item.to);
-        const button = (
+        return (
           <button
             key={item.to}
             onClick={() => {
@@ -226,36 +195,24 @@ function NavList({
               onNavigate?.();
             }}
             className={cn(
-              "flex items-center gap-3 border-2 px-3 py-2.5 text-left text-sm font-black uppercase tracking-wide transition-colors",
-              collapsed && "relative justify-center px-0",
+              "flex items-center gap-3 border-2 px-3 py-2.5 text-left text-sm font-black uppercase tracking-wide transition-colors duration-200",
               active
                 ? "border-ink bg-gold text-ink shadow-hard-sm"
-                : "border-transparent text-paper/80 hover:border-paper/30 hover:bg-white/10",
+                : cn(
+                    "border-transparent text-paper/80",
+                    saffronHover &&
+                      "lg:hover:border-[#F07800] lg:hover:bg-[#F07800]/20 lg:hover:text-paper",
+                  ),
             )}
           >
             <item.icon className="size-4 shrink-0" />
-            <span className={cn("flex-1", collapsed && "sr-only")}>
-              {item.label}
-            </span>
+            <span className="flex-1">{item.label}</span>
             {item.to === "/dashboard/approvals" && approvalsBadge > 0 && (
-              <span
-                className={cn(
-                  "grid min-w-5 place-items-center border-2 border-ink bg-destructive px-1 text-[10px] font-black text-white",
-                  collapsed && "absolute right-1 top-1 min-w-4 px-0.5 text-[9px]",
-                )}
-              >
+              <span className="grid min-w-5 place-items-center border-2 border-ink bg-destructive px-1 text-[10px] font-black text-white">
                 {approvalsBadge}
               </span>
             )}
           </button>
-        );
-        return collapsed ? (
-          <Tooltip key={item.to}>
-            <TooltipTrigger asChild>{button}</TooltipTrigger>
-            <TooltipContent side="right">{item.label}</TooltipContent>
-          </Tooltip>
-        ) : (
-          button
         );
       })}
     </nav>
@@ -271,12 +228,12 @@ export function AdminShell({ children }: { children: ReactNode }) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [q, setQ] = useState("");
   const [debounced, setDebounced] = useState("");
-  // Desktop-only 2-state sidebar (mobile Sheet navigation is separate
-  // and unaffected by this state). Cycle: expanded / tagline / expanded ...
+  // Desktop-only 2-state sidebar (mobile Sheet navigation is separate and
+  // unaffected by this state). false = tagline state, true = expanded menu.
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // START/KMC hover state for the animated sidebar toggle button.
   const [kmc, setKmc] = useState(false);
   const roleLabel = profileRole?.replace("_", " ").toLowerCase() ?? "user";
-  const taglineRef = useRef<HTMLSpanElement>(null);
   const notifications = useQuery(api.admin.notifications, { limit: 20 });
   const markRead = useMutation(api.admin.markRead);
   const markAllRead = useMutation(api.admin.markAllRead);
@@ -310,24 +267,21 @@ export function AdminShell({ children }: { children: ReactNode }) {
             ? "Receipt"
             : "KIRAT MICRO CREDIT");
 
-  /** Exact tagline displayed in the sidebar's State B (menu hidden). */
-  const EXACT_TAGLINE = "सपने आपके, भरोसा हमारा — KIRAT MICRO CREDIT";
-  const taglineLines = EXACT_TAGLINE.split(/\n/);
-
   return (
     <div className="min-h-screen bg-paper">
-      {/* Desktop sidebar */}
+      {/* Desktop sidebar — exactly two states: expanded menu (sidebarOpen)
+          or hidden menu with the brand tagline. Never icon-only. */}
       <aside
         id="desktop-sidebar"
         className={cn(
-          "fixed inset-y-0 left-0 z-40 hidden w-64 flex-col overflow-hidden border-r-2 border-ink bg-navy transition-[width] duration-300 ease-in-out lg:flex",
-          sidebarOpen && "lg:pointer-events-none lg:opacity-0 lg:relative lg:translate-x-[-2px]",
+          "fixed inset-y-0 left-0 z-40 hidden flex-col overflow-hidden border-r-2 border-ink bg-navy transition-[width] duration-300 ease-in-out lg:flex",
+          sidebarOpen ? "w-64" : "w-56",
         )}
       >
         <div
           className={cn(
-            "border-b-2 border-paper/20 px-4 py-4",
-            sidebarOpen && "flex justify-center px-2",
+            "flex items-center border-b-2 border-paper/20 px-4 py-4",
+            sidebarOpen ? "justify-start" : "justify-center",
           )}
         >
           {sidebarOpen ? (
@@ -336,83 +290,85 @@ export function AdminShell({ children }: { children: ReactNode }) {
             <Logo withWordmark={false} />
           )}
         </div>
-        <div className="flex-1 overflow-y-auto p-3">
-          {/* State A: expanded menu. State B (tagline) is rendered at the
-              very bottom of the sidebar when sidebarOpen is false; the NavList
-              itself is never rendered in State B. */}
-          {sidebarOpen && (
-            <NavList
-              pathname={location.pathname}
-              allowed={allowed}
-              approvalsBadge={notifications?.unread ?? 0}
-              collapsed={false}
-            />
-          )}
-        </div>
+
+        {sidebarOpen ? (
+          /* STATE A — expanded menu (order, routes, permissions unchanged) */
+          <>
+            <div className="flex-1 overflow-y-auto p-3">
+              <NavList
+                pathname={location.pathname}
+                allowed={allowed}
+                approvalsBadge={unread}
+                saffronHover
+              />
+            </div>
+            <div className="border-t-2 border-paper/20 p-3">
+              <div className="mb-2 flex items-center justify-center gap-2">
+                <span className="grid size-9 shrink-0 place-items-center border-2 border-paper bg-gold text-xs font-black text-ink">
+                  {initials(profile?.name)}
+                </span>
+                <div className="min-w-0">
+                  <div className="truncate text-xs font-black text-paper">
+                    {profile?.name}
+                  </div>
+                  <div className="truncate font-mono text-[10px] font-bold uppercase text-paper/60">
+                    {profile?.staffId}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center justify-center gap-2 border-2 border-ink bg-white px-3 py-2 shadow-hard-sm">
+                <span className="grid size-9 shrink-0 place-items-center border-2 border-ink bg-royal text-xs font-black text-white shadow-hard-sm">
+                  <IndianRupee className="size-4" />
+                </span>
+                <span className="text-[10px] font-black uppercase tracking-[0.18em] text-muted-foreground">
+                  {roleLabel}
+                </span>
+              </div>
+            </div>
+          </>
+        ) : (
+          /* STATE B — menu hidden, exact brand tagline displayed */
+          <>
+            <div className="flex flex-1 flex-col items-center justify-center px-5 py-6">
+              <span
+                className="mb-4 h-1 w-14 rounded-full"
+                style={{ background: "#F07800" }}
+                aria-hidden="true"
+              />
+              <p className="text-center text-base font-semibold leading-relaxed tracking-wide text-paper/90">
+                सपने आपके, भरोसा हमारा —{" "}
+                <span className="font-black uppercase tracking-[0.14em] text-paper">
+                  KIRAT MICRO CREDIT
+                </span>
+              </p>
+            </div>
+            <div className="border-t-2 border-paper/20 p-3">
+              <div className="mb-2 flex items-center justify-center gap-2">
+                <span className="grid size-9 shrink-0 place-items-center border-2 border-paper bg-gold text-xs font-black text-ink">
+                  {initials(profile?.name)}
+                </span>
+                <div className="min-w-0">
+                  <div className="truncate text-xs font-black text-paper">
+                    {profile?.name}
+                  </div>
+                  <div className="truncate font-mono text-[10px] font-bold uppercase text-paper/60">
+                    {profile?.staffId}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Animated START/KMC toggle — occupies the former Sign Out slot */}
         <div className="border-t-2 border-paper/20 p-3">
-          <div
-            className={cn(
-              "mb-2 flex items-center gap-2",
-              sidebarOpen && "justify-center",
-            )}
-          >
-            <span className="grid size-9 shrink-0 place-items-center border-2 border-paper bg-gold text-xs font-black text-ink">
-              {initials(profile?.name)}
-            </span>
-            <div className={cn("min-w-0", sidebarOpen && "hidden")}>
-              <div className="truncate text-xs font-black text-paper">
-                {profile?.name}
-              </div>
-              <div className="truncate font-mono text-[10px] font-bold uppercase text-paper/60">
-                {profile?.staffId}
-              </div>
-            </div>
-          </div>
-          {sidebarOpen ? (
-            <div
-              className="flex items-center justify-center gap-2 border-2 border-ink bg-white px-3 py-2 shadow-hard-sm"
-              onMouseEnter={() => setMouseEntered(true)}
-              onMouseLeave={() => setMouseLeft(false)}
-            >
-              <span className="grid size-9 shrink-0 place-items-center border-2 border-ink bg-royal text-xs font-black text-white shadow-hard-sm">
-                <IndianRupee className="size-4" />
-              </span>
-              <span
-                className="relative text-base font-black leading-[1.4] tracking-wide text-ink"
-                ref={(el) => {
-                  const el0 = el;
-                  if (!el0) return;
-                  const h = el0.offsetWidth;
-                  (el0.firstChild as HTMLElement).textContent = roleLabel;
-                  el0.style.textIndent = `${Math.min(0, h - el0.offsetWidth)}px`;
-                }}
-                style={{ textIndent: "0px" }}
-              >                {""}
-              </span>
-              <span className="text-[10px] font-black uppercase tracking-[0.18em] text-muted-foreground">
-                {roleLabel}
-              </span>
-            </div>
-          ) : (
-            <div className="relative">              <StartButton
-                kmc={kmc}
-                onMouseEnter={() => setKmc(true)}
-                onMouseLeave={() => setKmc(false)}
-                onClick={() => {
-                  setSidebarOpen((v) => !v);
-                  setKmc(false);
-                }}
-              />
-            </StartButton>
-            {/* Keep keyboard focus visible even over the glow */}
-              <span
-                className="absolute inset-0"
-                onFocus={(e) => e.currentTarget.parentElement?.focus()}
-                onBlur={(e) => e.currentTarget.parentElement?.blur()}
-                style={{ outline: "none" }}
-              />
-            </div>
-          )}
+          <StartButton
+            kmc={kmc}
+            expanded={sidebarOpen}
+            onMouseEnter={() => setKmc(true)}
+            onMouseLeave={() => setKmc(false)}
+            onClick={() => setSidebarOpen((v) => !v)}
+          />
         </div>
       </aside>
 
@@ -434,7 +390,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
               pathname={location.pathname}
               onNavigate={() => setDrawerOpen(false)}
               allowed={allowed}
-              approvalsBadge={notifications?.unread ?? 0}
+              approvalsBadge={unread}
             />
 
             <Button
@@ -449,22 +405,11 @@ export function AdminShell({ children }: { children: ReactNode }) {
         </SheetContent>
       </Sheet>
 
-      {/* Content column — width adjusts to desktop sidebar state via the
-          existing transition-[padding] class; no horizontal overflow is
-          introduced because the content column is constrained to a max-width
-          and the sidebar shift is purely visual padding. */}
+      {/* Content column — padding tracks the desktop sidebar width */}
       <div
         className={cn(
-          "transition-[padding] duration-300 ease-in-out lg:pl-64",
-          sidebarOpen && "lg:pointer-events-none lg:opacity-0 lg:relative lg:translate-x-[-2px]",
-        )}
-      >
-
-      {/* Content column */}
-      <div
-        className={cn(
-          "transition-[padding] duration-300 ease-in-out lg:pl-64",
-          sidebarOpen && "lg:pointer-events-none lg:opacity-0 lg:relative lg:translate-x-[-2px]",
+          "transition-[padding] duration-300 ease-in-out",
+          sidebarOpen ? "lg:pl-64" : "lg:pl-56",
         )}
       >
         <header className="sticky top-0 z-30 flex items-center gap-3 border-b-2 border-ink bg-card px-3 py-3 lg:px-6">
@@ -474,29 +419,6 @@ export function AdminShell({ children }: { children: ReactNode }) {
             aria-label="Open menu"
           >
             <Menu className="size-4" />
-          </button>
-          {/* Desktop sidebar expand/collapse toggle */}
-          <button
-            className="hidden size-10 place-items-center border-2 border-ink bg-white shadow-hard-sm active:translate-x-[2px] active:translate-y-[2px] active:shadow-none lg:grid"
-            onClick={() => {
-              setSidebarOpen((v) => !v);
-              setKmc(false);
-            }}
-            aria-label={sidebarOpen ? "Hide menu and show tagline" : "Show menu and hide tagline"}
-            aria-expanded={!sidebarOpen}
-            aria-controls="desktop-sidebar"
-          >
-            <span
-              className="relative inline-flex items-center justify-center w-12 h-12"
-              style={{ background: "#F07800", boxShadow: "0 2px 8px rgba(240,120,0,0.45)", borderRadius: "0.375rem" }}
-              aria-hidden="true"
-            >
-              {sidebarOpen ? (
-                <PanelLeftOpen className="size-5 text-white" />
-              ) : (
-                <PanelLeftClose className="size-5 text-white" />
-              )}
-            </span>
           </button>
           <div className="min-w-0 flex-1">
             <h1 className="truncate text-base font-black uppercase tracking-tight lg:text-lg">
@@ -526,8 +448,8 @@ export function AdminShell({ children }: { children: ReactNode }) {
               </span>
             )}
           </button>
-          {/* Account dropdown — profile info, account links and logout live
-              here; no separate always-visible logout button in the header. */}
+          {/* Account dropdown — profile info, account links and the Sign Out
+              option live here; unchanged. */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
@@ -686,7 +608,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
           <span>Account {profile.status} — actions are blocked</span>
           <Loader2 className="size-4 animate-spin" />
         </div>
-      )
+      )}
     </div>
   );
 }

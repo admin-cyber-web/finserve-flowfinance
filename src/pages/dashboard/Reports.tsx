@@ -1,19 +1,39 @@
 import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
 import {
   EmptyState,
   Money,
   PageHeader,
   RowSkeleton,
   SectionTitle,
+  StatCard,
   StatusChip,
   formatDate,
 } from "@/components/fs/primitives";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
+import { LOAN_STATUSES } from "@/lib/finance/types";
 import { cn } from "@/lib/utils";
 import { useQuery } from "convex/react";
-import { Download, FileBarChart } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Download, FileBarChart, Search, UserSearch } from "lucide-react";
+import { useMemo, useState, type FormEvent } from "react";
 import { toast } from "sonner";
+import ReportClient from "./ReportClient";
+
+/* ---------------------------------------------------------------------------
+ * Reports — four report categories over the real database:
+ *   Overview    portfolio metrics (clients, loans, repayments, dues)
+ *   Transactions ledger-derived transaction report (pre-existing engine)
+ *   Clients      authorized client list + Client ID search → full report
+ *   Staff        staff-wise and branch-manager-wise reports with filters
+ * Every figure comes from authenticated Convex queries with backend scoping.
+ * --------------------------------------------------------------------------- */
 
 const TYPES = [
   { id: "ALL", label: "All" },
@@ -31,21 +51,42 @@ const MODES = [
   { id: "BANK", label: "Bank" },
 ] as const;
 
+const COLL_STATUSES = [
+  { id: "", label: "Any status" },
+  { id: "NORMAL", label: "Normal" },
+  { id: "REVERSED", label: "Reversed" },
+  { id: "REVERSAL", label: "Reversal" },
+] as const;
+
 function isoDaysAgo(days: number): string {
   return new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
 }
 
+/** Safe day timestamp — falls back when a date input is cleared/partial. */
+function dayTs(iso: string, fallbackDaysAgo = 30): number {
+  const t = new Date(iso).getTime();
+  return Number.isFinite(t) ? t : Date.now() - fallbackDaysAgo * 86_400_000;
+}
+
+const selectCls =
+  "h-10 w-full border-2 border-ink bg-white px-2 text-xs font-black uppercase outline-none";
+
 export default function Reports() {
+  const [tab, setTab] = useState("overview");
+
+  /* ------------------------------ transactions ---------------------------- */
   const [type, setType] = useState<(typeof TYPES)[number]["id"]>("ALL");
   const [mode, setMode] = useState<string>("");
+  const [collStatus, setCollStatus] = useState<string>("");
   const [from, setFrom] = useState(() => isoDaysAgo(30));
   const [to, setTo] = useState(() => new Date().toISOString().slice(0, 10));
 
   const report = useQuery(api.reports.run, {
     type,
     mode: mode || undefined,
-    dateFrom: new Date(from).getTime(),
-    dateTo: new Date(to).getTime(),
+    status: collStatus || undefined,
+    dateFrom: dayTs(from),
+    dateTo: dayTs(to, 0),
     limit: 300,
   });
 
@@ -85,6 +126,50 @@ export default function Reports() {
     toast.success("CSV downloaded");
   };
 
+  /* -------------------------------- overview ------------------------------ */
+  const overview = useQuery(api.reports.overview, {});
+  const upcoming = useQuery(api.reports.upcoming, {});
+
+  /* -------------------------------- clients ------------------------------- */
+  const [clientSearch, setClientSearch] = useState("");
+  const [clientQuery, setClientQuery] = useState("");
+  const [selectedClientId, setSelectedClientId] = useState<Id<"clients"> | null>(null);
+  const clientList = useQuery(api.clients.list, {
+    search: clientQuery.trim() || undefined,
+    limit: 50,
+  });
+
+  const searchClients = (e: FormEvent) => {
+    e.preventDefault();
+    setClientQuery(clientSearch.trim());
+  };
+
+  /* ------------------------------ staff & branch -------------------------- */
+  const [staffFrom, setStaffFrom] = useState(() => isoDaysAgo(30));
+  const [staffTo, setStaffTo] = useState(() => new Date().toISOString().slice(0, 10));
+  const [staffFilter, setStaffFilter] = useState("");
+  const [managerFilter, setManagerFilter] = useState("");
+  const [branchFilter, setBranchFilter] = useState("");
+  const [loanStatus, setLoanStatus] = useState("ALL");
+
+  const staffReport = useQuery(api.reports.staffReport, {
+    dateFrom: dayTs(staffFrom),
+    dateTo: dayTs(staffTo, 0),
+    staffId: (staffFilter || undefined) as Id<"profiles"> | undefined,
+    managerId: (managerFilter || undefined) as Id<"profiles"> | undefined,
+    branchId: (branchFilter || undefined) as Id<"branches"> | undefined,
+    loanStatus,
+  });
+
+  const drillClients = useQuery(
+    api.clients.list,
+    staffFilter ? { staffId: staffFilter as Id<"profiles">, limit: 25 } : "skip",
+  );
+  const drillLoans = useQuery(
+    api.loans.list,
+    staffFilter ? { staffId: staffFilter as Id<"profiles">, limit: 25 } : "skip",
+  );
+
   return (
     <div className="space-y-4 pb-10">
       <PageHeader
@@ -97,160 +182,734 @@ export default function Reports() {
         }
       />
 
-      {/* Range */}
-      <div className="grid grid-cols-2 gap-2">
-        <div className="space-y-1">
-          <label className="text-[10px] font-black uppercase text-muted-foreground">From</label>
-          <input
-            type="date"
-            value={from}
-            max={to}
-            onChange={(e) => setFrom(e.target.value)}
-            className="h-11 w-full border-2 border-ink bg-white px-2 text-sm font-bold outline-none"
-          />
-        </div>
-        <div className="space-y-1">
-          <label className="text-[10px] font-black uppercase text-muted-foreground">To</label>
-          <input
-            type="date"
-            value={to}
-            min={from}
-            onChange={(e) => setTo(e.target.value)}
-            className="h-11 w-full border-2 border-ink bg-white px-2 text-sm font-bold outline-none"
-          />
-        </div>
-      </div>
+      <Tabs value={tab} onValueChange={setTab}>
+        <TabsList className="h-auto w-full flex-wrap border-2 border-ink bg-white p-1">
+          <TabsTrigger value="overview" className="flex-1 text-xs font-black uppercase">
+            Overview
+          </TabsTrigger>
+          <TabsTrigger value="transactions" className="flex-1 text-xs font-black uppercase">
+            Transactions
+          </TabsTrigger>
+          <TabsTrigger value="clients" className="flex-1 text-xs font-black uppercase">
+            Clients
+          </TabsTrigger>
+          <TabsTrigger value="staff" className="flex-1 text-xs font-black uppercase">
+            Staff & branch
+          </TabsTrigger>
+        </TabsList>
 
-      {/* Type / mode chips */}
-      <div className="flex flex-wrap gap-1.5">
-        {TYPES.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setType(t.id)}
-            className={cn(
-              "border-2 border-ink px-2.5 py-1.5 text-[11px] font-black uppercase",
-              type === t.id ? "bg-navy text-paper shadow-hard-sm" : "bg-white",
-            )}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-      <div className="flex flex-wrap gap-1.5">
-        {MODES.map((m) => (
-          <button
-            key={m.id}
-            onClick={() => setMode(m.id)}
-            className={cn(
-              "border-2 border-ink px-2.5 py-1.5 text-[11px] font-black uppercase",
-              mode === m.id ? "bg-royal text-white shadow-hard-sm" : "bg-white",
-            )}
-          >
-            {m.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Totals */}
-      {report === undefined ? (
-        <RowSkeleton rows={3} />
-      ) : (
-        <>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <div className="border-2 border-ink bg-mint p-3 shadow-hard-sm">
-              <div className="text-[10px] font-black uppercase text-muted-foreground">
-                Collected
-              </div>
-              <Money value={totals?.collected ?? 0} className="text-xl" />
-              <div className="text-[10px] font-bold text-muted-foreground">
-                {report.range.fromKey} → {report.range.toKey}
-              </div>
-            </div>
-            <div className="border-2 border-ink bg-sky p-3 shadow-hard-sm">
-              <div className="text-[10px] font-black uppercase text-muted-foreground">
-                Cash / UPI / Bank
-              </div>
-              <div className="text-xs font-black">
-                ₹{(totals?.cashCollected ?? 0).toLocaleString("en-IN")} / ₹
-                {(totals?.upiCollected ?? 0).toLocaleString("en-IN")} / ₹
-                {(totals?.bankCollected ?? 0).toLocaleString("en-IN")}
-              </div>
-            </div>
-            <div className="border-2 border-ink bg-gold p-3 shadow-hard-sm">
-              <div className="text-[10px] font-black uppercase text-muted-foreground">
-                Disbursed
-              </div>
-              <Money value={totals?.disbursed ?? 0} className="text-xl" />
-            </div>
-            <div className="border-2 border-ink bg-card p-3 shadow-hard-sm">
-              <div className="text-[10px] font-black uppercase text-muted-foreground">
-                Closing wallet
-              </div>
-              <Money value={totals?.closingWallet ?? 0} className="text-xl" />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-3 gap-2">
-            <div className="border-2 border-ink bg-white p-2.5 shadow-hard-sm text-center">
-              <div className="text-[10px] font-black uppercase text-muted-foreground">
-                Handover in
-              </div>
-              <Money value={totals?.handoverIn ?? 0} className="text-sm" />
-            </div>
-            <div className="border-2 border-ink bg-white p-2.5 shadow-hard-sm text-center">
-              <div className="text-[10px] font-black uppercase text-muted-foreground">
-                Handover out
-              </div>
-              <Money value={totals?.handoverOut ?? 0} className="text-sm" />
-            </div>
-            <div className="border-2 border-ink bg-white p-2.5 shadow-hard-sm text-center">
-              <div className="text-[10px] font-black uppercase text-muted-foreground">
-                Expenses
-              </div>
-              <Money value={totals?.expenses ?? 0} className="text-sm" />
-            </div>
-          </div>
-
-          {/* Rows */}
-          <SectionTitle>{totals?.rowCount ?? 0} transactions</SectionTitle>
-          {report.rows.length === 0 ? (
-            <EmptyState
-              title="Nothing in this range"
-              hint="Widen the date range or switch the filters."
-              icon={<FileBarChart className="size-5" />}
-            />
+        {/* ----------------------------- OVERVIEW -------------------------- */}
+        <TabsContent value="overview" className="mt-4 space-y-4">
+          {overview === undefined ? (
+            <RowSkeleton rows={4} />
           ) : (
-            <div className="flex flex-col gap-1.5">
-              {report.rows.map((r) => (
-                <div
-                  key={`${r.kind}-${r.id}`}
-                  className="flex items-center justify-between gap-3 border-2 border-ink bg-card px-3 py-2 shadow-hard-sm"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate text-xs font-black uppercase">{r.type}</p>
-                    <p className="truncate text-[11px] font-semibold text-muted-foreground">
-                      {r.party} · {r.reference} · {formatDate(r.date)}
-                    </p>
+            <>
+              <SectionTitle>Portfolio</SectionTitle>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <StatCard
+                  label="Total registered clients"
+                  value={overview.totalClients.toLocaleString("en-IN")}
+                />
+                <StatCard
+                  label="Total active loans"
+                  value={overview.activeLoans.toLocaleString("en-IN")}
+                  sub={`${overview.closedLoans} closed · ${overview.totalLoans} total`}
+                />
+                <StatCard
+                  label="Total loan amount disbursed"
+                  value={<Money value={overview.totalDisbursed} className="text-xl" />}
+                />
+                <StatCard
+                  label="Total repayments received"
+                  value={<Money value={overview.totalRepaid} className="text-xl" />}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <StatCard
+                  label="Outstanding loan balance"
+                  value={<Money value={overview.outstanding} className="text-xl" />}
+                />
+                <StatCard
+                  label="Instalments due (incl. overdue)"
+                  value={overview.instalmentsDue.toLocaleString("en-IN")}
+                  sub={
+                    overview.dueAmount > 0 ? (
+                      <Money value={overview.dueAmount} className="text-xs" />
+                    ) : (
+                      "None due"
+                    )
+                  }
+                  tone="warn"
+                />
+                <StatCard
+                  label="Overdue instalments"
+                  value={overview.overdueInstalments.toLocaleString("en-IN")}
+                  sub={
+                    overview.overdueAmount > 0 ? (
+                      <Money value={overview.overdueAmount} className="text-xs" />
+                    ) : (
+                      "None overdue"
+                    )
+                  }
+                  tone={overview.overdueInstalments > 0 ? "bad" : "idle"}
+                />
+                <StatCard
+                  label="Next instalment due"
+                  value={
+                    overview.nextDueDate ? formatDate(overview.nextDueDate) : "—"
+                  }
+                  sub={
+                    overview.nextDueAmount !== null ? (
+                      <Money value={overview.nextDueAmount} className="text-xs" />
+                    ) : (
+                      "No open instalment"
+                    )
+                  }
+                />
+              </div>
+              <p className="text-[11px] font-semibold text-muted-foreground">
+                Figures cover your authorized scope only — field staff see their
+                own clients and loans, branch managers see their branch, admins
+                and accountants see the organization. Counts and balances are
+                derived from the same loan, schedule and collection records the
+                rest of the app uses.
+              </p>
+
+              <SectionTitle>Upcoming due dates — next 30 days</SectionTitle>
+              {upcoming === undefined ? (
+                <RowSkeleton rows={3} />
+              ) : upcoming.rows.length === 0 ? (
+                <EmptyState
+                  title="No instalments due in the next 30 days"
+                  hint="No open schedule rows fall in this window for your scope."
+                />
+              ) : (
+                <>
+                  <p className="text-[11px] font-semibold text-muted-foreground">
+                    {upcoming.totalCount} open instalment
+                    {upcoming.totalCount === 1 ? "" : "s"} ·{" "}
+                    <Money value={upcoming.totalAmount} className="text-[11px]" /> ·{" "}
+                    {upcoming.weeklyCount} weekly — dates are the stored
+                    schedule dates, never assumed.
+                  </p>
+                  <div className="flex flex-col gap-1.5">
+                    {upcoming.rows.slice(0, 50).map((r) => (
+                      <div
+                        key={r.scheduleId}
+                        className="flex items-center justify-between gap-3 border-2 border-ink bg-card px-3 py-2 shadow-hard-sm"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-xs font-black">
+                            <span className="font-mono">{r.clientCode}</span> · {r.clientName}
+                          </p>
+                          <p className="truncate text-[11px] font-semibold text-muted-foreground">
+                            {formatDate(r.dueDate)} · {r.loanId} · instalment #{""}
+                            {r.index} · {r.frequency.toLowerCase()} · {r.staffName}
+                          </p>
+                        </div>
+                        <div className="shrink-0 text-right">
+                          <Money value={r.amount} className="block text-sm" />
+                          <StatusChip status={r.status} />
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                  <div className="shrink-0 text-right">
-                    <Money
-                      value={r.amount}
-                      className={cn(
-                        "block text-sm",
-                        r.direction === "IN" && "text-success",
-                        r.direction === "OUT" && "text-destructive",
-                      )}
-                    />
-                    <span className="flex justify-end">
-                      <StatusChip status={r.status} />
-                    </span>
+                  {upcoming.rows.length > 50 && (
+                    <p className="text-[11px] font-semibold text-muted-foreground">
+                      Showing 50 of {upcoming.totalCount} upcoming instalments —
+                      open a client report for the full schedule.
+                    </p>
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </TabsContent>
+
+        {/* --------------------------- TRANSACTIONS ------------------------ */}
+        <TabsContent value="transactions" className="mt-4 space-y-4">
+          {/* Range */}
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1">
+              <label className="text-[10px] font-black uppercase text-muted-foreground">From</label>
+              <input
+                type="date"
+                value={from}
+                max={to}
+                onChange={(e) => setFrom(e.target.value)}
+                className="h-11 w-full border-2 border-ink bg-white px-2 text-sm font-bold outline-none"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-[10px] font-black uppercase text-muted-foreground">To</label>
+              <input
+                type="date"
+                value={to}
+                min={from}
+                onChange={(e) => setTo(e.target.value)}
+                className="h-11 w-full border-2 border-ink bg-white px-2 text-sm font-bold outline-none"
+              />
+            </div>
+          </div>
+
+          {/* Type / mode chips */}
+          <div className="flex flex-wrap gap-1.5">
+            {TYPES.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => setType(t.id)}
+                className={cn(
+                  "border-2 border-ink px-2.5 py-1.5 text-[11px] font-black uppercase",
+                  type === t.id ? "bg-navy text-paper shadow-hard-sm" : "bg-white",
+                )}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {MODES.map((m) => (
+              <button
+                key={m.id}
+                onClick={() => setMode(m.id)}
+                className={cn(
+                  "border-2 border-ink px-2.5 py-1.5 text-[11px] font-black uppercase",
+                  mode === m.id ? "bg-royal text-white shadow-hard-sm" : "bg-white",
+                )}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[10px] font-black uppercase text-muted-foreground">
+              Collection status
+            </span>
+            {COLL_STATUSES.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => setCollStatus(s.id)}
+                className={cn(
+                  "border-2 border-ink px-2.5 py-1.5 text-[11px] font-black uppercase",
+                  collStatus === s.id ? "bg-ink text-paper shadow-hard-sm" : "bg-white",
+                )}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Totals */}
+          {report === undefined ? (
+            <RowSkeleton rows={3} />
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <div className="border-2 border-ink bg-mint p-3 shadow-hard-sm">
+                  <div className="text-[10px] font-black uppercase text-muted-foreground">
+                    Collected
+                  </div>
+                  <Money value={totals?.collected ?? 0} className="text-xl" />
+                  <div className="text-[10px] font-bold text-muted-foreground">
+                    {report.range.fromKey} → {report.range.toKey}
                   </div>
                 </div>
-              ))}
+                <div className="border-2 border-ink bg-sky p-3 shadow-hard-sm">
+                  <div className="text-[10px] font-black uppercase text-muted-foreground">
+                    Cash / UPI / Bank
+                  </div>
+                  <div className="text-xs font-black">
+                    ₹{(totals?.cashCollected ?? 0).toLocaleString("en-IN")} / ₹
+                    {(totals?.upiCollected ?? 0).toLocaleString("en-IN")} / ₹
+                    {(totals?.bankCollected ?? 0).toLocaleString("en-IN")}
+                  </div>
+                </div>
+                <div className="border-2 border-ink bg-gold p-3 shadow-hard-sm">
+                  <div className="text-[10px] font-black uppercase text-muted-foreground">
+                    Disbursed
+                  </div>
+                  <Money value={totals?.disbursed ?? 0} className="text-xl" />
+                </div>
+                <div className="border-2 border-ink bg-card p-3 shadow-hard-sm">
+                  <div className="text-[10px] font-black uppercase text-muted-foreground">
+                    Closing wallet
+                  </div>
+                  <Money value={totals?.closingWallet ?? 0} className="text-xl" />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2">
+                <div className="border-2 border-ink bg-white p-2.5 shadow-hard-sm text-center">
+                  <div className="text-[10px] font-black uppercase text-muted-foreground">
+                    Handover in
+                  </div>
+                  <Money value={totals?.handoverIn ?? 0} className="text-sm" />
+                </div>
+                <div className="border-2 border-ink bg-white p-2.5 shadow-hard-sm text-center">
+                  <div className="text-[10px] font-black uppercase text-muted-foreground">
+                    Handover out
+                  </div>
+                  <Money value={totals?.handoverOut ?? 0} className="text-sm" />
+                </div>
+                <div className="border-2 border-ink bg-white p-2.5 shadow-hard-sm text-center">
+                  <div className="text-[10px] font-black uppercase text-muted-foreground">
+                    Expenses
+                  </div>
+                  <Money value={totals?.expenses ?? 0} className="text-sm" />
+                </div>
+              </div>
+
+              {/* Rows */}
+              <SectionTitle>{totals?.rowCount ?? 0} transactions</SectionTitle>
+              {report.rows.length === 0 ? (
+                <EmptyState
+                  title="Nothing in this range"
+                  hint="Widen the date range or switch the filters."
+                  icon={<FileBarChart className="size-5" />}
+                />
+              ) : (
+                <div className="flex flex-col gap-1.5">
+                  {report.rows.map((r) => (
+                    <div
+                      key={`${r.kind}-${r.id}`}
+                      className="flex items-center justify-between gap-3 border-2 border-ink bg-card px-3 py-2 shadow-hard-sm"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-xs font-black uppercase">{r.type}</p>
+                        <p className="truncate text-[11px] font-semibold text-muted-foreground">
+                          {r.party} · {r.reference} · {formatDate(r.date)}
+                        </p>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <Money
+                          value={r.amount}
+                          className={cn(
+                            "block text-sm",
+                            r.direction === "IN" && "text-success",
+                            r.direction === "OUT" && "text-destructive",
+                          )}
+                        />
+                        <span className="flex justify-end">
+                          <StatusChip status={r.status} />
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </TabsContent>
+
+        {/* ------------------------------ CLIENTS -------------------------- */}
+        <TabsContent value="clients" className="mt-4 space-y-4">
+          {selectedClientId ? (
+            <ReportClient
+              clientId={selectedClientId}
+              onBack={() => setSelectedClientId(null)}
+            />
+          ) : (
+            <>
+              <form onSubmit={searchClients} className="flex gap-2">
+                <Input
+                  value={clientSearch}
+                  onChange={(e) => setClientSearch(e.target.value)}
+                  placeholder="Client ID (C-000123), name or mobile"
+                  aria-label="Search by client ID, name or mobile"
+                  className="h-11 border-2 border-ink font-mono"
+                />
+                <Button type="submit" size="lg" aria-label="Search clients">
+                  <Search className="size-4" /> Search
+                </Button>
+              </form>
+
+              {clientQuery && (
+                <p className="text-[11px] font-black uppercase text-muted-foreground">
+                  Results for “{clientQuery}”
+                </p>
+              )}
+
+              {clientList === undefined ? (
+                <RowSkeleton rows={5} />
+              ) : clientList.length === 0 ? (
+                clientQuery ? (
+                  <EmptyState
+                    title="Client not found"
+                    hint={`No client matches “${clientQuery}”. Check the Client ID and try again. Searching never changes client records.`}
+                    icon={<UserSearch className="size-5" />}
+                  />
+                ) : (
+                  <EmptyState
+                    title="No clients"
+                    hint="No clients are visible in your authorization scope yet."
+                    icon={<UserSearch className="size-5" />}
+                  />
+                )
+              ) : (
+                <div className="flex flex-col gap-1.5">
+                  {clientList.map((c) => (
+                    <button
+                      key={c._id}
+                      onClick={() => setSelectedClientId(c._id)}
+                      className="flex items-center justify-between gap-3 border-2 border-ink bg-card px-3 py-2 text-left shadow-hard-sm transition-colors hover:bg-gold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-black">
+                          <span className="font-mono">{c.code}</span> · {c.name}
+                        </p>
+                        <p className="truncate text-[11px] font-semibold text-muted-foreground">
+                          {c.mobile} · staff: {c.staffName}
+                          {c.activeLoans > 0 ? ` · ${c.activeLoans} active loan(s)` : ""}
+                        </p>
+                      </div>
+                      <StatusChip status={c.kycStatus} className="shrink-0" />
+                    </button>
+                  ))}
+                </div>
+              )}
+              {clientList && clientList.length > 0 && (
+                <p className="text-[11px] font-semibold text-muted-foreground">
+                  Showing {clientList.length} of your authorized clients —
+                  open one for the complete report (profile, history, loans,
+                  schedules, repayments and position).
+                </p>
+              )}
+            </>
+          )}
+        </TabsContent>
+
+        {/* --------------------------- STAFF & BRANCH ---------------------- */}
+        <TabsContent value="staff" className="mt-4 space-y-4">
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1">
+              <label className="text-[10px] font-black uppercase text-muted-foreground">From</label>
+              <input
+                type="date"
+                value={staffFrom}
+                max={staffTo}
+                onChange={(e) => setStaffFrom(e.target.value)}
+                className="h-11 w-full border-2 border-ink bg-white px-2 text-sm font-bold outline-none"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-[10px] font-black uppercase text-muted-foreground">To</label>
+              <input
+                type="date"
+                value={staffTo}
+                min={staffFrom}
+                onChange={(e) => setStaffTo(e.target.value)}
+                className="h-11 w-full border-2 border-ink bg-white px-2 text-sm font-bold outline-none"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <div className="space-y-1">
+              <label className="text-[10px] font-black uppercase text-muted-foreground">
+                Staff member
+              </label>
+              <select
+                className={selectCls}
+                value={staffFilter}
+                onChange={(e) => setStaffFilter(e.target.value)}
+              >
+                <option value="">All staff</option>
+                {staffReport?.staffOptions.map((s) => (
+                  <option key={s.profileId} value={s.profileId}>
+                    {s.name} ({s.systemId})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-[10px] font-black uppercase text-muted-foreground">
+                Branch manager
+              </label>
+              <select
+                className={selectCls}
+                value={managerFilter}
+                onChange={(e) => setManagerFilter(e.target.value)}
+              >
+                <option value="">All managers</option>
+                {staffReport?.managerOptions.map((s) => (
+                  <option key={s.profileId} value={s.profileId}>
+                    {s.name} ({s.systemId})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-[10px] font-black uppercase text-muted-foreground">
+                Loan status
+              </label>
+              <select
+                className={selectCls}
+                value={loanStatus}
+                onChange={(e) => setLoanStatus(e.target.value)}
+              >
+                <option value="ALL">All statuses</option>
+                {LOAN_STATUSES.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          {(staffReport?.branchOptions.length ?? 0) > 1 && (
+            <div className="space-y-1">
+              <label className="text-[10px] font-black uppercase text-muted-foreground">
+                Branch
+              </label>
+              <select
+                className={cn(selectCls, "max-w-xs")}
+                value={branchFilter}
+                onChange={(e) => setBranchFilter(e.target.value)}
+              >
+                <option value="">All branches</option>
+                {staffReport?.branchOptions.map((b) => (
+                  <option key={b.branchId} value={b.branchId}>
+                    {b.name}
+                  </option>
+                ))}
+              </select>
             </div>
           )}
-        </>
-      )}
+
+          {staffReport === undefined ? (
+            <RowSkeleton rows={5} />
+          ) : (
+            <>
+              {/* Staff-wise report */}
+              <SectionTitle>Staff-wise report</SectionTitle>
+              {staffReport.staffRows.length === 0 ? (
+                <EmptyState
+                  title="No staff in scope"
+                  hint="No staff members match your filters and authorization scope."
+                />
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full border-collapse">
+                    <thead>
+                      <tr>
+                        {["Staff", "System ID", "Branch", "Registered", "Assigned", "Loans", "Disbursed", "Collected"].map((h) => (
+                          <th
+                            key={h}
+                            className="border-2 border-ink bg-muted px-2 py-1.5 text-left text-[10px] font-black uppercase"
+                          >
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {staffReport.staffRows.map((r) => (
+                        <tr
+                          key={r.profileId}
+                          className={cn(
+                            "cursor-pointer transition-colors hover:bg-gold/40",
+                            staffFilter === r.profileId && "bg-gold/60",
+                          )}
+                          onClick={() =>
+                            setStaffFilter((cur) => (cur === r.profileId ? "" : r.profileId))
+                          }
+                        >
+                          <td className="border-2 border-ink px-2 py-1.5 text-xs font-black">
+                            {r.name}
+                          </td>
+                          <td className="border-2 border-ink px-2 py-1.5 font-mono text-xs">
+                            {r.systemId}
+                          </td>
+                          <td className="border-2 border-ink px-2 py-1.5 text-xs font-semibold">
+                            {r.branchName}
+                          </td>
+                          <td className="border-2 border-ink px-2 py-1.5 text-xs font-bold">
+                            {r.clientsRegistered}
+                          </td>
+                          <td className="border-2 border-ink px-2 py-1.5 text-xs font-bold">
+                            {r.clientsAssigned}
+                          </td>
+                          <td className="border-2 border-ink px-2 py-1.5 text-xs font-bold">
+                            {r.loans}{" "}
+                            <span className="text-muted-foreground">({r.activeLoans} act.)</span>
+                          </td>
+                          <td className="border-2 border-ink px-2 py-1.5">
+                            <Money value={r.disbursedAmount} className="text-xs" />
+                          </td>
+                          <td className="border-2 border-ink px-2 py-1.5">
+                            <Money value={r.repaymentsCollected} className="text-xs" />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              <p className="text-[11px] font-semibold text-muted-foreground">
+                Registered = clients created by the staff member in range ·
+                Assigned = clients currently assigned · Loans / Disbursed are
+                attributed from the loan record (staff & disbursement date) ·
+                Collected = repayments they collected in range (NORMAL only).
+                Click a row to drill down.
+              </p>
+
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                <StatCard
+                  label="Staff registered clients"
+                  value={staffReport.totals.staff.registeredClients}
+                />
+                <StatCard
+                  label="Staff assigned clients"
+                  value={staffReport.totals.staff.assignedClients}
+                />
+                <StatCard
+                  label="Staff loans"
+                  value={staffReport.totals.staff.loans}
+                />
+                <StatCard
+                  label="Staff disbursed"
+                  value={<Money value={staffReport.totals.staff.disbursed} className="text-base" />}
+                />
+                <StatCard
+                  label="Staff collected"
+                  value={<Money value={staffReport.totals.staff.collected} className="text-base" />}
+                />
+              </div>
+
+              {/* Drill-down for the selected staff member */}
+              {staffFilter && (
+                <>
+                  <SectionTitle>
+                    {staffReport.staffRows[0]?.name ?? "Staff"} — assigned clients & loans
+                  </SectionTitle>
+                  {drillClients === undefined ? (
+                    <RowSkeleton rows={3} />
+                  ) : drillClients.length === 0 ? (
+                    <EmptyState title="No assigned clients" hint="This staff member has no clients assigned." />
+                  ) : (
+                    <div className="flex flex-col gap-1.5">
+                      {drillClients.map((c) => (
+                        <button
+                          key={c._id}
+                          onClick={() => {
+                            setTab("clients");
+                            setSelectedClientId(c._id);
+                          }}
+                          className="flex items-center justify-between gap-3 border-2 border-ink bg-card px-3 py-2 text-left shadow-hard-sm transition-colors hover:bg-gold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink"
+                        >
+                          <span className="min-w-0 truncate text-xs font-black">
+                            <span className="font-mono">{c.code}</span> · {c.name} · {c.mobile}
+                          </span>
+                          <span className="shrink-0 text-[11px] font-bold text-muted-foreground">
+                            {formatDate(c.createdAt)}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {drillLoans !== undefined && (
+                    <div className="flex flex-col gap-1.5">
+                      {drillLoans.length === 0 ? (
+                        <p className="text-xs font-semibold text-muted-foreground">
+                          No loans recorded for this staff member.
+                        </p>
+                      ) : (
+                        drillLoans.map((l) => (
+                          <div
+                            key={l.loan._id}
+                            className="flex items-center justify-between gap-3 border-2 border-ink bg-card px-3 py-2 shadow-hard-sm"
+                          >
+                            <span className="min-w-0 truncate text-xs font-black">
+                              <span className="font-mono">{l.loan.loanId}</span> ·{" "}
+                              {l.client?.name ?? "—"}
+                            </span>
+                            <span className="flex shrink-0 items-center gap-2">
+                              <Money value={l.loan.principal} className="text-xs" />
+                              <StatusChip status={l.loan.status} />
+                            </span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* Branch-manager-wise report */}
+              <SectionTitle>Branch-manager-wise report</SectionTitle>
+              {staffReport.managerRows.length === 0 ? (
+                <EmptyState
+                  title="No branch managers in scope"
+                  hint="No branch managers match your filters and authorization scope."
+                />
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full border-collapse">
+                    <thead>
+                      <tr>
+                        {["Manager", "System ID", "Branch", "Clients", "Loans", "Disbursed", "Collected"].map((h) => (
+                          <th
+                            key={h}
+                            className="border-2 border-ink bg-muted px-2 py-1.5 text-left text-[10px] font-black uppercase"
+                          >
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {staffReport.managerRows.map((r) => (
+                        <tr key={r.profileId}>
+                          <td className="border-2 border-ink px-2 py-1.5 text-xs font-black">
+                            {r.name}
+                          </td>
+                          <td className="border-2 border-ink px-2 py-1.5 font-mono text-xs">
+                            {r.systemId}
+                          </td>
+                          <td className="border-2 border-ink px-2 py-1.5 text-xs font-semibold">
+                            {r.branchName}
+                          </td>
+                          <td className="border-2 border-ink px-2 py-1.5 text-xs font-bold">
+                            {r.clients}
+                          </td>
+                          <td className="border-2 border-ink px-2 py-1.5 text-xs font-bold">
+                            {r.loans}{" "}
+                            <span className="text-muted-foreground">({r.activeLoans} act.)</span>
+                          </td>
+                          <td className="border-2 border-ink px-2 py-1.5">
+                            <Money value={r.disbursedAmount} className="text-xs" />
+                          </td>
+                          <td className="border-2 border-ink px-2 py-1.5">
+                            <Money value={r.repaymentsCollected} className="text-xs" />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              <p className="text-[11px] font-semibold text-muted-foreground">
+                Branch figures are whole-branch aggregates from the loan and
+                collection records — they already include that branch's staff
+                activity, so they are shown separately and never summed with
+                the staff totals above.
+              </p>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <StatCard label="Branch clients" value={staffReport.totals.branch.clients} />
+                <StatCard label="Branch loans" value={staffReport.totals.branch.loans} />
+                <StatCard
+                  label="Branch disbursed"
+                  value={<Money value={staffReport.totals.branch.disbursed} className="text-base" />}
+                />
+                <StatCard
+                  label="Branch collected"
+                  value={<Money value={staffReport.totals.branch.collected} className="text-base" />}
+                />
+              </div>
+            </>
+          )}
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

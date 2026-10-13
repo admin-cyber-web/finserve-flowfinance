@@ -286,6 +286,10 @@ const schema = defineSchema(
       storageId: v.optional(v.id("_storage")), // private Convex storage ref
       sizeBytes: v.optional(v.number()), // upload metadata (validated at create)
       mimeType: v.optional(v.string()),
+      // Co-applicant uploads: marks the row as belonging to the co-applicant
+      // block and records which KYC kind it is (AADHAAR | PAN | VOTER_ID | OTHER).
+      coApplicant: v.optional(v.boolean()),
+      docKind: v.optional(v.string()),
       verifiedBy: v.optional(v.id("profiles")),
       note: v.optional(v.string()),
       createdAt: v.number(),

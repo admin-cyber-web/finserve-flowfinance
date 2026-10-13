@@ -408,6 +408,436 @@ export const books = query({
   },
 });
 
+/**
+ * Portfolio overview — real counts and balances for the viewer's scope.
+ * Every figure is derived from the existing loan / schedule / collection
+ * records using the same business rules the rest of the app uses (NORMAL
+ * collections count as repaid; `dueDate < now` is overdue).
+ */
+export const overview = query({
+  args: {
+    branchId: v.optional(v.id("branches")),
+    staffId: v.optional(v.id("profiles")),
+  },
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx, { allowInactive: true });
+    requirePermission(me, "reports");
+    const now = Date.now();
+
+    const [clients, loans, schedules, collections] = await Promise.all([
+      ctx.db.query("clients").collect(),
+      ctx.db.query("loans").collect(),
+      ctx.db.query("loanSchedules").collect(),
+      ctx.db.query("collections").collect(),
+    ]);
+
+    // Scope: staff → own assigned clients + own loans; BM → branch;
+    // admin/accountant → org (or the explicit filter, if visible).
+    let scopedClients = clients;
+    let scopedLoans = loans;
+    if (me.role === "FIELD_STAFF") {
+      scopedClients = clients.filter((c) => c.assignedTo === me._id);
+      scopedLoans = loans.filter((l) => l.staffId === me._id);
+    } else if (me.role === "BRANCH_MANAGER") {
+      if (args.branchId && args.branchId !== me.branchId) {
+        throw new AppError("You can only view reports for your own branch.");
+      }
+      scopedClients = clients.filter((c) => c.branchId === me.branchId);
+      scopedLoans = loans.filter((l) => l.branchId === me.branchId);
+    } else if (me.role === "CLIENT") {
+      scopedClients = me.clientId
+        ? clients.filter((c) => c._id === me.clientId)
+        : [];
+      scopedLoans = me.clientId
+        ? loans.filter((l) => l.clientId === me.clientId)
+        : [];
+    }
+    if (args.branchId) {
+      scopedClients = scopedClients.filter((c) => c.branchId === args.branchId);
+      scopedLoans = scopedLoans.filter((l) => l.branchId === args.branchId);
+    }
+    if (args.staffId) {
+      if (me.role === "FIELD_STAFF" && args.staffId !== me._id) {
+        throw new AppError("You can only view your own report.");
+      }
+      scopedClients = scopedClients.filter((c) => c.assignedTo === args.staffId);
+      scopedLoans = scopedLoans.filter((l) => l.staffId === args.staffId);
+    }
+
+    const active = scopedLoans.filter((l) =>
+      ["ACTIVE", "OVERDUE"].includes(l.status),
+    );
+    const closed = scopedLoans.filter((l) => l.status === "CLOSED");
+    const activeIds = new Set(active.map((l) => l._id));
+    const scopeIds = new Set(scopedLoans.map((l) => l._id));
+
+    const totalDisbursed = scopedLoans
+      .filter((l) => l.disbursedAt)
+      .reduce((s, l) => s + l.principal, 0);
+    const outstanding = Math.round(
+      active.reduce((s, l) => s + l.outstanding, 0) * 100,
+    ) / 100;
+    // Repayments: NORMAL collections against this scope's loans (reversals
+    // and reversal collections are excluded — same rule as Client 360°).
+    const totalRepaid = Math.round(
+      collections
+        .filter((c) => scopeIds.has(c.loanId) && c.status === "NORMAL")
+        .reduce((s, c) => s + c.amount, 0) * 100,
+    ) / 100;
+
+    // Instalments — open rows of scoped loans. "Due" counts everything open
+    // that is due on or before now; "overdue" is the strictly past-due subset
+    // using the app's existing `dueDate < now` rule.
+    const scopeSchedules = schedules.filter((s) => scopeIds.has(s.loanId));
+    const open = scopeSchedules.filter((s) => s.paid < s.totalDue);
+    const dueRows = open.filter((s) => s.dueDate <= now);
+    const overdueRows = open.filter((s) => s.dueDate < now);
+    const sum = (rows: typeof open) =>
+      Math.round(rows.reduce((s, r) => s + (r.totalDue - r.paid), 0) * 100) / 100;
+    const nextDue = open
+      .filter((s) => s.dueDate >= now)
+      .sort((a, b) => a.dueDate - b.dueDate)[0] ?? null;
+
+    return {
+      totalClients: scopedClients.length,
+      activeLoans: active.length,
+      totalLoans: scopedLoans.length,
+      closedLoans: closed.length,
+      totalDisbursed: Math.round(totalDisbursed * 100) / 100,
+      totalRepaid,
+      outstanding,
+      instalmentsDue: dueRows.length,
+      dueAmount: sum(dueRows),
+      overdueInstalments: overdueRows.length,
+      overdueAmount: sum(overdueRows),
+      nextDueDate: nextDue?.dueDate ?? null,
+      nextDueAmount: nextDue ? Math.round((nextDue.totalDue - nextDue.paid) * 100) / 100 : null,
+      activeLoanIds: activeIds.size,
+    };
+  },
+});
+
+/**
+ * Staff-wise and branch-manager-wise report.
+ *
+ * Attribution comes only from fields the database actually records:
+ *   • clients.createdBy   → who registered the client
+ *   • clients.assignedTo  → who the client is assigned to now
+ *   • loans.staffId        → staff associated with the loan
+ *   • loans.disbursedAt    → disbursement date (disbursedBy for who did it)
+ *   • collections.staffId  → who collected the repayment
+ * Nothing is inferred or invented.
+ */
+export const staffReport = query({
+  args: {
+    dateFrom: v.optional(v.number()),
+    dateTo: v.optional(v.number()),
+    branchId: v.optional(v.id("branches")),
+    staffId: v.optional(v.id("profiles")),
+    managerId: v.optional(v.id("profiles")),
+    loanStatus: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx, { allowInactive: true });
+    requirePermission(me, "reports");
+    const now = Date.now();
+    const from = args.dateFrom ?? 0;
+    const to = (args.dateTo ?? now) + 86_399_999;
+    const inRange = (t: number | undefined) => t !== undefined && t >= from && t <= to;
+
+    // Branch scoping — a BM may only ever see their own branch, even when a
+    // branch filter is passed explicitly.
+    let branchFilter = args.branchId ?? null;
+    if (me.role === "BRANCH_MANAGER") {
+      if (!me.branchId) {
+        throw new AppError("Your profile has no branch assigned.");
+      }
+      if (branchFilter && branchFilter !== me.branchId) {
+        throw new AppError("You can only view reports for your own branch.");
+      }
+      branchFilter = me.branchId;
+    }
+    if (
+      me.role === "FIELD_STAFF" &&
+      ((args.branchId && args.branchId !== me.branchId) ||
+        (args.staffId && args.staffId !== me._id))
+    ) {
+      throw new AppError("You can only view your own report.");
+    }
+
+    const [clients, loans, collections, profiles, branches] = await Promise.all([
+      ctx.db.query("clients").collect(),
+      ctx.db.query("loans").collect(),
+      ctx.db.query("collections").collect(),
+      ctx.db.query("profiles").collect(),
+      ctx.db.query("branches").collect(),
+    ]);
+    const branchById = new Map(branches.map((b) => [b._id, b]));
+
+    // Who may this viewer see at all? Staff see only themselves; BMs see
+    // their own branch's people; admins/accountants see everyone.
+    let visible = profiles.filter(
+      (p) =>
+        p.status === "ACTIVE" &&
+        ["SUPER_ADMIN", "BRANCH_MANAGER", "FIELD_STAFF", "ACCOUNTANT"].includes(p.role),
+    );
+    if (me.role === "FIELD_STAFF") {
+      visible = visible.filter((p) => p._id === me._id);
+    } else if (me.role === "BRANCH_MANAGER") {
+      visible = visible.filter(
+        (p) => p.branchId === me.branchId || p._id === me._id,
+      );
+    }
+    if (branchFilter) visible = visible.filter((p) => p.branchId === branchFilter);
+
+    const optionOf = (p: Doc<"profiles">) => ({
+      profileId: p._id,
+      name: p.name,
+      role: p.role,
+      systemId: p.staffId,
+      branchName: p.branchId
+        ? (branchById.get(p.branchId)?.name ?? "—")
+        : "—",
+    });
+    const staffOptions = visible
+      .filter((p) => p.role === "FIELD_STAFF")
+      .map(optionOf)
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const managerOptions = visible
+      .filter((p) => p.role === "BRANCH_MANAGER")
+      .map(optionOf)
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const branchOptions = branches
+      .filter((b) =>
+        me.role === "BRANCH_MANAGER"
+          ? b._id === me.branchId
+          : !branchFilter || b._id === branchFilter,
+      )
+      .map((b) => ({ branchId: b._id, name: b.name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    const matches = (p: Doc<"profiles">) => {
+      if (p.role === "FIELD_STAFF" && args.staffId && p._id !== args.staffId) return false;
+      if (p.role === "BRANCH_MANAGER" && args.managerId && p._id !== args.managerId) return false;
+      return true;
+    };
+
+    // Pre-filter the underlying rows once per attribution source.
+    const clientsByCreator = new Map<string, number>();
+    const clientsByAssignee = new Map<string, number>();
+    for (const c of clients) {
+      if (branchFilter && c.branchId !== branchFilter) continue;
+      if (me.role === "BRANCH_MANAGER" && c.branchId !== me.branchId) continue;
+      if (me.role === "FIELD_STAFF" && c.assignedTo !== me._id && c.createdBy !== me._id)
+        continue;
+      if (inRange(c.createdAt)) {
+        clientsByCreator.set(c.createdBy, (clientsByCreator.get(c.createdBy) ?? 0) + 1);
+      }
+      clientsByAssignee.set(c.assignedTo, (clientsByAssignee.get(c.assignedTo) ?? 0) + 1);
+    }
+
+    const loanMatchesStatus = (l: Doc<"loans">) =>
+      !args.loanStatus || args.loanStatus === "ALL" || l.status === args.loanStatus;
+    const loansByStaff = new Map<string, Doc<"loans">[]>();
+    const branchLoans = new Map<string, Doc<"loans">[]>();
+    for (const l of loans) {
+      if (branchFilter && l.branchId !== branchFilter) continue;
+      if (me.role === "BRANCH_MANAGER" && l.branchId !== me.branchId) continue;
+      if (me.role === "FIELD_STAFF" && l.staffId !== me._id) continue;
+      if (!loanMatchesStatus(l)) continue;
+      const arr = loansByStaff.get(l.staffId) ?? [];
+      arr.push(l);
+      loansByStaff.set(l.staffId, arr);
+      const barr = branchLoans.get(l.branchId) ?? [];
+      barr.push(l);
+      branchLoans.set(l.branchId, barr);
+    }
+
+    const collectedByStaff = new Map<string, { amount: number; count: number }>();
+    const collectedByBranch = new Map<string, { amount: number; count: number }>();
+    for (const c of collections) {
+      if (!inRange(c.createdAt) || c.status !== "NORMAL") continue;
+      if (branchFilter && c.branchId !== branchFilter) continue;
+      if (me.role === "BRANCH_MANAGER" && c.branchId !== me.branchId) continue;
+      if (me.role === "FIELD_STAFF" && c.staffId !== me._id) continue;
+      const s = collectedByStaff.get(c.staffId) ?? { amount: 0, count: 0 };
+      s.amount += c.amount;
+      s.count += 1;
+      collectedByStaff.set(c.staffId, s);
+      const b = collectedByBranch.get(c.branchId) ?? { amount: 0, count: 0 };
+      b.amount += c.amount;
+      b.count += 1;
+      collectedByBranch.set(c.branchId, b);
+    }
+
+    const round = (n: number) => Math.round(n * 100) / 100;
+
+    const staffRows = visible
+      .filter((p) => p.role === "FIELD_STAFF" && matches(p))
+      .map((p) => {
+        const theirs = loansByStaff.get(p._id) ?? [];
+        const disbursed = theirs
+          .filter((l) => inRange(l.disbursedAt))
+          .reduce((s, l) => s + l.principal, 0);
+        const collected = collectedByStaff.get(p._id) ?? { amount: 0, count: 0 };
+        const activeLoans = theirs.filter((l) =>
+          ["ACTIVE", "OVERDUE"].includes(l.status),
+        );
+        return {
+          ...optionOf(p),
+          clientsRegistered: clientsByCreator.get(p._id) ?? 0,
+          clientsAssigned: clientsByAssignee.get(p._id) ?? 0,
+          loans: theirs.length,
+          activeLoans: activeLoans.length,
+          outstanding: round(activeLoans.reduce((s, l) => s + l.outstanding, 0)),
+          disbursedAmount: round(disbursed),
+          repaymentsCount: collected.count,
+          repaymentsCollected: round(collected.amount),
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    const managerRows = visible
+      .filter((p) => p.role === "BRANCH_MANAGER" && matches(p))
+      .map((p) => {
+        const branchId = p.branchId;
+        const branchLoanRows = branchId ? (branchLoans.get(branchId) ?? []) : [];
+        const disbursed = branchLoanRows
+          .filter((l) => inRange(l.disbursedAt))
+          .reduce((s, l) => s + l.principal, 0);
+        const collected = branchId
+          ? (collectedByBranch.get(branchId) ?? { amount: 0, count: 0 })
+          : { amount: 0, count: 0 };
+        const activeLoans = branchLoanRows.filter((l) =>
+          ["ACTIVE", "OVERDUE"].includes(l.status),
+        );
+        const branchClientCount = branchId
+          ? clients.filter((c) => c.branchId === branchId).length
+          : 0;
+        return {
+          ...optionOf(p),
+          branchId,
+          clients: branchClientCount,
+          clientsRegistered: clientsByCreator.get(p._id) ?? 0,
+          loans: branchLoanRows.length,
+          activeLoans: activeLoans.length,
+          outstanding: round(activeLoans.reduce((s, l) => s + l.outstanding, 0)),
+          disbursedAmount: round(disbursed),
+          repaymentsCount: collected.count,
+          repaymentsCollected: round(collected.amount),
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    return {
+      range: { from, to },
+      staffRows,
+      managerRows,
+      staffOptions,
+      managerOptions,
+      branchOptions,
+      totals: {
+        // Staff-wise and branch-wise figures are returned separately: a
+        // branch manager's totals already contain that branch's staff
+        // activity, so summing the two levels would double-count.
+        staff: {
+          registeredClients: staffRows.reduce((s, r) => s + r.clientsRegistered, 0),
+          assignedClients: staffRows.reduce((s, r) => s + r.clientsAssigned, 0),
+          loans: staffRows.reduce((s, r) => s + r.loans, 0),
+          disbursed: round(staffRows.reduce((s, r) => s + r.disbursedAmount, 0)),
+          collected: round(staffRows.reduce((s, r) => s + r.repaymentsCollected, 0)),
+        },
+        branch: {
+          clients: managerRows.reduce((s, r) => s + r.clients, 0),
+          loans: managerRows.reduce((s, r) => s + r.loans, 0),
+          disbursed: round(managerRows.reduce((s, r) => s + r.disbursedAmount, 0)),
+          collected: round(managerRows.reduce((s, r) => s + r.repaymentsCollected, 0)),
+        },
+      },
+    };
+  },
+});
+
+/**
+ * Upcoming instalment due dates — the stored repayment schedule only.
+ * Fixed 30-day window from now; rows are the real `loanSchedules` entries
+ * (actual weekly/fortnightly/monthly dates as recorded, never assumed).
+ */
+export const upcoming = query({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx, { allowInactive: true });
+    requirePermission(me, "reports");
+    const now = Date.now();
+    const from = now;
+    const to = now + 30 * 86_400_000;
+
+    const [loans, schedules, clients, profiles] = await Promise.all([
+      ctx.db.query("loans").collect(),
+      ctx.db.query("loanSchedules").collect(),
+      ctx.db.query("clients").collect(),
+      ctx.db.query("profiles").collect(),
+    ]);
+    const clientById = new Map(clients.map((c) => [c._id, c]));
+    const profileById = new Map(profiles.map((p) => [p._id, p]));
+
+    // Same scope rules as `overview`.
+    let scoped = loans.filter((l) => ["ACTIVE", "OVERDUE"].includes(l.status));
+    if (me.role === "FIELD_STAFF") {
+      scoped = scoped.filter((l) => l.staffId === me._id);
+    } else if (me.role === "BRANCH_MANAGER") {
+      scoped = scoped.filter((l) => l.branchId === me.branchId);
+    } else if (me.role === "CLIENT") {
+      scoped = me.clientId ? scoped.filter((l) => l.clientId === me.clientId) : [];
+    }
+    const loanById = new Map(scoped.map((l) => [l._id, l]));
+    const scopedIds = new Set(loanById.keys());
+
+    const matching = schedules
+      .filter(
+        (s) =>
+          scopedIds.has(s.loanId) &&
+          s.paid < s.totalDue &&
+          s.dueDate >= from &&
+          s.dueDate <= to,
+      )
+      .sort((a, b) => a.dueDate - b.dueDate);
+    const totalAmount = Math.round(
+      matching.reduce((s, r) => s + (r.totalDue - r.paid), 0) * 100,
+    ) / 100;
+    const weeklyCount = matching.filter(
+      (r) => loanById.get(r.loanId)?.frequency === "WEEKLY",
+    ).length;
+
+    const rows = matching.slice(0, args.limit ?? 200).map((r) => {
+      const loan = loanById.get(r.loanId)!;
+      const client = clientById.get(loan.clientId);
+      return {
+        scheduleId: r._id,
+        index: r.index,
+        dueDate: r.dueDate,
+        amount: Math.round((r.totalDue - r.paid) * 100) / 100,
+        principal: r.principal,
+        interest: r.interest,
+        status: r.status,
+        loanId: loan.loanId,
+        frequency: loan.frequency,
+        clientName: client?.name ?? "—",
+        clientCode: client?.code ?? "—",
+        staffName: profileById.get(loan.staffId)?.name ?? "—",
+      };
+    });
+
+    return {
+      window: { from, to },
+      rows,
+      totalCount: matching.length,
+      totalAmount,
+      weeklyCount,
+    };
+  },
+});
+
 /** Overdue / recovery book with ageing buckets. */
 export const overdue = query({
   args: { branchId: v.optional(v.id("branches")), bucket: v.optional(v.string()) },

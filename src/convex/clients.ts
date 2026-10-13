@@ -189,6 +189,21 @@ export const get = query({
 
     const profiles = await ctx.db.query("profiles").collect();
     const byId = new Map(profiles.map((p) => [p._id, p]));
+    const branches = await ctx.db.query("branches").collect();
+    const products = await ctx.db.query("loanProducts").collect();
+    const branch = branches.find((b) => b._id === client.branchId) ?? null;
+    const branchManager =
+      profiles.find(
+        (p) => p.role === "BRANCH_MANAGER" && p.branchId === client.branchId,
+      ) ?? null;
+    // Loan applications for this client — the source of "requested amount"
+    // and application dates (never conflated with approved/disbursed).
+    const applications = (
+      await ctx.db
+        .query("loanApplications")
+        .withIndex("by_client", (q) => q.eq("clientId", clientId))
+        .collect()
+    ).sort((a, b) => b.createdAt - a.createdAt);
 
     const active = loans.filter((l) => ["ACTIVE", "OVERDUE"].includes(l.status));
     const closed = loans.filter((l) => l.status === "CLOSED");
@@ -254,12 +269,27 @@ export const get = query({
       coApplicantPhotoUrl,
       assignedStaff: byId.get(client.assignedTo) ?? null,
       createdBy: byId.get(client.createdBy) ?? null,
+      branch,
+      branchManager,
+      applications,
       loans: loans.map((l) => ({
         loan: l,
         product: null,
         rows: schedules[l.loanId] ?? [],
+        staffName: byId.get(l.staffId)?.name ?? null,
+        productName: products.find((p) => p._id === l.productId)?.name ?? null,
+        approvedByName: l.approvedBy ? (byId.get(l.approvedBy)?.name ?? null) : null,
+        disbursedByName: l.disbursedBy ? (byId.get(l.disbursedBy)?.name ?? null) : null,
+        branchName: branches.find((b) => b._id === l.branchId)?.name ?? null,
+        branchManagerName:
+          profiles.find(
+            (p) => p.role === "BRANCH_MANAGER" && p.branchId === l.branchId,
+          )?.name ?? null,
       })),
-      payments,
+      payments: payments.map((p) => ({
+        ...p,
+        staffName: byId.get(p.staffId)?.name ?? null,
+      })),
       receipts,
       staffHistory: staffHistory.map((h) => ({
         ...h,
@@ -338,6 +368,18 @@ export const create = mutation({
         voterId: v.optional(v.string()),
         kycDocuments: v.optional(v.array(v.string())),
         photoStorageId: v.optional(v.id("_storage")),
+        // Supporting KYC files for the co-applicant (Aadhaar/PAN/Voter/Other),
+        // uploaded to private storage before this mutation runs and validated
+        // against storage metadata inside the handler.
+        documents: v.optional(
+          v.array(
+            v.object({
+              docKind: v.string(),
+              fileName: v.string(),
+              storageId: v.id("_storage"),
+            }),
+          ),
+        ),
       }),
     ),
     // Informational loan request — never creates a loan, approval or
@@ -917,8 +959,86 @@ export const create = mutation({
         storageId: args.coApplicant.photoStorageId,
         sizeBytes: coMeta.size,
         mimeType: coMeta.contentType,
+        coApplicant: true,
         createdAt: now,
       });
+    }
+
+    // ---- Optional co-applicant documents (Aadhaar/PAN/Voter/Other) -------
+    // Uploaded to private storage before this mutation ran; every file is
+    // re-validated against storage metadata (type + size + kind) so a direct
+    // backend call cannot smuggle in a bad file. On rejection ALL uploaded
+    // co-applicant files are deleted and the mutation rolls back (no client
+    // is created, no orphaned files remain).
+    const coDocArgs = (args.coApplicant?.documents ?? []).slice(0, 8);
+    let coDocCount = 0;
+    if (coDocArgs.length > 0) {
+      const MAX_CO_DOC_BYTES = 5 * 1024 * 1024;
+      const coDocTypes = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
+      const coDocKinds = ["AADHAAR", "PAN", "VOTER_ID", "OTHER"];
+      let coDocError: string | null = null;
+      const validatedCoDocs: {
+        docKind: string;
+        fileName: string;
+        storageId: Id<"_storage">;
+        sizeBytes: number;
+        mimeType: string;
+      }[] = [];
+      for (const d of coDocArgs) {
+        if (coDocError) break;
+        if (!coDocKinds.includes(d.docKind)) {
+          coDocError = "Co-applicant document type must be Aadhaar, PAN, Voter ID or Other.";
+          break;
+        }
+        let fileName: string;
+        try {
+          fileName = requiredString(d.fileName, "coApplicant.documents.fileName", 120);
+        } catch {
+          coDocError = "A co-applicant document has an invalid file name.";
+          break;
+        }
+        const coDocMeta = await ctx.db.system.get("_storage", d.storageId);
+        if (!coDocMeta) {
+          coDocError = "A co-applicant document file is missing — upload it again.";
+          break;
+        }
+        if (!coDocMeta.contentType || !coDocTypes.includes(coDocMeta.contentType)) {
+          coDocError = "Co-applicant documents must be JPEG, PNG, WebP or PDF files.";
+          break;
+        }
+        if (coDocMeta.size <= 0 || coDocMeta.size > MAX_CO_DOC_BYTES) {
+          coDocError =
+            `Co-applicant documents must be between 1 byte and ${Math.round(MAX_CO_DOC_BYTES / 1024 / 1024)} MB.`;
+          break;
+        }
+        validatedCoDocs.push({
+          docKind: d.docKind,
+          fileName,
+          storageId: d.storageId,
+          sizeBytes: coDocMeta.size,
+          mimeType: coDocMeta.contentType,
+        });
+      }
+      if (coDocError) {
+        for (const d of coDocArgs) await ctx.storage.delete(d.storageId);
+        throw new AppError(coDocError);
+      }
+      for (const d of validatedCoDocs) {
+        await ctx.db.insert("clientDocuments", {
+          clientId,
+          type: "KYC",
+          fileName: d.fileName,
+          status: "UPLOADED",
+          uploadedBy: me._id,
+          storageId: d.storageId,
+          sizeBytes: d.sizeBytes,
+          mimeType: d.mimeType,
+          coApplicant: true,
+          docKind: d.docKind,
+          createdAt: now,
+        });
+      }
+      coDocCount = validatedCoDocs.length;
     }
 
     await logAudit(ctx, {
@@ -961,6 +1081,7 @@ export const create = mutation({
         stampFileName,
         familyMembers: familyRows.length,
         hasCoApplicant: Boolean(coApplicant),
+        coApplicantDocs: coDocCount,
         hasLoanRequest: Boolean(loanRequest),
         hasBankAccount: Boolean(bankAccount),
         hasNominee: Boolean(nominee),

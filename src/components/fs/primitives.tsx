@@ -176,7 +176,7 @@ export function StatCard({
 }: {
   label: string;
   value: ReactNode;
-  sub?: string;
+  sub?: ReactNode;
   tone?: Tone;
   onClick?: () => void;
   className?: string;

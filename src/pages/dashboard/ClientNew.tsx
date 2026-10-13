@@ -20,6 +20,7 @@ import {
 import { useMutation } from "convex/react";
 import { useState, type ChangeEvent, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { useNavigate } from "react-router";
+import { Camera, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 /**
@@ -97,6 +98,15 @@ interface FamilyRow {
   occupation: string;
 }
 
+/** One co-applicant document row on the form (pre-submit). */
+interface CoDocRow {
+  key: string;
+  kind: string; // AADHAAR | PAN | VOTER_ID | OTHER
+  file: File;
+  status: "uploading" | "uploaded" | "error";
+  storageId?: Id<"_storage">;
+}
+
 const emptyFamilyRow = (): FamilyRow => ({
   name: "",
   age: "",
@@ -155,6 +165,11 @@ export default function ClientNew() {
     file: File;
     previewUrl: string;
   } | null>(null);
+  // Co-applicant supporting documents — uploaded as soon as they are picked so
+  // each row shows a real upload status; only uploaded files are saved with
+  // the application (never silently discarded).
+  const [coDocKind, setCoDocKind] = useState<string>("AADHAAR");
+  const [coDocs, setCoDocs] = useState<CoDocRow[]>([]);
 
   const [family, setFamily] = useState<FamilyRow[]>([
     emptyFamilyRow(),
@@ -254,6 +269,10 @@ export default function ClientNew() {
           (coAge === null || (coAge >= 18 && coAge <= 100)),
       );
 
+  // Every selected co-applicant document must have finished uploading — an
+  // in-flight or failed upload can never be silently dropped at submission.
+  const coDocsOk = coDocs.every((d) => d.status === "uploaded");
+
   // Loan request: optional, but internally consistent when started.
   const loanStarted = loan.amount.trim() !== "";
   const loanOk =
@@ -304,6 +323,7 @@ export default function ClientNew() {
     Number(biz.monthlyIncome || 0) >= 0 &&
     familyOk &&
     coOk &&
+    coDocsOk &&
     loanOk &&
     bankOk &&
     nomineeOk &&
@@ -328,6 +348,57 @@ export default function ClientNew() {
     setCoPhoto({ file, previewUrl: URL.createObjectURL(file) });
   };
 
+  /* --------------------------- co-applicant docs -------------------------- */
+
+  const CO_DOC_MAX_BYTES = 5 * 1024 * 1024;
+  const CO_DOC_TYPES = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
+
+  /** Uploads one co-applicant document to private storage, real status per row. */
+  const uploadCoDoc = async (key: string, file: File) => {
+    try {
+      const url = await getUploadUrl({});
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": file.type },
+        body: file,
+      });
+      if (!res.ok) throw new Error(`upload failed (${res.status})`);
+      const parsed = (await res.json()) as { storageId: string };
+      setCoDocs((cur) =>
+        cur.map((d) =>
+          d.key === key
+            ? { ...d, status: "uploaded", storageId: parsed.storageId as Id<"_storage"> }
+            : d,
+        ),
+      );
+    } catch {
+      setCoDocs((cur) =>
+        cur.map((d) => (d.key === key ? { ...d, status: "error" } : d)),
+      );
+      toast.error(`Upload failed for "${file.name}" — retry or remove it.`);
+    }
+  };
+
+  const onCoDoc = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (!CO_DOC_TYPES.includes(file.type)) {
+      toast.error("Co-applicant documents must be JPEG, PNG, WebP or PDF files.");
+      return;
+    }
+    if (file.size <= 0 || file.size > CO_DOC_MAX_BYTES) {
+      toast.error("Co-applicant document must be between 1 byte and 5 MB.");
+      return;
+    }
+    const key = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    setCoDocs((cur) => [...cur, { key, kind: coDocKind, file, status: "uploading" }]);
+    void uploadCoDoc(key, file);
+  };
+
+  const removeCoDoc = (key: string) =>
+    setCoDocs((cur) => cur.filter((d) => d.key !== key));
+
   const toggleKycDoc = (id: string, list: string[], setList: Dispatch<SetStateAction<string[]>>) =>
     setList((cur) =>
       cur.includes(id) ? cur.filter((d) => d !== id) : [...cur, id],
@@ -337,6 +408,18 @@ export default function ClientNew() {
 
   const submit = async () => {
     if (submitting) return;
+    if (coDocs.some((d) => d.status !== "uploaded")) {
+      toast.error(
+        "Co-applicant documents are still uploading — retry or remove any failed file.",
+      );
+      return;
+    }
+    if (coDocs.length > 0 && !(coEnabled && co.name.trim())) {
+      toast.error(
+        "Co-applicant documents were added — keep the co-applicant enabled, or remove the files.",
+      );
+      return;
+    }
     if (!valid || !photo || applicantAge === null) {
       toast.error(
         "Fill all required details — Aadhaar, declaration, and the applicant photo with GPS.",
@@ -427,6 +510,13 @@ export default function ClientNew() {
                   voterId: co.voterId.trim().toUpperCase() || undefined,
                   kycDocuments: coKycDocs.length > 0 ? coKycDocs : undefined,
                   photoStorageId: coPhotoStorageId,
+                  documents: coDocsOk
+                    ? coDocs.map((d) => ({
+                        docKind: d.kind,
+                        fileName: d.file.name,
+                        storageId: d.storageId as Id<"_storage">,
+                      }))
+                    : undefined,
                 }
               : undefined,
           loanRequest: loanStarted
@@ -852,18 +942,37 @@ export default function ClientNew() {
               </Field>
             </div>
 
-            {/* Co-applicant photo — optional camera capture. */}
-            <Field label="Co-applicant photo" hint="Optional · JPEG/PNG/WebP · max 5 MB">
+            {/* Co-applicant photo — camera capture with file-upload fallback. */}
+            <Field
+              label="Co-applicant photo"
+              hint="Optional · camera or file upload · JPEG/PNG/WebP · max 5 MB"
+            >
               {!coPhoto ? (
-                <input
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
-                  capture="user"
-                  className="block w-full text-xs font-semibold file:mr-3 file:border-2 file:border-ink file:bg-white file:px-3 file:py-1.5 file:text-xs file:font-black file:uppercase"
-                  onChange={onCoPhoto}
-                />
+                <div className="flex flex-wrap gap-2">
+                  <label className="inline-flex cursor-pointer items-center gap-1.5 border-2 border-ink bg-white px-3 py-2 text-xs font-black uppercase shadow-hard-sm transition-colors hover:bg-gold focus-within:ring-2 focus-within:ring-ink">
+                    <Camera className="size-3.5" />
+                    Take photo
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      capture="user"
+                      className="sr-only"
+                      onChange={onCoPhoto}
+                    />
+                  </label>
+                  <label className="inline-flex cursor-pointer items-center gap-1.5 border-2 border-ink bg-white px-3 py-2 text-xs font-black uppercase shadow-hard-sm transition-colors hover:bg-gold focus-within:ring-2 focus-within:ring-ink">
+                    <Upload className="size-3.5" />
+                    Upload file
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      className="sr-only"
+                      onChange={onCoPhoto}
+                    />
+                  </label>
+                </div>
               ) : (
-                <div className="flex items-center gap-3 border-2 border-ink bg-white p-2">
+                <div className="flex flex-wrap items-center gap-3 border-2 border-ink bg-white p-2">
                   <img
                     src={coPhoto.previewUrl}
                     alt="Co-applicant photo preview"
@@ -874,9 +983,20 @@ export default function ClientNew() {
                       {coPhoto.file.name}
                     </span>
                     <span className="block text-[10px] font-semibold text-muted-foreground">
-                      {(coPhoto.file.size / 1024).toFixed(0)} KB · ready to upload
+                      {(coPhoto.file.size / 1024).toFixed(0)} KB · selected
                     </span>
                   </span>
+                  <label className="inline-flex cursor-pointer items-center gap-1.5 border-2 border-ink bg-white px-2 py-1.5 text-[11px] font-black uppercase shadow-hard-sm transition-colors hover:bg-gold focus-within:ring-2 focus-within:ring-ink">
+                    <Camera className="size-3.5" />
+                    Retake
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      capture="user"
+                      className="sr-only"
+                      onChange={onCoPhoto}
+                    />
+                  </label>
                   <Button
                     size="sm"
                     variant="outline"
@@ -888,6 +1008,96 @@ export default function ClientNew() {
                     Remove
                   </Button>
                 </div>
+              )}
+            </Field>
+
+            {/* Co-applicant documents — real uploads with per-file status. */}
+            <Field
+              label="Co-applicant documents"
+              hint="Aadhaar · PAN · Voter ID · other supporting files — JPEG/PNG/WebP/PDF, max 5 MB each"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  aria-label="Co-applicant document type"
+                  className="h-9 border-2 border-ink bg-white px-2 text-xs font-black uppercase outline-none"
+                  value={coDocKind}
+                  onChange={(e) => setCoDocKind(e.target.value)}
+                >
+                  {KYC_DOC_OPTIONS.map((opt) => (
+                    <option key={opt.id} value={opt.id}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+                <label className="inline-flex cursor-pointer items-center gap-1.5 border-2 border-ink bg-white px-3 py-1.5 text-xs font-black uppercase shadow-hard-sm transition-colors hover:bg-gold focus-within:ring-2 focus-within:ring-ink">
+                  <Upload className="size-3.5" />
+                  Upload document
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,application/pdf"
+                    className="sr-only"
+                    onChange={onCoDoc}
+                  />
+                </label>
+              </div>
+              {coDocs.length > 0 && (
+                <ul className="mt-2 space-y-1.5">
+                  {coDocs.map((d) => (
+                    <li
+                      key={d.key}
+                      className="flex flex-wrap items-center gap-2 border-2 border-ink bg-white px-2 py-1.5"
+                    >
+                      <span className="shrink-0 border border-ink bg-gold px-1.5 py-0.5 text-[10px] font-black uppercase">
+                        {KYC_DOC_OPTIONS.find((o) => o.id === d.kind)?.label ?? d.kind}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-xs font-bold">
+                        {d.file.name}
+                        <span className="text-muted-foreground">
+                          {" "}· {(d.file.size / 1024).toFixed(0)} KB
+                        </span>
+                      </span>
+                      {d.status === "uploading" && (
+                        <span className="shrink-0 animate-pulse text-[10px] font-black uppercase text-muted-foreground">
+                          Uploading…
+                        </span>
+                      )}
+                      {d.status === "uploaded" && (
+                        <span className="shrink-0 border-2 border-ink bg-mint px-1.5 py-0.5 text-[10px] font-black uppercase">
+                          Uploaded
+                        </span>
+                      )}
+                      {d.status === "error" && (
+                        <>
+                          <span className="shrink-0 border-2 border-ink bg-blush px-1.5 py-0.5 text-[10px] font-black uppercase">
+                            Failed
+                          </span>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setCoDocs((cur) =>
+                                cur.map((x) =>
+                                  x.key === d.key ? { ...x, status: "uploading" } : x,
+                                ),
+                              );
+                              void uploadCoDoc(d.key, d.file);
+                            }}
+                          >
+                            Retry
+                          </Button>
+                        </>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => removeCoDoc(d.key)}
+                        aria-label={`Remove ${d.file.name}`}
+                      >
+                        Remove
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
               )}
             </Field>
           </>
