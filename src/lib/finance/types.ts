@@ -260,3 +260,10 @@ export const BUCKET_LABELS: Record<OverdueBucket, string> = {
   "31-60": "31–60 days",
   "60+": "60+ days",
 };
+
+export function completedMonthsSince(disbursementEpochMs: number | null | undefined, nowMs: number): number {
+  if (!disbursementEpochMs) return 0;
+  const d0 = new Date(disbursementEpochMs);
+  const d1 = new Date(nowMs);
+  return (d1.getFullYear() - d0.getFullYear()) * 12 + (d1.getMonth() - d0.getMonth());
+}

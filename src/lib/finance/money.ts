@@ -49,3 +49,18 @@ export function ratio(numerator: number, denominator: number): number {
   if (!denominator) return 0;
   return numerator / denominator;
 }
+
+/** Completed, full calendar months between two epoch ms timestamps.
+ * The count advances only when the day-of-month of `end` is at or past the
+ * day-of-month of `start`, so a mid-month disbursement does not claim a full
+ * month until the same day of a later month has elapsed. Returns 0 when
+ * `end` is on or before `start`.
+ */
+export function completedMonthsBetween(startMs: number, endMs: number): number {
+  const d0 = new Date(startMs);
+  const d1 = new Date(endMs);
+  if (d1.getTime() <= d0.getTime()) return 0;
+  let months = (d1.getFullYear() - d0.getFullYear()) * 12 + (d1.getMonth() - d0.getMonth());
+  if (d1.getDate() < d0.getDate()) months -= 1;
+  return Math.max(0, months);
+}

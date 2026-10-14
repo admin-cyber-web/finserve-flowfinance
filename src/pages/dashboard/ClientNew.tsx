@@ -71,8 +71,8 @@ function prettyError(err: unknown): string {
     err instanceof Error
       ? err.message
       : "Could not save the application — please retry.";
-  const match = raw.match(/Uncaught AppError: ([^\\n]*)/);
-  return (match?.[1]?.trim() || raw.replace(/^Uncaught\\s+/, "")).slice(0, 200);
+  const match = raw.match(/Uncaught AppError: ([^\n]*)/);
+  return (match?.[1]?.trim() || raw.replace(/^Uncaught\s+/, "")).slice(0, 200);
 }
 
 /** Generic per-field binder for a flat string state slice. */
@@ -83,7 +83,7 @@ function bind<T>(set: Dispatch<SetStateAction<T>>, k: keyof T) {
 
 function digits(set: Dispatch<SetStateAction<Readonly<Record<string, string>>>, k: string, max: number) {
   return (e: ChangeEvent<HTMLInputElement>) =>
-    set((s) => ({ ...s, [k]: e.target.value.replace(/\\D/g, "").slice(0, max) }));
+    set((s) => ({ ...s, [k]: e.target.value.replace(/\D/g, "").slice(0, max) }));
 }
 
 const KYC_DOC_OPTIONS = [
@@ -95,8 +95,8 @@ const KYC_DOC_OPTIONS = [
 
 const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 const VOTER_RE = /^[A-Z]{3}[0-9]{7}$/;
-const MOBILE_RE = /^[6-9]\\d{9}$/;
-const AADHAAR_RE = /^\\d{12}$/;
+const MOBILE_RE = /^[6-9]\d{9}$/;
+const AADHAAR_RE = /^\d{12}$/;
 
 interface FamilyRow {
   name: string;
@@ -621,7 +621,7 @@ export default function ClientNew() {
         const gUrl = await getUploadUrl({});
         const gRes = await fetch(gUrl, {
           method: "POST",
-          "Content-Type": coGps.file.type || "image/jpeg"
+          "Content-Type": coGps.file.type || "image/jpeg",
           body: coGps.file,
         });
         if (gRes.ok) {
@@ -947,13 +947,12 @@ export default function ClientNew() {
               }
               placeholder="ABC1234567"
             />
-          </Field>
-          <Field label="KYC documents" required>
+          </Field>            <Field label="KYC documents" required>
             <div className="flex flex-wrap gap-1.5">
               {KYC_DOC_OPTIONS.map((opt) => (
                 <label
                   key={opt.id}
-                  className={`flex cursor-pointer items-center gap-1.5 border-2 border-ink px-2 py-1.5 text-[11px] font-black uppercase ${\n                    kycDocs.includes(opt.id) ? "bg-gold" : "bg-white"\n                  }`}
+                  className={`flex cursor-pointer items-center gap-1.5 border-2 border-ink px-2 py-1.5 text-[11px] font-black uppercase ${kycDocs.includes(opt.id) ? "bg-gold" : "bg-white"}`}
                 >
                   <input
                     type="checkbox"
@@ -967,6 +966,7 @@ export default function ClientNew() {
             </div>
           </Field>
         </div>
+
 
         {/* 3 · Applicant documents — photograph or upload */}
         <Field
@@ -1054,14 +1054,13 @@ export default function ClientNew() {
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() =>
+                        onClick={() => {
                           setApplicantDocs((cur) =>
                             cur.map((x) =>
                               x.key === d.key ? { ...x, status: "uploading" } : x,
-                            ),
-                          );
+                            ));
                           void uploadCoDoc(d.key, d.file);
-                        }
+                        }}
                       >
                         Retry
                       </Button>
@@ -1177,7 +1176,7 @@ export default function ClientNew() {
                 inputMode="numeric"
                 value={co.mobile}
                 onChange={(e) =>
-                  setCo((s) => ({ ...s, mobile: e.target.value.replace(/\\D/g, "").slice(0, 10) }))
+                  setCo((s) => ({ ...s, mobile: e.target.value.replace(/\D/g, "").slice(0, 10) }))
                 }
               />
             </Field>
@@ -1198,7 +1197,7 @@ export default function ClientNew() {
                   inputMode="numeric"
                   value={co.aadhaar}
                   onChange={(e) =>
-                    setCo((s) => ({ ...s, aadhaar: e.target.value.replace(/\\D/g, "").slice(0, 12) }))
+                    setCo((s) => ({ ...s, aadhaar: e.target.value.replace(/\D/g, "").slice(0, 12) }))
                   }
                 />
               </Field>
@@ -1229,7 +1228,7 @@ export default function ClientNew() {
                   {KYC_DOC_OPTIONS.map((opt) => (
                     <label
                       key={opt.id}
-                      className={`flex cursor-pointer items-center gap-1.5 border-2 border-ink px-2 py-1.5 text-[11px] font-black uppercase ${\n                        coKycDocs.includes(opt.id) ? "bg-gold" : "bg-white"\n                      }`}
+                      className={`flex cursor-pointer items-center gap-1.5 border-2 border-ink px-2 py-1.5 text-[11px] font-black uppercase ${coKycDocs.includes(opt.id) ? "bg-gold" : "bg-white"}`}
                     >
                       <input
                         type="checkbox"

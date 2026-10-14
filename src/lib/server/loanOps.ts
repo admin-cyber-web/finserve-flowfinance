@@ -24,6 +24,8 @@ import {
   writeWalletTx,
   type Mtx,
 } from "./convexHelpers";
+import { completedMonthsBetween } from "../finance/money";
+import { completedMonthsBetween } from "../finance/money";
 
 /* ------------------------------ Read helpers ------------------------------ */
 

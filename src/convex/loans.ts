@@ -15,7 +15,7 @@ import {
   eligibilityFor,
   type LoanView,
 } from "../lib/server/loanOps";
-import { round2 } from "../lib/finance/money";
+import { round2, completedMonthsBetween } from "../lib/finance/money";
 import type { Frequency, InterestMethod } from "../lib/finance/types";
 import { money, requiredString, oneOf } from "../lib/finance/validate";
 import { RECOVERY_KINDS } from "../lib/finance/types";
@@ -173,6 +173,10 @@ export const get = query({
     );
 
     const view = deriveLoanView(loan, rows, Date.now());
+    const connectedMonthlyIncome = loan.connectedMonthlyIncome ?? client?.monthlyIncome ?? 0;
+    const connectedHouseholdIncome =
+      loan.connectedHouseholdIncome ?? client?.householdIncome ?? 0;
+    const completedMonths = completedMonthsBetween(loan.disbursedAt, Date.now());
     return {
       loan,
       view,
@@ -185,6 +189,9 @@ export const get = query({
       recovery,
       application,
       journals,
+      connectedMonthlyIncome,
+      connectedHouseholdIncome,
+      completedMonths,
     };
   },
 });
@@ -682,3 +689,5 @@ export const addRecovery = mutation({
     return { ok: true, id };
   },
 });
+
+export { completedMonthsBetween };
