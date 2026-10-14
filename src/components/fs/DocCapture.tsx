@@ -10,14 +10,13 @@ import { toast } from "sonner";
 /**
  * Document capture + upload for the client application form.
  *
- * Each file is uploaded to private Convex storage the moment it is picked so
- * every row shows a REAL status (uploading / uploaded / failed + retry) —
- * only uploaded rows are ever saved with the application, so an in-flight or
- * failed file can never be silently discarded at submission.
+ * Each picked file is uploaded to private Convex storage the moment it is
+ * chosen, so every row shows a REAL status (uploading / uploaded / failed +
+ * retry). Only uploaded rows are ever saved with the application — an
+ * in-flight or failed file can never be silently dropped at submit time.
  *
- * Used twice on the Client-New form: once for the Applicant section and
- * once for the Co-applicant section (camera capture and device file picker
- * are both offered for each).
+ * Reused across the Applicant and Co-applicant sections on the Client-New
+ * form (camera capture + device file picker are both offered for each).
  */
 
 export interface DocItem {
@@ -29,22 +28,24 @@ export interface DocItem {
   storageId?: Id<"_storage">;
 }
 
-export const DOC_KIND_OPTIONS = [
+const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
+
+const DOC_TYPES = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
+
+/** Candidate document types rendered in the doc-picker dropdown. */
+export const DOC_KIND_OPTIONS: { id: string; label: string }[] = [
   { id: "AADHAAR", label: "Aadhaar" },
   { id: "PAN", label: "PAN" },
   { id: "VOTER_ID", label: "Voter ID" },
   { id: "OTHER", label: "Other" },
-] as const;
+];
 
-export const DOC_MAX_BYTES = 5 * 1024 * 1024;
-const DOC_TYPES = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
-const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
-
+/** A fresh, unique key for each in-flight / uploaded row of docs. */
 export function newDocKey(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-/** Validate a picked file against the same rules the backend enforces. */
+/** Validate a picked doc file against the same rules the backend enforces. */
 export function validateDocFile(
   file: File,
   subject: string,
@@ -56,6 +57,11 @@ export function validateDocFile(
     return `${subject} must be between 1 byte and ${Math.round(DOC_MAX_BYTES / 1024 / 1024)} MB.`;
   }
   return null;
+}
+
+/** Which set of kinds the field currently shows (Aadhaar/PAN/Voter/Other). */
+export function selectedKinds(): { id: string; label: string }[] {
+  return DOC_KIND_OPTIONS;
 }
 
 interface DocCaptureProps {

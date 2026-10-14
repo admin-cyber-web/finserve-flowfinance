@@ -380,6 +380,19 @@ export const create = mutation({
             }),
           ),
         ),
+        // Co-applicant GPS-tagged photograph: the stamped JPEG plus the
+        // device-reported GPS fix. The file is uploaded before this mutation
+        // runs and re-validaoted server-side (type + size + geo constraints).
+        coGpsStorageId: v.optional(v.id("_storage")),
+        coGpsGeo: v.optional(
+          v.object({
+            latitude: v.number(),
+            longitude: v.number(),
+            accuracyMeters: v.number(),
+            capturedAt: v.number(),
+            permissionStatus: v.optional(v.string()),
+          }),
+        ),
       }),
     ),
     // Informational loan request — never creates a loan, approval or

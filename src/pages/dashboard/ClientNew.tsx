@@ -6,7 +6,13 @@ import {
   type CapturedClientPhoto,
 } from "@/components/fs/ClientPhotoCapture";
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
+import {
+  newDocKey,
+  type DocItem,
+  DOC_MAX_BYTES,
+  DOC_TYPES,
+  validateDocFile,
+} from "@/components/fs/DocCapture";
 import { useProfile } from "@/hooks/use-profile";
 import { ageFromDob } from "@/lib/finance/validate";
 import {
@@ -20,7 +26,8 @@ import {
 import { useMutation } from "convex/react";
 import { useState, type ChangeEvent, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { useNavigate } from "react-router";
-import { Camera, Upload } from "lucide-react";
+import { Camera, CheckCircle2, FileText, Loader2, Upload } from "lucide-react";
+import { geoValidationError, GEO_TIMEOUT_MS } from "@/lib/geo";
 import { toast } from "sonner";
 
 /**
@@ -64,8 +71,8 @@ function prettyError(err: unknown): string {
     err instanceof Error
       ? err.message
       : "Could not save the application — please retry.";
-  const match = raw.match(/Uncaught AppError: ([^\n]*)/);
-  return (match?.[1]?.trim() || raw.replace(/^Uncaught\s+/, "")).slice(0, 200);
+  const match = raw.match(/Uncaught AppError: ([^\\n]*)/);
+  return (match?.[1]?.trim() || raw.replace(/^Uncaught\\s+/, "")).slice(0, 200);
 }
 
 /** Generic per-field binder for a flat string state slice. */
@@ -74,9 +81,9 @@ function bind<T>(set: Dispatch<SetStateAction<T>>, k: keyof T) {
     set((s) => ({ ...s, [k]: e.target.value }));
 }
 
-function digits(set: Dispatch<SetStateAction<Record<string, string>>>, k: string, max: number) {
+function digits(set: Dispatch<SetStateAction<Readonly<Record<string, string>>>, k: string, max: number) {
   return (e: ChangeEvent<HTMLInputElement>) =>
-    set((s) => ({ ...s, [k]: e.target.value.replace(/\D/g, "").slice(0, max) }));
+    set((s) => ({ ...s, [k]: e.target.value.replace(/\\D/g, "").slice(0, max) }));
 }
 
 const KYC_DOC_OPTIONS = [
@@ -88,23 +95,14 @@ const KYC_DOC_OPTIONS = [
 
 const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 const VOTER_RE = /^[A-Z]{3}[0-9]{7}$/;
-const MOBILE_RE = /^[6-9]\d{9}$/;
-const AADHAAR_RE = /^\d{12}$/;
+const MOBILE_RE = /^[6-9]\\d{9}$/;
+const AADHAAR_RE = /^\\d{12}$/;
 
 interface FamilyRow {
   name: string;
   age: string;
   relationship: string;
   occupation: string;
-}
-
-/** One co-applicant document row on the form (pre-submit). */
-interface CoDocRow {
-  key: string;
-  kind: string; // AADHAAR | PAN | VOTER_ID | OTHER
-  file: File;
-  status: "uploading" | "uploaded" | "error";
-  storageId?: Id<"_storage">;
 }
 
 const emptyFamilyRow = (): FamilyRow => ({
@@ -165,11 +163,25 @@ export default function ClientNew() {
     file: File;
     previewUrl: string;
   } | null>(null);
-  // Co-applicant supporting documents — uploaded as soon as they are picked so
-  // each row shows a real upload status; only uploaded files are saved with
-  // the application (never silently discarded).
+  // Co-applicant documents — uploaded the moment they are picked, so each row
+  // shows a real status; only uploaded files are ever saved with the
+  // application (never silently discarded).
   const [coDocKind, setCoDocKind] = useState<string>("AADHAAR");
-  const [coDocs, setCoDocs] = useState<CoDocRow[]>([]);
+  const [coDocs, setCoDocs] = useState<DocItem[]>([]);
+  // Co-applicant GPS photo — the photograph is captured with a fresh device
+  // GPS fix (≤ 100 m accuracy); a bad or stale fix is rejected outright.
+  const [coGps, setCoGps] = useState<{
+    key: string;
+    file: File;
+    previewUrl: string;
+    status: "locating" | "uploading" | "uploaded" | "error";
+    fix?: { latitude: number; longitude: number; accuracyMeters: number; capturedAt: number; permissionStatus: string; storageId?: Id<"_storage"> };
+    frameAt: number;
+  } | null>(null);
+  // Applicant documents — photographed or picked; the same secure storage
+  // path as co-applicant documents, so nothing is silently dropped.
+  const [applicantDocKind, setApplicantDocKind] = useState<string>("AADHAAR");
+  const [applicantDocs, setApplicantDocs] = useState<DocItem[]>([]);
 
   const [family, setFamily] = useState<FamilyRow[]>([
     emptyFamilyRow(),
@@ -273,6 +285,12 @@ export default function ClientNew() {
   // in-flight or failed upload can never be silently dropped at submission.
   const coDocsOk = coDocs.every((d) => d.status === "uploaded");
 
+  // Applicant documents: every picked file must finish uploading.
+  const applicantDocsOk = applicantDocs.every((d) => d.status === "uploaded");
+
+  // Co-applicant GPS photo: must be fully uploaded when present.
+  const coGpsOk = !coGps || coGps.status === "uploaded";
+
   // Loan request: optional, but internally consistent when started.
   const loanStarted = loan.amount.trim() !== "";
   const loanOk =
@@ -293,7 +311,7 @@ export default function ClientNew() {
       bank.holder.trim() &&
         bank.bankName.trim() &&
         bank.branch.trim() &&
-        /^\d{6,20}$/.test(bank.accountNumber.trim()) &&
+        /^\\d{6,20}$/.test(bank.accountNumber.trim()) &&
         /^[A-Z]{4}0[A-Z0-9]{6}$/.test(bank.ifsc.trim().toUpperCase()),
     );
 
@@ -324,6 +342,8 @@ export default function ClientNew() {
     familyOk &&
     coOk &&
     coDocsOk &&
+    applicantDocsOk &&
+    coGpsOk &&
     loanOk &&
     bankOk &&
     nomineeOk &&
@@ -332,7 +352,7 @@ export default function ClientNew() {
   /* ------------------------------- co photo ------------------------------ */
 
   const CO_PHOTO_MAX_BYTES = 5 * 1024 * 1024;
-  const onCoPhoto = (e: ChangeEvent<HTMLInputElement>) => {
+  const onCoPhoto = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
@@ -348,12 +368,33 @@ export default function ClientNew() {
     setCoPhoto({ file, previewUrl: URL.createObjectURL(file) });
   };
 
-  /* --------------------------- co-applicant docs -------------------------- */
+  /* ---------- applicant documents (photographed or picked) ---------- */
 
-  const CO_DOC_MAX_BYTES = 5 * 1024 * 1024;
-  const CO_DOC_TYPES = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
+  const onApplicantDoc = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    const problem = validateDocFile(file, "Applicant document");
+    if (problem) {
+      toast.error(problem);
+      return;
+    }
+    const key = newDocKey();
+    setApplicantDocs((cur) => [
+      ...cur,
+      {
+        key,
+        kind: applicantDocKind,
+        file,
+        previewUrl: URL.createObjectURL(file),
+        status: "uploading",
+      },
+    ]);
+    void uploadCoDoc(key, file);
+  };
 
-  /** Uploads one co-applicant document to private storage, real status per row. */
+  /* ---------- co-applicant documents (photographed or picked) ---------- */
+
   const uploadCoDoc = async (key: string, file: File) => {
     try {
       const url = await getUploadUrl({});
@@ -379,25 +420,119 @@ export default function ClientNew() {
     }
   };
 
-  const onCoDoc = (e: ChangeEvent<HTMLInputElement>) => {
+  const onCoDoc = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
-    if (!CO_DOC_TYPES.includes(file.type)) {
-      toast.error("Co-applicant documents must be JPEG, PNG, WebP or PDF files.");
+    const problem = validateDocFile(file, "Co-applicant document");
+    if (problem) {
+      toast.error(problem);
       return;
     }
-    if (file.size <= 0 || file.size > CO_DOC_MAX_BYTES) {
-      toast.error("Co-applicant document must be between 1 byte and 5 MB.");
-      return;
-    }
-    const key = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    setCoDocs((cur) => [...cur, { key, kind: coDocKind, file, status: "uploading" }]);
+    const key = newDocKey();
+    setCoDocs((cur) => [
+      ...cur,
+      {
+        key,
+        kind: coDocKind,
+        file,
+        previewUrl: URL.createObjectURL(file),
+        status: "uploading",
+      },
+    ]);
     void uploadCoDoc(key, file);
   };
 
   const removeCoDoc = (key: string) =>
     setCoDocs((cur) => cur.filter((d) => d.key !== key));
+
+  const removeApplicantDoc = (key: string) =>
+    setApplicantDocs((cur) => cur.filter((d) => d.key !== key));
+
+  /* ---------- co-applicant GPS photo capture ---------- */
+
+  const onCoGpsPhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+      toast.error("Co-applicant photo must be a JPEG, PNG or WebP image.");
+      return;
+    }
+    if (file.size <= 0 || file.size > CO_PHOTO_MAX_BYTES) {
+      toast.error("Co-applicant photo must be between 1 byte and 5 MB.");
+      return;
+    }
+    const key = newDocKey();
+    // Stamp the photo with a real device GPS fix — captured here, validated
+    // by the SAME server rules as the applicant photo.
+    setCoGps({
+      key,
+      file,
+      previewUrl: URL.createObjectURL(file),
+      status: "locating",
+      frameAt: Date.now(),
+    });
+    try {
+      const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
+        const w = navigator.geolocation.watchPosition(
+          (p) => {
+            navigator.geolocation.clearWatch(w);
+            resolve(p);
+          },
+          reject,
+          { enableHighAccuracy: true, timeout: GEO_TIMEOUT_MS, maximumAge: 0 },
+        );
+        setTimeout(() => navigator.geolocation.clearWatch(w), GEO_TIMEOUT_MS);
+      });
+      const fix = {
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+        accuracyMeters: pos.coords.accuracy,
+        capturedAt: pos.timestamp,
+        permissionStatus: "granted",
+      };
+      const err = geoValidationError(fix, Date.now());
+      if (err) {
+        setCoGps((prev) => (prev?.key === key ? { ...prev, status: "error" } : prev));
+        toast.error(
+          "Co-applicant photo GPS is too inaccurate or stale — try again in open air.",
+        );
+        return;
+      }
+      setCoGps({
+        key,
+        file,
+        previewUrl: URL.createObjectURL(file),
+        status: "uploading",
+        fix,
+        frameAt: Date.now(),
+      });
+      const url = await getUploadUrl({});
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": file.type },
+        body: file,
+      });
+      if (!res.ok) throw new Error(`upload failed (${res.status})`);
+      const parsed = (await res.json()) as { storageId: string };
+      setCoGps({
+        key,
+        file,
+        previewUrl: URL.createObjectURL(file),
+        status: "uploaded",
+        fix: { ...fix, storageId: parsed.storageId as Id<"_storage"> },
+        frameAt: Date.now(),
+      });
+    } catch (err) {
+      setCoGps((prev) => (prev?.key === key ? { ...prev, status: "error" } : prev));
+      toast.error(
+        err instanceof Error ? err.message : "Co-applicant GPS photo capture failed",
+      );
+    }
+  };
+
+  /* ---------- co-applicant removal guard ---------- */
 
   const toggleKycDoc = (id: string, list: string[], setList: Dispatch<SetStateAction<string[]>>) =>
     setList((cur) =>
@@ -417,6 +552,18 @@ export default function ClientNew() {
     if (coDocs.length > 0 && !(coEnabled && co.name.trim())) {
       toast.error(
         "Co-applicant documents were added — keep the co-applicant enabled, or remove the files.",
+      );
+      return;
+    }
+    if (applicantDocs.some((d) => d.status !== "uploaded")) {
+      toast.error(
+        "Applicant documents are still uploading — retry or remove any failed file.",
+      );
+      return;
+    }
+    if (coGps && coGps.status !== "uploaded") {
+      toast.error(
+        "Co-applicant GPS photo capture is still in progress or failed — retry or remove it.",
       );
       return;
     }
@@ -461,6 +608,48 @@ export default function ClientNew() {
         coPhotoStorageId = parsed.storageId as Id<"_storage">;
       }
 
+      // 2c. Co-applicant GPS photo — a real device fix, uploaded + stored.
+      let coGpsStorageId: Id<"_storage"> | undefined;
+      let coGpsGeo: {
+        latitude: number;
+        longitude: number;
+        accuracyMeters: number;
+        capturedAt: number;
+        permissionStatus: string;
+      } | undefined;
+      if (coGps && coGps.status === "uploaded" && coGps.fix) {
+        const gUrl = await getUploadUrl({});
+        const gRes = await fetch(gUrl, {
+          method: "POST",
+          "Content-Type": coGps.file.type || "image/jpeg"
+          body: coGps.file,
+        });
+        if (gRes.ok) {
+          const parsed = (await gRes.json()) as { storageId: string };
+          coGpsStorageId = parsed.storageId as Id<"_storage">;
+          coGpsGeo = {
+            latitude: coGps.fix.latitude,
+            longitude: coGps.fix.longitude,
+            accuracyMeters: coGps.fix.accuracyMeters,
+            capturedAt: coGps.fix.capturedAt,
+            permissionStatus: coGps.fix.permissionStatus,
+          };
+        }
+      }
+
+      // 2d. Applicant documents — uploaded the moment they are picked; only
+      //     completed uploads are ever saved with the application.
+      let applicantDocuments:
+        | { docKind: string; fileName: string; storageId: Id<"_storage"> }[]
+        | undefined;
+      if (applicantDocsOk) {
+        applicantDocuments = applicantDocs.map((d) => ({
+          docKind: d.kind,
+          fileName: d.file.name,
+          storageId: d.storageId as Id<"_storage">,
+        }));
+      }
+
       const familyRows = filledFamily.map((r) => ({
         name: r.name.trim(),
         age: r.age.trim() ? Number(r.age) : undefined,
@@ -468,8 +657,9 @@ export default function ClientNew() {
         occupation: r.occupation.trim() || undefined,
       }));
 
-      // 3. Atomic create: client + photo link + family rows commit together,
-      //    so a failure can never leave a duplicate or half-created client.
+      // 3. Atomic create: client + photo link + family rows + documents commit
+      //    together, so a failure can never leave a duplicate or half-created
+      //    client.
       const result = await run(() =>
         create({
           name: applicant.name.trim(),
@@ -517,8 +707,11 @@ export default function ClientNew() {
                         storageId: d.storageId as Id<"_storage">,
                       }))
                     : undefined,
+                  coGpsStorageId,
+                  coGpsGeo,
                 }
               : undefined,
+          applicantDocuments,
           loanRequest: loanStarted
             ? {
                 amountRequested: Number(loan.amount),
@@ -675,7 +868,7 @@ export default function ClientNew() {
             onChange={(e) =>
               setApplicant((s) => ({
                 ...s,
-                mobile: e.target.value.replace(/\D/g, "").slice(0, 10),
+                mobile: e.target.value.replace(/\\D/g, "").slice(0, 10),
               }))
             }
             placeholder="9876543210"
@@ -713,7 +906,7 @@ export default function ClientNew() {
               onChange={(e) =>
                 setApplicant((s) => ({
                   ...s,
-                  aadhaar: e.target.value.replace(/\D/g, "").slice(0, 12),
+                  aadhaar: e.target.value.replace(/\\D/g, "").slice(0, 12),
                 }))
               }
               placeholder="12-digit Aadhaar"
@@ -760,9 +953,7 @@ export default function ClientNew() {
               {KYC_DOC_OPTIONS.map((opt) => (
                 <label
                   key={opt.id}
-                  className={`flex cursor-pointer items-center gap-1.5 border-2 border-ink px-2 py-1.5 text-[11px] font-black uppercase ${
-                    kycDocs.includes(opt.id) ? "bg-gold" : "bg-white"
-                  }`}
+                  className={`flex cursor-pointer items-center gap-1.5 border-2 border-ink px-2 py-1.5 text-[11px] font-black uppercase ${\n                    kycDocs.includes(opt.id) ? "bg-gold" : "bg-white"\n                  }`}
                 >
                   <input
                     type="checkbox"
@@ -777,10 +968,123 @@ export default function ClientNew() {
           </Field>
         </div>
 
-        {/* 3 · Camera photo + live GPS — the existing capture component,
+        {/* 3 · Applicant documents — photograph or upload */}
+        <Field
+          label="Applicant documents"
+          hint="Photograph a document or upload an existing file · JPEG/PNG/WebP/PDF · max 5 MB each"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              aria-label="Applicant document type"
+              className="h-9 border-2 border-ink bg-white px-2 text-xs font-bold uppercase outline-none"
+              value={applicantDocKind}
+              onChange={(e) => setApplicantDocKind(e.target.value)}
+            >
+              {KYC_DOC_OPTIONS.map((opt) => (
+                <option key={opt.id} value={opt.id}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+            <label className="inline-flex cursor-pointer items-center gap-1.5 border-2 border-ink bg-white px-3 py-1.5 text-xs font-bold uppercase shadow-hard-sm transition-colors hover:bg-gold focus-within:ring-2 focus-within:ring-ink">
+              <Camera className="size-3.5" />
+              Take photo
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                capture="environment"
+                className="sr-only"
+                onChange={onApplicantDoc}
+              />
+            </label>
+            <label className="inline-flex cursor-pointer items-center gap-1.5 border-2 border-ink bg-white px-3 py-1.5 text-xs font-bold uppercase shadow-hard-sm transition-colors hover:bg-gold focus-within:ring-2 focus-within:ring-ink">
+              <Upload className="size-3.5" />
+              Upload file
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp,application/pdf"
+                className="sr-only"
+                onChange={onApplicantDoc}
+              />
+            </label>
+          </div>
+          {applicantDocs.length > 0 && (
+            <ul className="mt-2 space-y-1.5">
+              {applicantDocs.map((d) => (
+                <li
+                  key={d.key}
+                  className="flex flex-wrap items-center gap-2 border-2 border-ink bg-white px-2 py-1.5"
+                >
+                  {["image/jpeg", "image/png", "image/webp"].includes(d.file.type) ? (
+                    <img
+                      src={d.previewUrl}
+                      alt={`Preview of ${d.file.name}`}
+                      className="size-12 shrink-0 border border-ink object-cover"
+                    />
+                  ) : (
+                    <span className="grid size-12 shrink-0 place-items-center border border-ink bg-muted">
+                      <FileText className="size-5" />
+                    </span>
+                  )}
+                  <span className="shrink-0 border border-ink bg-gold px-1.5 py-0.5 text-[10px] font-black uppercase">
+                    {KYC_DOC_OPTIONS.find((o) => o.id === d.kind)?.label ?? d.kind}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-xs font-bold">
+                    {d.file.name}
+                    <span className="text-muted-foreground">
+                      {" "}
+                      · {(d.file.size / 1024).toFixed(0)} KB
+                    </span>
+                  </span>
+                  {d.status === "uploading" && (
+                    <span className="shrink-0 animate-pulse text-[10px] font-black uppercase text-muted-foreground">
+                      Uploading…
+                    </span>
+                  )}
+                  {d.status === "uploaded" && (
+                    <span className="shrink-0 border-2 border-ink bg-mint px-1.5 py-0.5 text-[10px] font-black uppercase">
+                      Uploaded
+                    </span>
+                  )}
+                  {d.status === "error" && (
+                    <>
+                      <span className="shrink-0 border-2 border-ink bg-blush px-1.5 py-0.5 text-[10px] font-black uppercase">
+                        Failed
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          setApplicantDocs((cur) =>
+                            cur.map((x) =>
+                              x.key === d.key ? { ...x, status: "uploading" } : x,
+                            ),
+                          );
+                          void uploadCoDoc(d.key, d.file);
+                        }
+                      >
+                        Retry
+                      </Button>
+                    </>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => removeApplicantDoc(d.key)}
+                    aria-label={`Remove ${d.file.name}`}
+                  >
+                    Remove
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Field>
+
+        {/* 4 · Camera photo + live GPS — the existing capture component,
             integrated into Applicant Details per the application format. */}
         <h2 className="pt-1 text-[11px] font-black uppercase tracking-[0.14em] text-muted-foreground">
-          3 · Camera photo + live GPS
+          4 · Camera photo + live GPS
         </h2>
         <Field
           label="Applicant Photo"
@@ -797,7 +1101,7 @@ export default function ClientNew() {
           <h2 className="text-xs font-black uppercase tracking-[0.14em] text-muted-foreground">
             2 · Co-applicant details
           </h2>
-          <label className="flex cursor-pointer items-center gap-2 text-[11px] font-black uppercase">
+          <label className="flex cursor-pointer items-center gap-2 text-[11px] font-bold uppercase">
             <input
               type="checkbox"
               className="size-4 accent-ink"
@@ -873,7 +1177,7 @@ export default function ClientNew() {
                 inputMode="numeric"
                 value={co.mobile}
                 onChange={(e) =>
-                  setCo((s) => ({ ...s, mobile: e.target.value.replace(/\D/g, "").slice(0, 10) }))
+                  setCo((s) => ({ ...s, mobile: e.target.value.replace(/\\D/g, "").slice(0, 10) }))
                 }
               />
             </Field>
@@ -894,7 +1198,7 @@ export default function ClientNew() {
                   inputMode="numeric"
                   value={co.aadhaar}
                   onChange={(e) =>
-                    setCo((s) => ({ ...s, aadhaar: e.target.value.replace(/\D/g, "").slice(0, 12) }))
+                    setCo((s) => ({ ...s, aadhaar: e.target.value.replace(/\\D/g, "").slice(0, 12) }))
                   }
                 />
               </Field>
@@ -925,9 +1229,7 @@ export default function ClientNew() {
                   {KYC_DOC_OPTIONS.map((opt) => (
                     <label
                       key={opt.id}
-                      className={`flex cursor-pointer items-center gap-1.5 border-2 border-ink px-2 py-1.5 text-[11px] font-black uppercase ${
-                        coKycDocs.includes(opt.id) ? "bg-gold" : "bg-white"
-                      }`}
+                      className={`flex cursor-pointer items-center gap-1.5 border-2 border-ink px-2 py-1.5 text-[11px] font-black uppercase ${\n                        coKycDocs.includes(opt.id) ? "bg-gold" : "bg-white"\n                      }`}
                     >
                       <input
                         type="checkbox"
@@ -949,7 +1251,7 @@ export default function ClientNew() {
             >
               {!coPhoto ? (
                 <div className="flex flex-wrap gap-2">
-                  <label className="inline-flex cursor-pointer items-center gap-1.5 border-2 border-ink bg-white px-3 py-2 text-xs font-black uppercase shadow-hard-sm transition-colors hover:bg-gold focus-within:ring-2 focus-within:ring-ink">
+                  <label className="inline-flex cursor-pointer items-center gap-1.5 border-2 border-ink bg-white px-3 py-2 text-xs font-bold uppercase shadow-hard-sm transition-colors hover:bg-gold focus-within:ring-2 focus-within:ring-ink">
                     <Camera className="size-3.5" />
                     Take photo
                     <input
@@ -960,7 +1262,7 @@ export default function ClientNew() {
                       onChange={onCoPhoto}
                     />
                   </label>
-                  <label className="inline-flex cursor-pointer items-center gap-1.5 border-2 border-ink bg-white px-3 py-2 text-xs font-black uppercase shadow-hard-sm transition-colors hover:bg-gold focus-within:ring-2 focus-within:ring-ink">
+                  <label className="inline-flex cursor-pointer items-center gap-1.5 border-2 border-ink bg-white px-3 py-2 text-xs font-bold uppercase shadow-hard-sm transition-colors hover:bg-gold focus-within:ring-2 focus-within:ring-ink">
                     <Upload className="size-3.5" />
                     Upload file
                     <input
@@ -979,14 +1281,14 @@ export default function ClientNew() {
                     className="size-14 shrink-0 border border-ink object-cover"
                   />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-xs font-black">
+                    <span className="block truncate text-xs font-bold">
                       {coPhoto.file.name}
                     </span>
                     <span className="block text-[10px] font-semibold text-muted-foreground">
                       {(coPhoto.file.size / 1024).toFixed(0)} KB · selected
                     </span>
                   </span>
-                  <label className="inline-flex cursor-pointer items-center gap-1.5 border-2 border-ink bg-white px-2 py-1.5 text-[11px] font-black uppercase shadow-hard-sm transition-colors hover:bg-gold focus-within:ring-2 focus-within:ring-ink">
+                  <label className="inline-flex cursor-pointer items-center gap-1.5 border-2 border-ink bg-white px-2 py-1.5 text-[11px] font-bold uppercase shadow-hard-sm transition-colors hover:bg-gold focus-within:ring-2 focus-within:ring-ink">
                     <Camera className="size-3.5" />
                     Retake
                     <input
@@ -1011,6 +1313,249 @@ export default function ClientNew() {
               )}
             </Field>
 
+            {/* Co-applicant GPS photo — camera capture with real GPS fix. */}
+            <Field
+              label="Co-applicant GPS photo"
+              hint="Optional · photograph + live GPS (≤ 100 m accuracy) · JPEG/PNG/WebP · max 5 MB"
+            >
+              {!coGps ? (
+                <div className="flex flex-wrap gap-2">
+                  <label className="inline-flex cursor-pointer items-center gap-1.5 border-2 border-ink bg-white px-3 py-2 text-xs font-bold uppercase shadow-hard-sm transition-colors hover:bg-gold focus-within:ring-2 focus-within:ring-ink">
+                    <Camera className="size-3.5" />
+                    Take GPS photo
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      capture="environment"
+                      className="sr-only"
+                      onChange={(e) => {
+                        e.target.value = "";
+                        if (!e.target.files?.[0]) return;
+                        const file = e.target.files[0];
+                        if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+                          toast.error("Co-applicant photo must be a JPEG, PNG or WebP image.");
+                          return;
+                        }
+                        if (file.size <= 0 || file.size > CO_PHOTO_MAX_BYTES) {
+                          toast.error("Co-applicant photo must be between 1 byte and 5 MB.");
+                          return;
+                        }
+                        const key = newDocKey();
+                        setCoGps({
+                          key,
+                          file,
+                          previewUrl: URL.createObjectURL(file),
+                          status: "locating",
+                          frameAt: Date.now(),
+                        });
+                        void (async () => {
+                          try {
+                            const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
+                              const w = navigator.geolocation.watchPosition(
+                                (p) => {
+                                  navigator.geolocation.clearWatch(w);
+                                  resolve(p);
+                                },
+                                reject,
+                                { enableHighAccuracy: true, timeout: GEO_TIMEOUT_MS, maximumAge: 0 },
+                              );
+                              setTimeout(() => navigator.geolocation.clearWatch(w), GEO_TIMEOUT_MS);
+                            });
+                            const fix = {
+                              latitude: pos.coords.latitude,
+                              longitude: pos.coords.longitude,
+                              accuracyMeters: pos.coords.accuracy,
+                              capturedAt: pos.timestamp,
+                              permissionStatus: "granted",
+                            };
+                            const err = geoValidationError(fix, Date.now());
+                            if (err) {
+                              setCoGps((prev) => (prev?.key === key ? { ...prev, status: "error" } : prev));
+                              toast.error(
+                                "Co-applicant photo GPS is too inaccurate or stale — try again in open air.",
+                              );
+                              return;
+                            }
+                            setCoGps({
+                              key,
+                              file,
+                              previewUrl: URL.createObjectURL(file),
+                              status: "uploading",
+                              fix,
+                              frameAt: Date.now(),
+                            });
+                            const url = await getUploadUrl({});
+                            const res = await fetch(url, {
+                              method: "POST",
+                              headers: { "Content-Type": file.type || "image/jpeg" },
+                              body: file,
+                            });
+                            if (!res.ok) throw new Error(`upload failed (${res.status})`);
+                            const parsed = (await res.json()) as { storageId: string };
+                            setCoGps({
+                              key,
+                              file,
+                              previewUrl: URL.createObjectURL(file),
+                              status: "uploaded",
+                              fix: { ...fix, storageId: parsed.storageId as Id<"_storage"> },
+                              frameAt: Date.now(),
+                            });
+                          } catch (err) {
+                            setCoGps((prev) => (prev?.key === key ? { ...prev, status: "error" } : prev));
+                            toast.error(
+                              err instanceof Error ? err.message : "Co-applicant GPS photo capture failed",
+                            );
+                          }
+                        })();
+                      }}
+                    />
+                  </label>
+                  {coGps && (
+                    <span className="text-[11px] font-semibold text-muted-foreground self-center">
+                      {coGps.status === "locating" ? "Getting GPS fix…" : coGps.status === "uploading" ? "Uploading…" : coGps.status === "uploaded" ? "Uploaded" : coGps.status === "error" ? "Capture failed — retry" : ""}
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <div className="flex flex-wrap items-center gap-3 border-2 border-ink bg-white p-2">
+                  <img
+                    src={coGps.previewUrl}
+                    alt="Co-applicant GPS photo preview"
+                    className="size-14 shrink-0 border border-ink object-cover"
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs font-bold">
+                      {coGps.file.name}
+                    </span>
+                    {coGps.status === "uploaded" && coGps.fix && (
+                      <span className="block text-[10px] font-semibold text-muted-foreground">
+                        {coGps.fix.latitude.toFixed(5)}, {coGps.fix.longitude.toFixed(5)} ·
+                        ±{Math.round(coGps.fix.accuracyMeters)} m ·
+                        {new Date(coGps.fix.capturedAt).toLocaleString("en-IN", {
+                          day: "2-digit",
+                          month: "short",
+                          year: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                          second: "2-digit",
+                          hour12: false,
+                        })}
+                      </span>
+                    )}
+                    {coGps.status !== "uploaded" && (
+                      <span className="block text-[10px] font-semibold text-muted-foreground">
+                        {coGps.status === "locating" ? "Acquiring GPS fix…" : coGps.status === "uploading" ? "Uploading photograph…" : coGps.status === "error" ? "Capture failed — retry" : ""}
+                      </span>
+                    )}
+                  </span>
+                  <label className="inline-flex cursor-pointer items-center gap-1.5 border-2 border-ink bg-white px-2 py-1.5 text-[11px] font-bold uppercase shadow-hard-sm transition-colors hover:bg-gold focus-within:ring-2 focus-within:ring-ink">
+                    <Camera className="size-3.5" />
+                    Retake
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      capture="environment"
+                      className="sr-only"
+                      onChange={(e) => {
+                        e.target.value = "";
+                        if (!e.target.files?.[0]) return;
+                        const file = e.target.files[0];
+                        if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+                          toast.error("Co-applicant photo must be a JPEG, PNG or WebP image.");
+                          return;
+                        }
+                        if (file.size <= 0 || file.size > CO_PHOTO_MAX_BYTES) {
+                          toast.error("Co-applicant photo must be between 1 byte and 5 MB.");
+                          return;
+                        }
+                        setCoGps(null);
+                        const prev = coGps;
+                        setCoGps(null);
+                        URL.revokeObjectURL(prev?.previewUrl ?? "");
+                        const key = newDocKey();
+                        setCoGps({
+                          key,
+                          file,
+                          previewUrl: URL.createObjectURL(file),
+                          status: "locating",
+                          frameAt: Date.now(),
+                        });
+                        void (async () => {
+                          try {
+                            const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
+                              const w = navigator.geolocation.watchPosition(
+                                (p) => {
+                                  navigator.geolocation.clearWatch(w);
+                                  resolve(p);
+                                },
+                                reject,
+                                { enableHighAccuracy: true, timeout: GEO_TIMEOUT_MS, maximumAge: 0 },
+                              );
+                              setTimeout(() => navigator.geolocation.clearWatch(w), GEO_TIMEOUT_MS);
+                            });
+                            const fix = {
+                              latitude: pos.coords.latitude,
+                              longitude: pos.coords.longitude,
+                              accuracyMeters: pos.coords.accuracy,
+                              capturedAt: pos.timestamp,
+                              permissionStatus: "granted",
+                            };
+                            const err = geoValidationError(fix, Date.now());
+                            if (err) {
+                              setCoGps((p) => (p?.key === key ? { ...p, status: "error" } : p));
+                              toast.error(
+                                "Co-applicant photo GPS is too inaccurate or stale — try again in open air.",
+                              );
+                              return;
+                            }
+                            setCoGps({
+                              key,
+                              file,
+                              previewUrl: URL.createObjectURL(file),
+                              status: "uploading",
+                              fix,
+                              frameAt: Date.now(),
+                            });
+                            const url = await getUploadUrl({});
+                            const res = await fetch(url, {
+                              method: "POST",
+                              headers: { "Content-Type": file.type || "image/jpeg" },
+                              body: file,
+                            });
+                            if (!res.ok) throw new Error(`upload failed (${res.status})`);
+                            const parsed = (await res.json()) as { storageId: string };
+                            setCoGps({
+                              key,
+                              file,
+                              previewUrl: URL.createObjectURL(file),
+                              status: "uploaded",
+                              fix: { ...fix, storageId: parsed.storageId as Id<"_storage"> },
+                              frameAt: Date.now(),
+                            });
+                          } catch (err) {
+                            setCoGps((p) => (p?.key === key ? { ...p, status: "error" } : p));
+                            toast.error(
+                              err instanceof Error ? err.message : "Co-applicant GPS photo capture failed",
+                            );
+                          }
+                        })();
+                      }}
+                    />
+                  </label>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      if (coGps?.previewUrl) URL.revokeObjectURL(coGps.previewUrl);
+                      setCoGps(null);
+                    }}
+                  >
+                    Remove
+                  </Button>
+                </div>
+              )}
+            </Field>
+
             {/* Co-applicant documents — real uploads with per-file status. */}
             <Field
               label="Co-applicant documents"
@@ -1019,7 +1564,7 @@ export default function ClientNew() {
               <div className="flex flex-wrap items-center gap-2">
                 <select
                   aria-label="Co-applicant document type"
-                  className="h-9 border-2 border-ink bg-white px-2 text-xs font-black uppercase outline-none"
+                  className="h-9 border-2 border-ink bg-white px-2 text-xs font-bold uppercase outline-none"
                   value={coDocKind}
                   onChange={(e) => setCoDocKind(e.target.value)}
                 >
@@ -1029,7 +1574,18 @@ export default function ClientNew() {
                     </option>
                   ))}
                 </select>
-                <label className="inline-flex cursor-pointer items-center gap-1.5 border-2 border-ink bg-white px-3 py-1.5 text-xs font-black uppercase shadow-hard-sm transition-colors hover:bg-gold focus-within:ring-2 focus-within:ring-ink">
+                <label className="inline-flex cursor-pointer items-center gap-1.5 border-2 border-ink bg-white px-3 py-1.5 text-xs font-bold uppercase shadow-hard-sm transition-colors hover:bg-gold focus-within:ring-2 focus-within:ring-ink">
+                  <Camera className="size-3.5" />
+                  Take photo
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    capture="environment"
+                    className="sr-only"
+                    onChange={onCoDoc}
+                  />
+                </label>
+                <label className="inline-flex cursor-pointer items-center gap-1.5 border-2 border-ink bg-white px-3 py-1.5 text-xs font-bold uppercase shadow-hard-sm transition-colors hover:bg-gold focus-within:ring-2 focus-within:ring-ink">
                   <Upload className="size-3.5" />
                   Upload document
                   <input
@@ -1047,13 +1603,25 @@ export default function ClientNew() {
                       key={d.key}
                       className="flex flex-wrap items-center gap-2 border-2 border-ink bg-white px-2 py-1.5"
                     >
+                      {["image/jpeg", "image/png", "image/webp"].includes(d.file.type) ? (
+                        <img
+                          src={d.previewUrl}
+                          alt={`Preview of ${d.file.name}`}
+                          className="size-12 shrink-0 border border-ink object-cover"
+                        />
+                      ) : (
+                        <span className="grid size-12 shrink-0 place-items-center border border-ink bg-muted">
+                          <FileText className="size-5" />
+                        </span>
+                      )}
                       <span className="shrink-0 border border-ink bg-gold px-1.5 py-0.5 text-[10px] font-black uppercase">
                         {KYC_DOC_OPTIONS.find((o) => o.id === d.kind)?.label ?? d.kind}
                       </span>
                       <span className="min-w-0 flex-1 truncate text-xs font-bold">
                         {d.file.name}
                         <span className="text-muted-foreground">
-                          {" "}· {(d.file.size / 1024).toFixed(0)} KB
+                          {" "}
+                          · {(d.file.size / 1024).toFixed(0)} KB
                         </span>
                       </span>
                       {d.status === "uploading" && (
@@ -1074,14 +1642,14 @@ export default function ClientNew() {
                           <Button
                             size="sm"
                             variant="outline"
-                            onClick={() => {
+                            onClick={() =>
                               setCoDocs((cur) =>
                                 cur.map((x) =>
                                   x.key === d.key ? { ...x, status: "uploading" } : x,
                                 ),
                               );
                               void uploadCoDoc(d.key, d.file);
-                            }}
+                            }
                           >
                             Retry
                           </Button>
@@ -1107,7 +1675,7 @@ export default function ClientNew() {
       {/* 3 · FAMILY DETAILS */}
       <section className="space-y-3 border-2 border-ink bg-card p-4 shadow-hard-sm">
         <h2 className="text-xs font-black uppercase tracking-[0.14em] text-muted-foreground">
-          4 · Family details
+          3 · Family details
         </h2>
         <div className="space-y-2">
           <div className="grid grid-cols-[2rem_1.4fr_3.5rem_1fr_1.2fr_2rem] gap-1 text-[10px] font-black uppercase text-muted-foreground">
@@ -1143,7 +1711,7 @@ export default function ClientNew() {
                   setFamily((rows) =>
                     rows.map((r, j) =>
                       j === i
-                        ? { ...r, age: e.target.value.replace(/\D/g, "").slice(0, 3) }
+                        ? { ...r, age: e.target.value.replace(/\\D/g, "").slice(0, 3) }
                         : r,
                     ),
                   )
@@ -1199,7 +1767,7 @@ export default function ClientNew() {
       {/* 4 · INCOME & BUSINESS DETAILS */}
       <section className="space-y-3 border-2 border-ink bg-card p-4 shadow-hard-sm">
         <h2 className="text-xs font-black uppercase tracking-[0.14em] text-muted-foreground">
-          5 · Income & business details
+          4 · Income & business details
         </h2>
         <Field label="Type of business" required>
           <input
@@ -1222,7 +1790,7 @@ export default function ClientNew() {
               className={inputCls}
               inputMode="numeric"
               value={biz.monthlyIncome}
-              onChange={digits(setBiz as Dispatch<SetStateAction<Record<string, string>>>, "monthlyIncome", 8)}
+              onChange={digits(setBiz as Dispatch<SetStateAction<Readonly<typeof biz>>>, "monthlyIncome", 8)}
               placeholder="12000"
             />
           </Field>
@@ -1231,7 +1799,7 @@ export default function ClientNew() {
               className={inputCls}
               inputMode="numeric"
               value={biz.householdExpenses}
-              onChange={digits(setBiz as Dispatch<SetStateAction<Record<string, string>>>, "householdExpenses", 8)}
+              onChange={digits(setBiz as Dispatch<SetStateAction<Readonly<typeof biz>>>, "householdExpenses", 8)}
             />
           </Field>
         </div>
@@ -1241,7 +1809,7 @@ export default function ClientNew() {
               className={inputCls}
               inputMode="numeric"
               value={biz.otherIncome}
-              onChange={digits(setBiz as Dispatch<SetStateAction<Record<string, string>>>, "otherIncome", 8)}
+              onChange={digits(setBiz as Dispatch<SetStateAction<Readonly<typeof biz>>>, "otherIncome", 8)}
             />
           </Field>
           <Field label="Existing loan / EMI ₹">
@@ -1249,7 +1817,7 @@ export default function ClientNew() {
               className={inputCls}
               inputMode="numeric"
               value={biz.existingEmi}
-              onChange={digits(setBiz as Dispatch<SetStateAction<Record<string, string>>>, "existingEmi", 8)}
+              onChange={digits(setBiz as Dispatch<SetStateAction<Readonly<typeof biz>>>, "existingEmi", 8)}
             />
           </Field>
         </div>
@@ -1258,7 +1826,7 @@ export default function ClientNew() {
       {/* 5 · LOAN DETAILS */}
       <section className="space-y-3 border-2 border-ink bg-card p-4 shadow-hard-sm">
         <h2 className="text-xs font-black uppercase tracking-[0.14em] text-muted-foreground">
-          6 · Loan details
+          5 · Loan details
         </h2>
         <p className="text-[11px] font-semibold text-muted-foreground">
           Request captured with the application — approval and disbursement
@@ -1270,7 +1838,7 @@ export default function ClientNew() {
               className={inputCls}
               inputMode="numeric"
               value={loan.amount}
-              onChange={digits(setLoan as Dispatch<SetStateAction<Record<string, string>>>, "amount", 8)}
+              onChange={digits(setLoan as Dispatch<SetStateAction<Readonly<typeof loan>>>, "amount", 8)}
               placeholder="50000"
             />
           </Field>
@@ -1290,7 +1858,7 @@ export default function ClientNew() {
               className={inputCls}
               inputMode="numeric"
               value={loan.tenure}
-              onChange={digits(setLoan as Dispatch<SetStateAction<Record<string, string>>>, "tenure", 3)}
+              onChange={digits(setLoan as Dispatch<SetStateAction<Readonly<typeof loan>>>, "tenure", 3)}
               placeholder="12"
             />
           </Field>
@@ -1312,7 +1880,7 @@ export default function ClientNew() {
               className={inputCls}
               inputMode="numeric"
               value={loan.installment}
-              onChange={digits(setLoan as Dispatch<SetStateAction<Record<string, string>>>, "installment", 7)}
+              onChange={digits(setLoan as Dispatch<SetStateAction<Readonly<typeof loan>>>, "installment", 7)}
             />
           </Field>
         </div>
@@ -1327,7 +1895,7 @@ export default function ClientNew() {
       {/* 6 · BANK ACCOUNT DETAILS */}
       <section className="space-y-3 border-2 border-ink bg-card p-4 shadow-hard-sm">
         <h2 className="text-xs font-black uppercase tracking-[0.14em] text-muted-foreground">
-          7 · Bank account details
+          6 · Bank account details
         </h2>
         <Field label="Account holder name">
           <input className={inputCls} value={bank.holder} onChange={bind(setBank, "holder")} />
@@ -1348,7 +1916,7 @@ export default function ClientNew() {
           <Field
             label="Account number"
             hint={
-              bank.accountNumber.trim() && !/^\d{6,20}$/.test(bank.accountNumber.trim())
+              bank.accountNumber.trim() && !/^\\d{6,20}$/.test(bank.accountNumber.trim())
                 ? "6–20 digits."
                 : undefined
             }
@@ -1357,7 +1925,8 @@ export default function ClientNew() {
               className={inputCls}
               inputMode="numeric"
               value={bank.accountNumber}
-              onChange={digits(setBank as Dispatch<SetStateAction<Record<string, string>>>, "accountNumber", 20)}
+              onChange={digits(setBank as Dispatch<SetStateAction<Readonly<typeof bank>>>, "accountNumber", 20)}
+              placeholder="6–20 digit account number"
             />
           </Field>
           <Field
@@ -1386,69 +1955,10 @@ export default function ClientNew() {
         )}
       </section>
 
-      {/* 7 · NOMINEE DETAILS */}
-      <section className="space-y-3 border-2 border-ink bg-card p-4 shadow-hard-sm">
-        <h2 className="text-xs font-black uppercase tracking-[0.14em] text-muted-foreground">
-          8 · Nominee details
-        </h2>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Nominee name">
-            <input
-              className={inputCls}
-              value={nominee.name}
-              onChange={bind(setNominee, "name")}
-            />
-          </Field>
-          <Field label="Relationship with applicant">
-            <input
-              className={inputCls}
-              value={nominee.relationship}
-              onChange={bind(setNominee, "relationship")}
-              placeholder="e.g. Son"
-            />
-          </Field>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Age (years)">
-            <input
-              className={inputCls}
-              inputMode="numeric"
-              value={nominee.age}
-              onChange={digits(setNominee as Dispatch<SetStateAction<Record<string, string>>>, "age", 3)}
-            />
-          </Field>
-          <Field
-            label="Mobile number"
-            hint={nominee.mobile.trim() && !MOBILE_RE.test(nominee.mobile.trim()) ? "Invalid mobile." : undefined}
-          >
-            <input
-              className={inputCls}
-              inputMode="numeric"
-              value={nominee.mobile}
-              onChange={(e) =>
-                setNominee((s) => ({ ...s, mobile: e.target.value.replace(/\D/g, "").slice(0, 10) }))
-              }
-            />
-          </Field>
-        </div>
-        <Field label="Address">
-          <textarea
-            className={areaCls}
-            value={nominee.address}
-            onChange={bind(setNominee, "address")}
-          />
-        </Field>
-        {nomineeTouched && !nomineeOk && (
-          <p className="text-[11px] font-bold text-destructive">
-            Nominee needs a name, relationship and valid age (1–120).
-          </p>
-        )}
-      </section>
-
       {/* 8 · DECLARATION */}
       <section className="space-y-3 border-2 border-ink bg-card p-4 shadow-hard-sm">
         <h2 className="text-xs font-black uppercase tracking-[0.14em] text-muted-foreground">
-          9 · Declaration
+          7 · Declaration
         </h2>
         <p className="border-2 border-ink bg-sky p-3 text-sm font-semibold">
           “I hereby declare that all information provided in this application is
@@ -1471,7 +1981,7 @@ export default function ClientNew() {
       {canOffice && (
         <section className="space-y-3 border-2 border-ink bg-gold p-4 shadow-hard-sm">
           <h2 className="text-xs font-black uppercase tracking-[0.14em]">
-            10 · For office use only
+            8 · For office use only
           </h2>
           <p className="text-[11px] font-semibold">
             Editable only by branch managers and admins — every change is
@@ -1534,7 +2044,7 @@ export default function ClientNew() {
                 className={inputCls}
                 inputMode="numeric"
                 value={office.approvedAmount}
-                onChange={digits(setOffice as Dispatch<SetStateAction<Record<string, string>>>, "approvedAmount", 8)}
+                onChange={digits(setOffice as Dispatch<SetStateAction<Readonly<typeof office>>>, "approvedAmount", 8)}
               />
             </Field>
           </div>
