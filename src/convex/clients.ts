@@ -11,6 +11,11 @@ import {
 } from "../lib/server/convexHelpers";
 import { istDateKey } from "../lib/server/convexHelpers";
 import {
+  centerReportRows,
+  createCenterForActor,
+  resolveCenterForClient,
+} from "../lib/server/centerOps";
+import {
   ageFromDob,
   mobileNumber,
   optionalString,
@@ -97,6 +102,8 @@ export const list = query({
     const loans = await ctx.db.query("loans").collect();
     const profiles = await ctx.db.query("profiles").collect();
     const staffById = new Map(profiles.map((p) => [p._id, p]));
+    const centers = await ctx.db.query("centers").collect();
+    const centerNameByCode = new Map(centers.map((c) => [c.code, c.name]));
 
     return clients.map((c) => {
       const mine = loans.filter((l) => l.clientId === c._id);
@@ -105,6 +112,7 @@ export const list = query({
       return {
         ...c,
         staffName: staffById.get(c.assignedTo)?.name ?? "—",
+        centerName: c.centerCode ? (centerNameByCode.get(c.centerCode) ?? null) : null,
         activeLoans: active.length,
         overdueLoans: overdue.length,
         outstanding: active.reduce((s, l) => s + l.outstanding, 0),
@@ -754,6 +762,17 @@ export const create = mutation({
     }, 0);
     const code = `C-${String(maxCode + 1).padStart(6, "0")}`;
 
+    // Centre linkage: the centre selected in the joining form is re-verified
+    // against the database here (exists + same branch) so a direct backend
+    // call cannot attach a client to an unknown or foreign centre. The
+    // centre's permanent generated ID (e.g. BALLIA-001) is stored on the
+    // client — clients never generate their own centre IDs.
+    const resolvedCenter = await resolveCenterForClient(
+      ctx,
+      branchId,
+      optionalString(args.centerCode, "centerCode", 40),
+    );
+
     const clientId = await ctx.db.insert("clients", {
       code,
       name,
@@ -793,7 +812,8 @@ export const create = mutation({
       kycStatus: "PENDING",
       kycDocType,
       kycDocRef,
-      centerCode: optionalString(args.centerCode, "centerCode", 40),
+      centerCode: resolvedCenter.centerCode,
+      centerId: resolvedCenter.centerId,
       groupCode: optionalString(args.groupCode, "groupCode", 40),
       status: "ACTIVE",
       searchText: `${name} ${mobile} ${code} ${village}`.toLowerCase(),
@@ -1504,6 +1524,99 @@ export const decideDocument = mutation({
       branchId: client?.branchId,
     });
     return { ok: true };
+  },
+});
+
+/* ---------------------------- Centre creation ---------------------------- */
+
+/**
+ * Create a centre from the New Client popup ("+ Create New Center").
+ * Generates the unique Centre ID (e.g. BALLIA-001) ONCE, saves it on the
+ * centre record permanently, and returns it so the joining form can
+ * preselect the new centre immediately.
+ */
+export const createCenter = mutation({
+  args: {
+    name: v.string(),
+    village: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx);
+    requirePermission(me, "create_client");
+    const center = await createCenterForActor(ctx, me, args);
+    return { center };
+  },
+});
+
+/** Lightweight centre picker for the New Client popup (ID or name search). */
+export const centerSearch = query({
+  args: { q: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx, { allowInactive: true });
+    requirePermission(me, "create_client");
+    const q = (args.q ?? "").trim().toLowerCase();
+    const centers = (await ctx.db.query("centers").collect())
+      .filter(
+        (c) =>
+          me.role === "SUPER_ADMIN" || !me.branchId || c.branchId === me.branchId,
+      )
+      .filter(
+        (c) =>
+          !q || c.code.toLowerCase().includes(q) || c.name.toLowerCase().includes(q),
+      )
+      .sort((a, b) => a.name.localeCompare(b.name));
+    return centers.map((c) => ({
+      _id: c._id,
+      code: c.code,
+      name: c.name,
+      village: c.village,
+    }));
+  },
+});
+
+/**
+ * Centre-wise client report: fetch all registered clients linked to a
+ * Centre ID (e.g. BALLIA-001) from the database. Access is enforced on
+ * the backend — the viewer's client scope is applied first, then the
+ * centre's branch access is checked, so clients of another centre (or
+ * outside the viewer's scope) can never appear.
+ */
+export const centerReport = query({
+  args: {
+    centerCode: v.string(),
+    limit: v.optional(v.number()),
+    offset: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx, { allowInactive: true });
+    requirePermission(me, "view_clients");
+
+    const centers = await ctx.db.query("centers").collect();
+    const visible = await visibleClients(ctx, me);
+    const base = centerReportRows(me, centers, visible, args);
+
+    const profiles = await ctx.db.query("profiles").collect();
+    const staffById = new Map(profiles.map((p) => [p._id, p]));
+
+    return {
+      status: base.status,
+      center: base.center,
+      total: base.total,
+      limit: Math.min(Math.max(Math.floor(args.limit ?? 25), 1), 100),
+      offset: Math.max(Math.floor(args.offset ?? 0), 0),
+      clients: base.clients.map((c) => ({
+        _id: c._id,
+        code: c.code,
+        name: c.name,
+        mobile: c.mobile,
+        village: c.village,
+        kycStatus: c.kycStatus,
+        status: c.status,
+        createdAt: c.createdAt,
+        centerCode: c.centerCode ?? base.center?.code ?? null,
+        staffName: staffById.get(c.assignedTo)?.name ?? "—",
+      })),
+    };
   },
 });
 

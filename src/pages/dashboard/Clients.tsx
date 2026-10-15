@@ -108,6 +108,11 @@ export default function Clients() {
                 </span>
                 <span className="mt-1 flex flex-wrap gap-1">
                   <StatusChip status={c.kycStatus} label={`KYC ${c.kycStatus.toLowerCase()}`} />
+                  {c.centerCode && (
+                    <StatusChip
+                      label={`${c.centerCode}${c.centerName ? ` · ${c.centerName}` : ""}`}
+                    />
+                  )}
                   {c.overdueLoans > 0 && (
                     <StatusChip label={`${c.overdueLoans} overdue`} tone="bad" />
                   )}

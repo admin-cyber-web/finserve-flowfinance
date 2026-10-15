@@ -224,6 +224,9 @@ const schema = defineSchema(
       verifiedBy: v.optional(v.id("profiles")),
       verifiedAt: v.optional(v.number()),
       centerCode: v.optional(v.string()),
+      // Permanent database reference to the centre (set once when the client
+      // is linked; centerCode holds the generated ID e.g. BALLIA-001).
+      centerId: v.optional(v.id("centers")),
       groupCode: v.optional(v.string()),
       status: v.string(), // ACTIVE | INACTIVE
       searchText: v.string(), // lowercased name/mobile/code for search

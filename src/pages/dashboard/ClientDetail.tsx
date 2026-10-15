@@ -185,6 +185,13 @@ export default function ClientDetail() {
             <KeyValue k="Address" v={`${client.address ?? "—"}, ${client.district}, ${client.pin}`} />
             <KeyValue k="KYC doc" v={client.kycDocRef ? `${client.kycDocType}: ${client.kycDocRef}` : client.kycDocType ?? "—"} mono />
             <KeyValue k="Assigned staff" v={data.assignedStaff?.name ?? "—"} />
+            {data.center && (
+              <KeyValue
+                k="Centre"
+                v={`${data.center.code} · ${data.center.name}`}
+                mono
+              />
+            )}
             <KeyValue k="Joined" v={formatDate(client.createdAt)} />
           </section>
 

@@ -21,17 +21,25 @@ import {
 import { LOAN_STATUSES } from "@/lib/finance/types";
 import { cn } from "@/lib/utils";
 import { useQuery } from "convex/react";
-import { Download, FileBarChart, Search, UserSearch } from "lucide-react";
+import {
+  Building2,
+  Download,
+  FileBarChart,
+  Lock,
+  Search,
+  UserSearch,
+} from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import ReportClient from "./ReportClient";
 
 /* ---------------------------------------------------------------------------
- * Reports — four report categories over the real database:
+ * Reports — five report categories over the real database:
  *   Overview    portfolio metrics (clients, loans, repayments, dues)
  *   Transactions ledger-derived transaction report (pre-existing engine)
  *   Clients      authorized client list + Client ID search → full report
  *   Staff        staff-wise and branch-manager-wise reports with filters
+ *   Centres      centre-wise client report by Centre ID (e.g. BALLIA-001)
  * Every figure comes from authenticated Convex queries with backend scoping.
  * --------------------------------------------------------------------------- */
 
@@ -170,6 +178,25 @@ export default function Reports() {
     staffFilter ? { staffId: staffFilter as Id<"profiles">, limit: 25 } : "skip",
   );
 
+  /* ------------------------------ centre-wise ---------------------------- */
+  const CENTER_PAGE = 25;
+  const [centerInput, setCenterInput] = useState("");
+  const [centerCode, setCenterCode] = useState("");
+  const [centerOffset, setCenterOffset] = useState(0);
+
+  const centerReport = useQuery(
+    api.clients.centerReport,
+    centerCode
+      ? { centerCode, limit: CENTER_PAGE, offset: centerOffset }
+      : "skip",
+  );
+
+  const searchCenter = (e: FormEvent) => {
+    e.preventDefault();
+    setCenterOffset(0);
+    setCenterCode(centerInput.trim().toUpperCase());
+  };
+
   return (
     <div className="space-y-4 pb-10">
       <PageHeader
@@ -195,6 +222,9 @@ export default function Reports() {
           </TabsTrigger>
           <TabsTrigger value="staff" className="flex-1 text-xs font-black uppercase">
             Staff & branch
+          </TabsTrigger>
+          <TabsTrigger value="centres" className="flex-1 text-xs font-black uppercase">
+            Centres
           </TabsTrigger>
         </TabsList>
 
@@ -906,6 +936,128 @@ export default function Reports() {
                   value={<Money value={staffReport.totals.branch.collected} className="text-base" />}
                 />
               </div>
+            </>
+          )}
+        </TabsContent>
+
+        {/* ----------------------------- CENTRES --------------------------- */}
+        <TabsContent value="centres" className="mt-4 space-y-4">
+          <form onSubmit={searchCenter} className="flex gap-2">
+            <div className="flex flex-1 items-center border-2 border-ink bg-white shadow-hard-sm">
+              <Search className="ml-3 size-4 shrink-0 text-muted-foreground" />
+              <input
+                value={centerInput}
+                onChange={(e) => setCenterInput(e.target.value)}
+                placeholder="ENTER CENTRE ID — E.G. BALLIA-001"
+                className="h-11 w-full bg-transparent px-3 text-sm font-bold uppercase outline-none"
+              />
+            </div>
+            <Button type="submit" size="sm" disabled={!centerInput.trim()}>
+              <Search className="size-4" /> Search
+            </Button>
+          </form>
+
+          {!centerCode ? (
+            <EmptyState
+              title="Centre-wise client report"
+              hint="Enter a Centre ID such as BALLIA-001 to list every registered client of that centre from the database."
+              icon={<Building2 className="size-5" />}
+            />
+          ) : centerReport === undefined ? (
+            <RowSkeleton rows={5} />
+          ) : centerReport.status === "NOT_FOUND" ? (
+            <EmptyState
+              title="Centre not found"
+              hint={`No centre exists with ID ${centerCode}. Check the Centre ID and search again.`}
+              icon={<Search className="size-5" />}
+            />
+          ) : centerReport.status === "FORBIDDEN" ? (
+            <EmptyState
+              title="Access denied"
+              hint="You are not authorised to view clients of this centre."
+              icon={<Lock className="size-5" />}
+            />
+          ) : centerReport.total === 0 ? (
+            <EmptyState
+              title="No clients found"
+              hint={`Centre ${centerCode} exists but has no registered clients yet.`}
+              icon={<UserSearch className="size-5" />}
+            />
+          ) : (
+            <>
+              <section className="border-2 border-ink bg-navy px-3 py-3 text-paper shadow-hard">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-black uppercase">
+                      {centerReport.center?.name}
+                    </div>
+                    <div className="truncate text-[11px] font-semibold text-paper/70">
+                      {centerReport.center?.village || "—"}
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <div className="border-2 border-gold px-2 py-1 font-mono text-xs font-black text-gold">
+                      {centerReport.center?.code}
+                    </div>
+                    <div className="mt-1 text-[10px] font-black uppercase text-gold">
+                      {centerReport.total} client{centerReport.total === 1 ? "" : "s"}
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <div className="flex flex-col gap-2">
+                {centerReport.clients.map((c) => (
+                  <div
+                    key={c._id}
+                    className="border-2 border-ink bg-card p-3 shadow-hard-sm"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-black">{c.name}</div>
+                        <div className="font-mono text-[11px] font-bold text-muted-foreground">
+                          {c.code} · {c.mobile}
+                        </div>
+                      </div>
+                      <StatusChip status={c.kycStatus} label={`KYC ${c.kycStatus.toLowerCase()}`} />
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-semibold text-muted-foreground">
+                      <span>Joined {formatDate(c.createdAt)}</span>
+                      <span>{c.village || "—"}</span>
+                      <span>Staff: {c.staffName}</span>
+                      <span className="font-mono font-black text-foreground">
+                        Centre {c.centerCode}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {centerReport.total > CENTER_PAGE && (
+                <div className="flex items-center justify-between gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={centerOffset === 0}
+                    onClick={() => setCenterOffset(Math.max(0, centerOffset - CENTER_PAGE))}
+                  >
+                    Previous
+                  </Button>
+                  <span className="text-[11px] font-black uppercase text-muted-foreground">
+                    Showing {centerOffset + 1}–
+                    {Math.min(centerOffset + CENTER_PAGE, centerReport.total)} of{" "}
+                    {centerReport.total}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={centerOffset + CENTER_PAGE >= centerReport.total}
+                    onClick={() => setCenterOffset(centerOffset + CENTER_PAGE)}
+                  >
+                    Next
+                  </Button>
+                </div>
+              )}
             </>
           )}
         </TabsContent>
