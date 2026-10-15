@@ -28,6 +28,7 @@ import Staff from "./dashboard/Staff";
 import StaffDetail from "./dashboard/StaffDetail";
 import StaffHome from "./dashboard/StaffHome";
 import Transactions from "./dashboard/Transactions";
+import Users from "./dashboard/Users";
 
 function BootScreen({ label }: { label: string }) {
   return (
@@ -132,6 +133,7 @@ export default function Dashboard() {
       <Route path="approvals" element={<Approvals />} />
       <Route path="staff" element={<Staff />} />
       <Route path="staff/:id" element={<StaffDetail />} />
+      <Route path="users" element={<Users />} />
       <Route path="overdue" element={<Overdue />} />
       <Route path="accounting" element={<Accounting />} />
       <Route path="audit" element={<Audit />} />

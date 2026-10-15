@@ -1,0 +1,679 @@
+{
+  "counts": {
+    "accountLedgers": 10,
+    "approvalRequests": 0,
+    "auditLogs": 19,
+    "branches": 3,
+    "cashClosings": 0,
+    "cashHandovers": 0,
+    "cashIssues": 0,
+    "centers": 1,
+    "clientDocuments": 0,
+    "clientFamilyMembers": 0,
+    "clientGeoPhotos": 0,
+    "clientNotes": 0,
+    "clientStaffHistory": 0,
+    "clients": 1,
+    "collections": 0,
+    "devices": 1,
+    "expenses": 0,
+    "grievances": 0,
+    "groupMembers": 0,
+    "groups": 0,
+    "journalEntries": 0,
+    "loanApplications": 0,
+    "loanProducts": 4,
+    "loanSchedules": 0,
+    "loans": 0,
+    "meetings": 0,
+    "notifications": 0,
+    "profiles": 2,
+    "receipts": 0,
+    "recoveryActivities": 0,
+    "users": 2,
+    "walletTransactions": 0,
+    "wallets": 0
+  },
+  "tables": {
+    "accountLedgers": [
+      {
+        "_creationTime": 1791468461815.1462,
+        "_id": "k175w655dcgg4b20nqqfch5da18fw6vs",
+        "code": "1010",
+        "name": "Cash in Hand — Field Staff",
+        "normalSide": "DEBIT",
+        "type": "ASSET"
+      },
+      {
+        "_creationTime": 1791468461815.1465,
+        "_id": "k175s4894j8n1mtw2ezhfpq5qn8fxgsb",
+        "code": "1015",
+        "name": "Cash in Hand — Branch / BM",
+        "normalSide": "DEBIT",
+        "type": "ASSET"
+      },
+      {
+        "_creationTime": 1791468461815.1467,
+        "_id": "k172kdbpp6556envcw4fey94sh8fxpm3",
+        "code": "1020",
+        "name": "Bank Account",
+        "normalSide": "DEBIT",
+        "type": "ASSET"
+      },
+      {
+        "_creationTime": 1791468461815.147,
+        "_id": "k171kdzd5c50pn1krjkr42hfxh8fxjjx",
+        "code": "1100",
+        "name": "Loan Receivable",
+        "normalSide": "DEBIT",
+        "type": "ASSET"
+      },
+      {
+        "_creationTime": 1791468461815.1472,
+        "_id": "k17fgthtq0zbnp35hht1j32e6h8fws6b",
+        "code": "1200",
+        "name": "Advance to Staff",
+        "normalSide": "DEBIT",
+        "type": "ASSET"
+      },
+      {
+        "_creationTime": 1791468461815.1475,
+        "_id": "k17c203hdm5ab6sfyen0fbspfs8fwmxc",
+        "code": "2010",
+        "name": "Suspense / Clearing",
+        "normalSide": "CREDIT",
+        "type": "LIABILITY"
+      },
+      {
+        "_creationTime": 1791468461815.1477,
+        "_id": "k1738x6e6nq9dxg1r9s1zkcmps8fwh0q",
+        "code": "4000",
+        "name": "Interest Income",
+        "normalSide": "CREDIT",
+        "type": "INCOME"
+      },
+      {
+        "_creationTime": 1791468461815.148,
+        "_id": "k175r7npkr8q9qz05sf4eaw2a58fw5ym",
+        "code": "4010",
+        "name": "Processing Fee Income",
+        "normalSide": "CREDIT",
+        "type": "INCOME"
+      },
+      {
+        "_creationTime": 1791468461815.1482,
+        "_id": "k17cv3edyck5x8k0zx8twwz8398fwhrj",
+        "code": "4020",
+        "name": "Other Approved Charges",
+        "normalSide": "CREDIT",
+        "type": "INCOME"
+      },
+      {
+        "_creationTime": 1791468461815.1484,
+        "_id": "k173fwxgz4e73h5p2dp80h1pqx8fwhmw",
+        "code": "5000",
+        "name": "Operating Expenses",
+        "normalSide": "DEBIT",
+        "type": "EXPENSE"
+      }
+    ],
+    "approvalRequests": [],
+    "auditLogs": [
+      {
+        "_creationTime": 1791468384599.154,
+        "_id": "k979rhh43e2tbsqytfx3x17hms8fx2st",
+        "action": "SUPER_ADMIN_BOOTSTRAP",
+        "actorId": "p578svxf5jrxebs91rfwk9n9098fxjm4",
+        "actorName": "Super Admin",
+        "after": {
+          "created": true,
+          "email": "tiwarijhumki@gmail.com"
+        },
+        "createdAt": 1791468384599,
+        "device": "email-otp",
+        "entity": "profiles",
+        "entityId": "SA-00001",
+        "role": "SUPER_ADMIN"
+      },
+      {
+        "_creationTime": 1791468512647.2651,
+        "_id": "k975nf7xeh2yf4cfs2jpr8czjh8fwdg0",
+        "action": "STAFF_CREATED",
+        "actorId": "p578svxf5jrxebs91rfwk9n9098fxjm4",
+        "actorName": "Super Admin",
+        "after": {
+          "branchId": "ps7f8gp7yzzqa01cc2xtn49q2n8fx25k",
+          "name": "Test Branch Manager",
+          "role": "BRANCH_MANAGER",
+          "status": "ACTIVE"
+        },
+        "branchId": "ps7f8gp7yzzqa01cc2xtn49q2n8fx25k",
+        "createdAt": 1791468512647,
+        "entity": "profiles",
+        "entityId": "BM-10002",
+        "role": "SUPER_ADMIN"
+      },
+      {
+        "_creationTime": 1791471108552.5073,
+        "_id": "k97bpqewzdhvbh8bbcv9236kw98fxw7g",
+        "action": "STAFF_CREATED",
+        "actorId": "p578svxf5jrxebs91rfwk9n9098fxjm4",
+        "actorName": "Super Admin",
+        "after": {
+          "branchId": "ps7f8gp7yzzqa01cc2xtn49q2n8fx25k",
+          "name": "Temp PIN Test BM",
+          "role": "BRANCH_MANAGER",
+          "status": "ACTIVE"
+        },
+        "branchId": "ps7f8gp7yzzqa01cc2xtn49q2n8fx25k",
+        "createdAt": 1791471108552,
+        "entity": "profiles",
+        "entityId": "BM-10003",
+        "role": "SUPER_ADMIN"
+      },
+      {
+        "_creationTime": 1791471108782.7542,
+        "_id": "k97atme8ftzaqvh49b2d4fjdzn8fwqaf",
+        "action": "STAFF_CREDENTIAL_RESET",
+        "actorId": "p578svxf5jrxebs91rfwk9n9098fxjm4",
+        "actorName": "Super Admin",
+        "after": {},
+        "branchId": "ps7f8gp7yzzqa01cc2xtn49q2n8fx25k",
+        "createdAt": 1791471108782,
+        "entity": "profiles",
+        "entityId": "BM-10003",
+        "role": "SUPER_ADMIN"
+      },
+      {
+        "_creationTime": 1791471153589.2695,
+        "_id": "k979mg4vr6cp2sytwmpts26ve98fweh3",
+        "action": "STAFF_STATUS_CHANGED",
+        "actorId": "p578svxf5jrxebs91rfwk9n9098fxjm4",
+        "actorName": "Super Admin",
+        "after": {
+          "reason": "temp test: status enforcement",
+          "status": "SUSPENDED"
+        },
+        "before": {
+          "status": "ACTIVE"
+        },
+        "branchId": "ps7f8gp7yzzqa01cc2xtn49q2n8fx25k",
+        "createdAt": 1791471153589,
+        "entity": "profiles",
+        "entityId": "BM-10003",
+        "referenceId": "BM-10003",
+        "role": "SUPER_ADMIN"
+      },
+      {
+        "_creationTime": 1791471153947.4377,
+        "_id": "k977ke4h574m4xdgty7zx4y7sn8fxq7p",
+        "action": "STAFF_STATUS_CHANGED",
+        "actorId": "p578svxf5jrxebs91rfwk9n9098fxjm4",
+        "actorName": "Super Admin",
+        "after": {
+          "reason": "temp test: restore after status check",
+          "status": "ACTIVE"
+        },
+        "before": {
+          "status": "SUSPENDED"
+        },
+        "branchId": "ps7f8gp7yzzqa01cc2xtn49q2n8fx25k",
+        "createdAt": 1791471153947,
+        "entity": "profiles",
+        "entityId": "BM-10003",
+        "referenceId": "BM-10003",
+        "role": "SUPER_ADMIN"
+      },
+      {
+        "_creationTime": 1791471320623.93,
+        "_id": "k979nj53kwbeqf99j6y3bejkex8fxhs6",
+        "action": "STAFF_STATUS_CHANGED",
+        "actorId": "p578svxf5jrxebs91rfwk9n9098fxjm4",
+        "actorName": "Super Admin",
+        "after": {
+          "reason": "temp test: status enforcement",
+          "status": "SUSPENDED"
+        },
+        "before": {
+          "status": "ACTIVE"
+        },
+        "branchId": "ps7f8gp7yzzqa01cc2xtn49q2n8fx25k",
+        "createdAt": 1791471320623,
+        "entity": "profiles",
+        "entityId": "BM-10003",
+        "referenceId": "BM-10003",
+        "role": "SUPER_ADMIN"
+      },
+      {
+        "_creationTime": 1791471321021.1143,
+        "_id": "k979cpfrm6xrxahk21h663a99h8fwpra",
+        "action": "STAFF_STATUS_CHANGED",
+        "actorId": "p578svxf5jrxebs91rfwk9n9098fxjm4",
+        "actorName": "Super Admin",
+        "after": {
+          "reason": "temp test: restore",
+          "status": "ACTIVE"
+        },
+        "before": {
+          "status": "SUSPENDED"
+        },
+        "branchId": "ps7f8gp7yzzqa01cc2xtn49q2n8fx25k",
+        "createdAt": 1791471321021,
+        "entity": "profiles",
+        "entityId": "BM-10003",
+        "referenceId": "BM-10003",
+        "role": "SUPER_ADMIN"
+      },
+      {
+        "_creationTime": 1791471348000.036,
+        "_id": "k97205encp2cdsjwhxf873p0gn8fwx7x",
+        "action": "STAFF_STATUS_CHANGED",
+        "actorId": "p578svxf5jrxebs91rfwk9n9098fxjm4",
+        "actorName": "Super Admin",
+        "after": {
+          "reason": "temporary test account cleanup",
+          "status": "DEACTIVATED"
+        },
+        "before": {
+          "status": "ACTIVE"
+        },
+        "branchId": "ps7f8gp7yzzqa01cc2xtn49q2n8fx25k",
+        "createdAt": 1791471348000,
+        "entity": "profiles",
+        "entityId": "BM-10003",
+        "referenceId": "BM-10003",
+        "role": "SUPER_ADMIN"
+      },
+      {
+        "_creationTime": 1791471348201.8088,
+        "_id": "k971y1ks60jfpygkm3wb2p3sxn8fxdsh",
+        "action": "STAFF_STATUS_CHANGED",
+        "actorId": "p578svxf5jrxebs91rfwk9n9098fxjm4",
+        "actorName": "Super Admin",
+        "after": {
+          "reason": "temporary test account cleanup",
+          "status": "DEACTIVATED"
+        },
+        "before": {
+          "status": "ACTIVE"
+        },
+        "branchId": "ps7f8gp7yzzqa01cc2xtn49q2n8fx25k",
+        "createdAt": 1791471348201,
+        "entity": "profiles",
+        "entityId": "BM-10002",
+        "referenceId": "BM-10002",
+        "role": "SUPER_ADMIN"
+      },
+      {
+        "_creationTime": 1791471523788.5552,
+        "_id": "k978t0q8pbt3mb29eq29fge7yh8fwkpa",
+        "action": "STAFF_CREATED",
+        "actorId": "p578svxf5jrxebs91rfwk9n9098fxjm4",
+        "actorName": "Super Admin",
+        "after": {
+          "branchId": "ps7f8gp7yzzqa01cc2xtn49q2n8fx25k",
+          "name": "Temp Test Staff",
+          "role": "FIELD_STAFF",
+          "status": "ACTIVE"
+        },
+        "branchId": "ps7f8gp7yzzqa01cc2xtn49q2n8fx25k",
+        "createdAt": 1791471523788,
+        "entity": "profiles",
+        "entityId": "ST-10006",
+        "role": "SUPER_ADMIN"
+      },
+      {
+        "_creationTime": 1791471524020.8428,
+        "_id": "k970kf9nn475fk21pjffzqq6gn8fxspd",
+        "action": "STAFF_CREDENTIAL_RESET",
+        "actorId": "p578svxf5jrxebs91rfwk9n9098fxjm4",
+        "actorName": "Super Admin",
+        "after": {},
+        "branchId": "ps7f8gp7yzzqa01cc2xtn49q2n8fx25k",
+        "createdAt": 1791471524020,
+        "entity": "profiles",
+        "entityId": "ST-10006",
+        "role": "SUPER_ADMIN"
+      },
+      {
+        "_creationTime": 1791471524990.3748,
+        "_id": "k97cnve12jq5nwe7yvbfb875gx8fwkxn",
+        "action": "STAFF_STATUS_CHANGED",
+        "actorId": "p578svxf5jrxebs91rfwk9n9098fxjm4",
+        "actorName": "Super Admin",
+        "after": {
+          "reason": "temporary test account cleanup",
+          "status": "DEACTIVATED"
+        },
+        "before": {
+          "status": "ACTIVE"
+        },
+        "branchId": "ps7f8gp7yzzqa01cc2xtn49q2n8fx25k",
+        "createdAt": 1791471524990,
+        "entity": "profiles",
+        "entityId": "ST-10006",
+        "referenceId": "ST-10006",
+        "role": "SUPER_ADMIN"
+      },
+      {
+        "_creationTime": 1791471525198.9514,
+        "_id": "k976wnk0wtd9qpw52mz0tsf2fs8fxyhq",
+        "action": "STAFF_CREATED",
+        "actorId": "p578svxf5jrxebs91rfwk9n9098fxjm4",
+        "actorName": "Super Admin",
+        "after": {
+          "branchId": "ps7f8gp7yzzqa01cc2xtn49q2n8fx25k",
+          "name": "Temp Test Accountant",
+          "role": "ACCOUNTANT",
+          "status": "ACTIVE"
+        },
+        "branchId": "ps7f8gp7yzzqa01cc2xtn49q2n8fx25k",
+        "createdAt": 1791471525198,
+        "entity": "profiles",
+        "entityId": "AC-10002",
+        "role": "SUPER_ADMIN"
+      },
+      {
+        "_creationTime": 1791471525414.2847,
+        "_id": "k97ftxb1qm6k997veqkar5k7ax8fx0ae",
+        "action": "STAFF_CREDENTIAL_RESET",
+        "actorId": "p578svxf5jrxebs91rfwk9n9098fxjm4",
+        "actorName": "Super Admin",
+        "after": {},
+        "branchId": "ps7f8gp7yzzqa01cc2xtn49q2n8fx25k",
+        "createdAt": 1791471525414,
+        "entity": "profiles",
+        "entityId": "AC-10002",
+        "role": "SUPER_ADMIN"
+      },
+      {
+        "_creationTime": 1791471526483.7073,
+        "_id": "k97ddwgdwf8pd4g593av5q7hpx8fw3ze",
+        "action": "STAFF_STATUS_CHANGED",
+        "actorId": "p578svxf5jrxebs91rfwk9n9098fxjm4",
+        "actorName": "Super Admin",
+        "after": {
+          "reason": "temporary test account cleanup",
+          "status": "DEACTIVATED"
+        },
+        "before": {
+          "status": "ACTIVE"
+        },
+        "branchId": "ps7f8gp7yzzqa01cc2xtn49q2n8fx25k",
+        "createdAt": 1791471526483,
+        "entity": "profiles",
+        "entityId": "AC-10002",
+        "referenceId": "AC-10002",
+        "role": "SUPER_ADMIN"
+      },
+      {
+        "_creationTime": 1792052710493.2822,
+        "_id": "k97e5r581f948bqdra793hsgpd8gavx1",
+        "action": "STAFF_CREATED",
+        "actorId": "p574ae493kw1d8xcwsmqq262498ga2pc",
+        "actorName": "Pankaj Tiwari",
+        "after": {
+          "branchId": "ps76hgy5mxg02y17t5q36kncpd8fw23b",
+          "credentialSet": true,
+          "mobile": "9876543210",
+          "name": "Pankaj Tiwari",
+          "role": "BRANCH_MANAGER",
+          "status": "ACTIVE",
+          "tempPin": "provided"
+        },
+        "branchId": "ps76hgy5mxg02y17t5q36kncpd8fw23b",
+        "createdAt": 1792052710493,
+        "entity": "profiles",
+        "entityId": "BM-10002",
+        "role": "BRANCH_MANAGER"
+      },
+      {
+        "_creationTime": 1792052731179.8499,
+        "_id": "k9700aw95symda0m6vqpkmwh598gbexm",
+        "action": "SESSION_STARTED",
+        "actorId": "p574ae493kw1d8xcwsmqq262498ga2pc",
+        "actorName": "Pankaj Tiwari",
+        "createdAt": 1792052731179,
+        "device": "system-id-login",
+        "entity": "profiles",
+        "entityId": "BM-10002",
+        "role": "BRANCH_MANAGER"
+      },
+      {
+        "_creationTime": 1792052736360.5962,
+        "_id": "k972m55h71h4wckdwrke5fwrc58gapkt",
+        "action": "SESSION_STARTED",
+        "actorId": "p574ae493kw1d8xcwsmqq262498ga2pc",
+        "actorName": "Pankaj Tiwari",
+        "createdAt": 1792052736360,
+        "device": "system-id-login",
+        "entity": "profiles",
+        "entityId": "BM-10002",
+        "role": "BRANCH_MANAGER"
+      }
+    ],
+    "branches": [
+      {
+        "_creationTime": 1791468461815.1455,
+        "_id": "ps7f8gp7yzzqa01cc2xtn49q2n8fx25k",
+        "city": "Lucknow",
+        "code": "LKO",
+        "createdAt": 1791468461815,
+        "name": "Lucknow — Hazratganj Main",
+        "state": "Uttar Pradesh",
+        "status": "ACTIVE"
+      },
+      {
+        "_creationTime": 1791468461815.1458,
+        "_id": "ps76hgy5mxg02y17t5q36kncpd8fw23b",
+        "city": "Kanpur",
+        "code": "KNP",
+        "createdAt": 1791468461815,
+        "name": "Kanpur — Civil Lines",
+        "state": "Uttar Pradesh",
+        "status": "ACTIVE"
+      },
+      {
+        "_creationTime": 1791468461815.146,
+        "_id": "ps75tepws4zbys3zntp2v4hmkn8fwp1t",
+        "city": "Varanasi",
+        "code": "VNS",
+        "createdAt": 1791468461815,
+        "name": "Varanasi — Lanka",
+        "state": "Uttar Pradesh",
+        "status": "ACTIVE"
+      }
+    ],
+    "cashClosings": [],
+    "cashHandovers": [],
+    "cashIssues": [],
+    "centers": [
+      {
+        "_creationTime": 1792053104350.4644,
+        "_id": "ks7b6cg60k2ywz3mcfms8899cd8garat",
+        "branchId": "ps76hgy5mxg02y17t5q36kncpd8fw23b",
+        "code": "BALLIA-001",
+        "createdAt": 1792053104350,
+        "name": "Ballia",
+        "staffId": "p574ae493kw1d8xcwsmqq262498ga2pc",
+        "village": ""
+      }
+    ],
+    "clientDocuments": [],
+    "clientFamilyMembers": [],
+    "clientGeoPhotos": [],
+    "clientNotes": [],
+    "clientStaffHistory": [],
+    "clients": [
+      {
+        "_creationTime": 1792053104350.4646,
+        "_id": "m972dpkewdyh40cn4pq6jjnxsh8gbjzx",
+        "age": 34,
+        "assignedTo": "p574ae493kw1d8xcwsmqq262498ga2pc",
+        "branchId": "ps76hgy5mxg02y17t5q36kncpd8fw23b",
+        "centerCode": "BALLIA-001",
+        "centerId": "ks7b6cg60k2ywz3mcfms8899cd8garat",
+        "code": "C-000001",
+        "createdAt": 1792053104350,
+        "createdBy": "p574ae493kw1d8xcwsmqq262498ga2pc",
+        "district": "Ballia",
+        "familyMembers": 3,
+        "gender": "FEMALE",
+        "householdIncome": 12000,
+        "kycStatus": "PENDING",
+        "mobile": "9876500001",
+        "monthlyIncome": 8000,
+        "name": "Zeta Test Client",
+        "occupation": "Farmer",
+        "pin": "277001",
+        "searchText": "zeta test client",
+        "state": "Uttar Pradesh",
+        "status": "ACTIVE",
+        "village": "Ballia town"
+      }
+    ],
+    "collections": [],
+    "devices": [
+      {
+        "_creationTime": 1791468384599.1538,
+        "_id": "mn7d2jvdmtx2axg3q01bc3vw3n8fxr79",
+        "label": "Email sign-in",
+        "lastSeenAt": 1791468384599,
+        "profileId": "p578svxf5jrxebs91rfwk9n9098fxjm4"
+      }
+    ],
+    "expenses": [],
+    "grievances": [],
+    "groupMembers": [],
+    "groups": [],
+    "journalEntries": [],
+    "loanApplications": [],
+    "loanProducts": [
+      {
+        "_creationTime": 1791468461815.1565,
+        "_id": "nh7fxpr8avcy6yea0ny5cxyhq98fwnvx",
+        "chargePercent": 1,
+        "code": "PRC-WMC",
+        "createdAt": 1791468461815,
+        "frequency": "WEEKLY",
+        "graceDays": 0,
+        "interestMethod": "FLAT",
+        "interestRate": 24,
+        "maxAmount": 100000,
+        "maxObligationRatio": 50,
+        "minAmount": 10000,
+        "name": "Weekly Micro Credit",
+        "processingFee": 250,
+        "status": "ACTIVE",
+        "tenure": 26
+      },
+      {
+        "_creationTime": 1791468461815.1567,
+        "_id": "nh7ayr1zspnyeywensavw3v68d8fwxzf",
+        "chargePercent": 0.5,
+        "code": "PRC-BGL",
+        "createdAt": 1791468461815,
+        "frequency": "MONTHLY",
+        "graceDays": 0,
+        "interestMethod": "REDUCING",
+        "interestRate": 18,
+        "maxAmount": 500000,
+        "maxObligationRatio": 55,
+        "minAmount": 50000,
+        "name": "Business Growth Loan",
+        "processingFee": 1000,
+        "status": "ACTIVE",
+        "tenure": 24
+      },
+      {
+        "_creationTime": 1791468461815.157,
+        "_id": "nh74ky52s3x6sgs6fqyrpnp7m98fw1gn",
+        "chargePercent": 0.25,
+        "code": "PRC-GL",
+        "createdAt": 1791468461815,
+        "frequency": "MONTHLY",
+        "graceDays": 0,
+        "interestMethod": "REDUCING",
+        "interestRate": 14,
+        "maxAmount": 300000,
+        "maxObligationRatio": 60,
+        "minAmount": 25000,
+        "name": "Gold Loan",
+        "processingFee": 500,
+        "status": "ACTIVE",
+        "tenure": 12
+      },
+      {
+        "_creationTime": 1791468461815.1572,
+        "_id": "nh7bcrr7teh8r4ycgnwxfx509x8fw032",
+        "chargePercent": 0,
+        "code": "PRC-EL",
+        "createdAt": 1791468461815,
+        "frequency": "WEEKLY",
+        "graceDays": 3,
+        "interestMethod": "FLAT",
+        "interestRate": 30,
+        "maxAmount": 50000,
+        "maxObligationRatio": 45,
+        "minAmount": 5000,
+        "name": "Emergency Loan",
+        "processingFee": 100,
+        "status": "ACTIVE",
+        "tenure": 12
+      }
+    ],
+    "loanSchedules": [],
+    "loans": [],
+    "meetings": [],
+    "notifications": [],
+    "profiles": [
+      {
+        "_creationTime": 1791468384599.1536,
+        "_id": "p578svxf5jrxebs91rfwk9n9098fxjm4",
+        "createdAt": 1791468384599,
+        "email": "tiwarijhumki@gmail.com",
+        "failedLoginAttempts": 0,
+        "joiningDate": 1791468384599,
+        "name": "Super Admin",
+        "role": "SUPER_ADMIN",
+        "staffId": "SA-00001",
+        "status": "ACTIVE",
+        "userId": "jx78vry7e0nyhmajgndx6zc1j98fwmz3"
+      },
+      {
+        "_creationTime": 1792052710493.282,
+        "_id": "p574ae493kw1d8xcwsmqq262498ga2pc",
+        "branchId": "ps76hgy5mxg02y17t5q36kncpd8fw23b",
+        "createdAt": 1792052710493,
+        "credentialHash": "[REDACTED]",
+        "failedLoginAttempts": 0,
+        "joiningDate": 1792052710493,
+        "lastLoginAt": 1792052736360,
+        "mobile": "9876543210",
+        "name": "Pankaj Tiwari",
+        "role": "BRANCH_MANAGER",
+        "staffId": "BM-10002",
+        "status": "ACTIVE",
+        "userId": "jx7crbjvqvkdj01ged8qdffqhn8gbe0q"
+      }
+    ],
+    "receipts": [],
+    "recoveryActivities": [],
+    "users": [
+      {
+        "_creationTime": 1791466523092.2695,
+        "_id": "jx78vry7e0nyhmajgndx6zc1j98fwmz3",
+        "email": "tiwarijhumki@gmail.com",
+        "emailVerificationTime": 1791471501279
+      },
+      {
+        "_creationTime": 1792052731179.8496,
+        "_id": "jx7crbjvqvkdj01ged8qdffqhn8gbe0q",
+        "name": "Pankaj Tiwari"
+      }
+    ],
+    "walletTransactions": [],
+    "wallets": []
+  },
+  "takenAt": 1792081244102
+}

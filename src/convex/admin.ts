@@ -8,6 +8,7 @@ import {
   requirePermission,
   requireProfile,
   requireRole,
+  revokeUserSessions,
 } from "../lib/server/convexHelpers";
 import { istDateKey } from "../lib/server/convexHelpers";
 import { oneOf, requiredString, money } from "../lib/finance/validate";
@@ -694,6 +695,7 @@ export const listUsers = query({
   args: {
     role: v.optional(v.string()),
     includeInactive: v.optional(v.boolean()),
+    search: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const me = await requireProfile(ctx, { allowInactive: true });
@@ -709,6 +711,17 @@ export const listUsers = query({
     }
     if (!args.includeInactive) {
       all = all.filter((p) => p.status === "ACTIVE");
+    }
+
+    const term = (args.search ?? "").trim().toLowerCase();
+    if (term) {
+      const digits = term.replace(/\D/g, "");
+      all = all.filter((p) =>
+        p.name.toLowerCase().includes(term) ||
+        String(p.staffId ?? "").toLowerCase().includes(term) ||
+        String(p.email ?? "").toLowerCase().includes(term) ||
+        (!!p.mobile && digits.length >= 3 && p.mobile.includes(digits)),
+      );
     }
 
     all.sort(
@@ -730,6 +743,8 @@ export const listUsers = query({
         status: p.status,
         createdBy: p.createdBy,
         createdAt: p.createdAt,
+        lastLoginAt: p.lastLoginAt ?? null,
+        isSelf: p._id === me._id,
       })),
     );
     return enriched;
@@ -769,6 +784,24 @@ export const deactivateClient = mutation({
         "",
       ),
     });
+
+    // Client portal access: any profile linked to this client is deactivated
+    // and signed out everywhere, so a removed client cannot keep browsing.
+    const portalProfiles = (await ctx.db.query("profiles").collect()).filter(
+      (p) => p.role === "CLIENT" && p.clientId === clientId,
+    );
+    let portalSessionsRevoked = 0;
+    for (const portal of portalProfiles) {
+      if (portal.userId) {
+        portalSessionsRevoked += await revokeUserSessions(ctx, portal.userId);
+      }
+      const portalDevices = await ctx.db
+        .query("devices")
+        .withIndex("by_profile", (q) => q.eq("profileId", portal._id))
+        .collect();
+      for (const d of portalDevices) await ctx.db.delete(d._id);
+      await ctx.db.patch(portal._id, { status: "DEACTIVATED" });
+    }
 
     // Dependent live rows (not financial evidence) are removed so they
     // can't be surfaced by client-scoped queries later. Immutable audit
@@ -849,11 +882,22 @@ export const deactivateClient = mutation({
       entity: "clients",
       entityId: code,
       before: { status: client.status },
-      after: { status: "INACTIVE", reason: reason ?? "" },
+      after: {
+        status: "INACTIVE",
+        reason: reason ?? "",
+        portalProfilesDeactivated: portalProfiles.length,
+        portalSessionsRevoked,
+      },
       branchId: client.branchId,
     });
 
-    return { ok: true, code, clientId };
+    return {
+      ok: true,
+      code,
+      clientId,
+      portalProfilesDeactivated: portalProfiles.length,
+      portalSessionsRevoked,
+    };
   },
 });
 
@@ -931,6 +975,11 @@ export const deleteStaff = mutation({
       .collect();
     for (const d of devices) await ctx.db.delete(d._id);
 
+    // Revoke live sessions (access tokens + refresh tokens) immediately.
+    const sessionsRevoked = target.userId
+      ? await revokeUserSessions(ctx, target.userId)
+      : 0;
+
     // Preserve immutable financial + session history (never delete audit).
     // Wallets: keep as SUSPENDED so balances are never fabricated.
     const wallets = await ctx.db
@@ -969,6 +1018,7 @@ export const deleteStaff = mutation({
         status: "DEACTIVATED",
         reason: reason ?? "",
         devicesRevoked: true,
+        sessionsRevoked,
         walletPreserved: wallets.length > 0,
       },
       branchId,
@@ -979,6 +1029,7 @@ export const deleteStaff = mutation({
       staffId,
       name,
       role,
+      sessionsRevoked,
       branch: branchId ? await ctx.db.get(branchId) : null,
     };
   },

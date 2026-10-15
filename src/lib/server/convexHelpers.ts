@@ -161,6 +161,36 @@ export async function logAudit(
   });
 }
 
+/* ---------------------------- Access revocation --------------------------- */
+
+/**
+ * Cut off a user's live sessions: every Convex Auth session row plus its
+ * refresh tokens is deleted, so any browser or device holding tokens is
+ * signed out on the next request. Used when an account is removed or blocked.
+ *
+ * Returns the number of sessions revoked.
+ */
+export async function revokeUserSessions(
+  ctx: Mtx,
+  userId: Id<"users">,
+): Promise<number> {
+  const sessions = await ctx.db
+    .query("authSessions")
+    .withIndex("userId", (q) => q.eq("userId", userId))
+    .collect();
+  let revoked = 0;
+  for (const session of sessions) {
+    const tokens = await ctx.db
+      .query("authRefreshTokens")
+      .withIndex("sessionId", (q) => q.eq("sessionId", session._id))
+      .collect();
+    for (const token of tokens) await ctx.db.delete(token._id);
+    await ctx.db.delete(session._id);
+    revoked += 1;
+  }
+  return revoked;
+}
+
 /* ------------------------------- Counters -------------------------------- */
 
 export async function nextSeq(ctx: Mtx, key: string): Promise<number> {

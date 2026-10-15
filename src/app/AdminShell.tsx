@@ -25,6 +25,7 @@ import {
   Stamp,
   UserCog,
   Users,
+  UsersRound,
   X,
   ChevronDown,
   User,
@@ -86,6 +87,8 @@ interface NavItem {
   label: string;
   icon: typeof Users;
   permission?: Permission;
+  /** When set, the item only renders for this exact profile role. */
+  role?: string;
   end?: boolean;
 }
 
@@ -95,6 +98,13 @@ const NAV: NavItem[] = [
   { to: "/dashboard/loans", label: "Loans", icon: Banknote, permission: "view_loans" },
   { to: "/dashboard/approvals", label: "Approvals", icon: Stamp },
   { to: "/dashboard/staff", label: "Staff & Wallets", icon: UserCog, permission: "staff_management" },
+  {
+    to: "/dashboard/users",
+    label: "User Management",
+    icon: UsersRound,
+    permission: "block_staff",
+    role: "SUPER_ADMIN",
+  },
   { to: "/dashboard/cash", label: "Cash & Handovers", icon: HandCoins, permission: "cash_handover" },
   { to: "/dashboard/overdue", label: "Overdue & Recovery", icon: AlertTriangle, permission: "reports" },
   { to: "/dashboard/reports", label: "Reports", icon: FileBarChart, permission: "reports" },
@@ -109,6 +119,7 @@ const TITLES: Record<string, string> = {
   "/dashboard/loans": "Loans",
   "/dashboard/approvals": "Approvals",
   "/dashboard/staff": "Staff & Wallets",
+  "/dashboard/users": "User Management",
   "/dashboard/cash": "Cash & Handovers",
   "/dashboard/overdue": "Overdue & Recovery",
   "/dashboard/reports": "Reports",
@@ -131,19 +142,24 @@ function NavList({
   pathname,
   onNavigate,
   allowed,
+  role,
   approvalsBadge,
   saffronHover = false,
 }: {
   pathname: string;
   onNavigate?: () => void;
   allowed: (p?: Permission) => boolean;
+  role?: string | null;
   approvalsBadge: number;
   saffronHover?: boolean;
 }) {
   const navigate = useNavigate();
   return (
     <nav className="flex flex-col gap-1">
-      {NAV.filter((item) => allowed(item.permission)).map((item) => {
+      {NAV.filter(
+        (item) =>
+          allowed(item.permission) && (!item.role || item.role === role),
+      ).map((item) => {
         const active = item.end
           ? pathname === item.to
           : pathname.startsWith(item.to);
@@ -449,6 +465,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
             pathname={location.pathname}
             onNavigate={() => setMenuOpen(false)}
             allowed={allowed}
+            role={profileRole}
             approvalsBadge={unread}
             saffronHover
           />

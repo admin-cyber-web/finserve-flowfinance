@@ -75,6 +75,8 @@ export const list = query({
     branchId: v.optional(v.id("branches")),
     kycStatus: v.optional(v.string()),
     limit: v.optional(v.number()),
+    /** Default hides removed (INACTIVE) clients — pass true to include them. */
+    includeInactive: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const me = await requireProfile(ctx, { allowInactive: true });
@@ -84,6 +86,9 @@ export const list = query({
       staffId: args.staffId ?? null,
       branchId: args.branchId ?? null,
     });
+    if (!args.includeInactive) {
+      clients = clients.filter((c) => c.status !== "INACTIVE");
+    }
     if (args.kycStatus) clients = clients.filter((c) => c.kycStatus === args.kycStatus);
 
     const q = (args.search ?? "").trim().toLowerCase();

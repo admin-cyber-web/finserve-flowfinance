@@ -7,6 +7,7 @@ import {
   notify,
   requirePermission,
   requireProfile,
+  revokeUserSessions,
   writeWalletTx,
 } from "../lib/server/convexHelpers";
 import { effectivePermissions } from "../lib/finance/permissions";
@@ -470,8 +471,35 @@ export const setStatus = mutation({
     const next = oneOf(status, USER_STATUSES, "status");
     const why = requiredString(reason, "reason", 300);
 
+    // Never let an admin lock the organisation out of its last active
+    // SUPER_ADMIN by suspending/blocking/deactivating them.
+    if (
+      target.role === "SUPER_ADMIN" &&
+      target.status === "ACTIVE" &&
+      next !== "ACTIVE"
+    ) {
+      const admins = await ctx.db
+        .query("profiles")
+        .withIndex("by_role", (q) => q.eq("role", "SUPER_ADMIN"))
+        .collect();
+      const stillActive = admins.filter(
+        (p) => p.status === "ACTIVE" && p._id !== target._id,
+      ).length;
+      if (stillActive === 0) {
+        throw new AppError(
+          "Cannot suspend, block or deactivate the last active SUPER_ADMIN.",
+        );
+      }
+    }
+
     const before = { status: target.status };
     await ctx.db.patch(profileId, { status: next });
+
+    // Disabling an account also cuts every live session it holds.
+    const sessionsRevoked =
+      next !== "ACTIVE" && target.userId
+        ? await revokeUserSessions(ctx, target.userId)
+        : 0;
     await logAudit(ctx, {
       actorId: me._id,
       actorName: me.name,
@@ -480,7 +508,7 @@ export const setStatus = mutation({
       entity: "profiles",
       entityId: target.staffId,
       before,
-      after: { status: next, reason: why },
+      after: { status: next, reason: why, sessionsRevoked },
       referenceId: target.staffId,
       branchId: target.branchId,
     });
@@ -489,7 +517,7 @@ export const setStatus = mutation({
       body: why,
       kind: "SYSTEM",
     });
-    return { ok: true };
+    return { ok: true, sessionsRevoked };
   },
 });
 
