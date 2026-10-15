@@ -11,7 +11,13 @@ import {
   revokeUserSessions,
 } from "../lib/server/convexHelpers";
 import { istDateKey } from "../lib/server/convexHelpers";
-import { oneOf, requiredString, money } from "../lib/finance/validate";
+import {
+  mobileNumber,
+  money,
+  oneOf,
+  optionalString,
+  requiredString,
+} from "../lib/finance/validate";
 import { FS_ROLES, USER_STATUSES } from "../lib/finance/types";
 
 /* ----------------------------- Dashboard ------------------------------------- */
@@ -748,6 +754,133 @@ export const listUsers = query({
       })),
     );
     return enriched;
+  },
+});
+
+/** Roles a profile may be edited into — CLIENT never belongs on a staff row. */
+const EDITABLE_STAFF_ROLES = [
+  "SUPER_ADMIN",
+  "BRANCH_MANAGER",
+  "FIELD_STAFF",
+  "ACCOUNTANT",
+];
+
+/**
+ * SUPER_ADMIN-only: edit a staff / branch-manager / admin profile.
+ *
+ * Deliberately NOT editable here: `staffId` (the system ID — BM-10002 stays
+ * BM-10002), `credentialHash` (sign-in is never touched by an edit),
+ * `status` (use setStatus), and `clientId` (clients are edited through
+ * `clients.update`). Every change is written with before/after to the
+ * append-only audit log.
+ */
+export const updateStaff = mutation({
+  args: {
+    profileId: v.id("profiles"),
+    name: v.optional(v.string()),
+    mobile: v.optional(v.string()),
+    email: v.optional(v.string()),
+    branchId: v.optional(v.id("branches")),
+    role: v.optional(v.string()),
+    joiningDate: v.optional(v.number()),
+    device: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx);
+    if (me.role !== "SUPER_ADMIN") {
+      throw new AppError("Only SUPER_ADMIN can edit staff accounts.");
+    }
+    const target = await ctx.db.get(args.profileId);
+    if (!target) throw new AppError("Staff not found.");
+    if (target.role === "CLIENT") {
+      throw new AppError("Edit client details on the client record instead.");
+    }
+
+    const patch: Record<string, unknown> = {};
+    if (args.name !== undefined) patch.name = requiredString(args.name, "name", 80);
+    if (args.mobile !== undefined) patch.mobile = mobileNumber(args.mobile);
+    if (args.email !== undefined) {
+      const email = optionalString(args.email, "email", 120);
+      if (email) {
+        const taken = (await ctx.db.query("profiles").collect()).some(
+          (p) =>
+            p._id !== target._id &&
+            !!p.email &&
+            p.email.toLowerCase() === email.toLowerCase(),
+        );
+        if (taken) throw new AppError("Another account already uses that email.");
+        patch.email = email;
+      } else {
+        patch.email = undefined;
+      }
+    }
+    if (args.branchId !== undefined) {
+      const branch = await ctx.db.get(args.branchId);
+      if (!branch) throw new AppError("Branch not found.");
+      patch.branchId = args.branchId;
+    }
+    if (args.joiningDate !== undefined) {
+      if (!Number.isFinite(args.joiningDate) || args.joiningDate <= 0) {
+        throw new AppError("Invalid joining date.");
+      }
+      patch.joiningDate = Math.floor(args.joiningDate);
+    }
+    if (args.role !== undefined) {
+      const role = oneOf(args.role, EDITABLE_STAFF_ROLES, "role");
+      if (role === "SUPER_ADMIN" && target.role !== "SUPER_ADMIN") {
+        // Deliberate promotion — allowed, but never silently. Falls out of the
+        // normal flow because only SUPER_ADMIN can reach this mutation.
+        patch.role = role;
+      } else if (target.role === "SUPER_ADMIN" && role !== "SUPER_ADMIN") {
+        if (target._id === me._id) {
+          throw new AppError("You cannot change your own role.");
+        }
+        const admins = await ctx.db
+          .query("profiles")
+          .withIndex("by_role", (q) => q.eq("role", "SUPER_ADMIN"))
+          .collect();
+        const others = admins.filter(
+          (p) => p._id !== target._id && p.status === "ACTIVE",
+        );
+        if (others.length === 0) {
+          throw new AppError(
+            "Cannot change the role of the last active SUPER_ADMIN.",
+          );
+        }
+        patch.role = role;
+      } else {
+        patch.role = role;
+      }
+    }
+
+    if (Object.keys(patch).length === 0) {
+      throw new AppError("Nothing to update.");
+    }
+
+    const before = {
+      name: target.name,
+      mobile: target.mobile,
+      email: target.email,
+      role: target.role,
+      branchId: target.branchId,
+      joiningDate: target.joiningDate,
+    };
+    await ctx.db.patch(args.profileId, patch);
+    await logAudit(ctx, {
+      actorId: me._id,
+      actorName: me.name,
+      role: me.role,
+      action: "STAFF_UPDATED",
+      entity: "profiles",
+      entityId: target.staffId,
+      before,
+      after: patch,
+      referenceId: target.staffId,
+      branchId: target.branchId,
+      device: args.device,
+    });
+
+    return { ok: true as const, staffId: target.staffId, changed: patch };
   },
 });
 

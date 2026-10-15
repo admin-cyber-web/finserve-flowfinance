@@ -11,6 +11,11 @@ import {
   StatusChip,
   formatDateTime,
 } from "@/components/fs/primitives";
+import {
+  ClientEditDialog,
+  RecordActions,
+  StaffEditDialog,
+} from "@/components/fs/RecordEdits";
 import { Button } from "@/components/ui/button";
 import { useProfile } from "@/hooks/use-profile";
 import { ROLE_LABELS, type FsRole } from "@/lib/finance/types";
@@ -60,6 +65,10 @@ type ClientRow = {
   centerName?: string | null;
   activeLoans: number;
   outstanding: number;
+  occupation: string;
+  monthlyIncome: number;
+  householdIncome: number;
+  familyMembers: number;
 };
 
 type Target =
@@ -143,6 +152,8 @@ function UserManager() {
   const [selected, setSelected] = useState<Target | null>(null);
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [reason, setReason] = useState("");
+  const [editStaff, setEditStaff] = useState<StaffRow | null>(null);
+  const [editClient, setEditClient] = useState<ClientRow | null>(null);
 
   const staff = useQuery(api.admin.listUsers, {
     includeInactive: true,
@@ -170,6 +181,15 @@ function UserManager() {
     setReason("");
     setSelected(target);
   };
+
+  /** Branch choices for the staff edit form (deduped from the directory). */
+  const branchOptions = (() => {
+    const map = new Map<string, { _id: string; name: string; code?: string }>();
+    for (const row of staff ?? []) {
+      if (row.branch) map.set(String(row.branch._id), row.branch);
+    }
+    return [...map.values()];
+  })();
 
   const run = async (fn: () => Promise<unknown>, okMessage: string) => {
     setBusy(true);
@@ -332,10 +352,13 @@ function UserManager() {
         ) : (
           <div className="flex flex-col gap-2">
             {staffRows.map((row) => (
-              <button
+              <div
                 key={row._id}
+                className="flex items-stretch border-2 border-ink bg-card shadow-hard-sm transition-transform active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
+              >
+              <button
                 onClick={() => openTarget({ kind: "staff", row: row as StaffRow })}
-                className="flex items-center justify-between gap-3 border-2 border-ink bg-card p-3 text-left shadow-hard-sm transition-transform active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
+                className="flex min-w-0 flex-1 items-center justify-between gap-3 p-3 text-left"
               >
                 <span className="min-w-0">
                   <span className="block truncate text-sm font-black">
@@ -349,6 +372,19 @@ function UserManager() {
                 </span>
                 <StatusChip status={row.status} />
               </button>
+                <RecordActions
+                  label={row.name}
+                  busy={busy}
+                  onEdit={() => setEditStaff(row as StaffRow)}
+                  onDelete={() => {
+                    setReason("");
+                    setPending({
+                      action: "remove",
+                      target: { kind: "staff", row: row as StaffRow },
+                    });
+                  }}
+                />
+              </div>
             ))}
           </div>
         )
@@ -367,10 +403,13 @@ function UserManager() {
       ) : (
         <div className="flex flex-col gap-2">
           {clientRows.map((row) => (
-            <button
+            <div
               key={row._id}
+              className="flex items-stretch border-2 border-ink bg-card shadow-hard-sm transition-transform active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
+            >
+            <button
               onClick={() => openTarget({ kind: "client", row: row as ClientRow })}
-              className="flex items-center justify-between gap-3 border-2 border-ink bg-card p-3 text-left shadow-hard-sm transition-transform active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
+              className="flex min-w-0 flex-1 items-center justify-between gap-3 p-3 text-left"
             >
               <span className="min-w-0">
                 <span className="block truncate text-sm font-black">{row.name}</span>
@@ -386,6 +425,19 @@ function UserManager() {
                 {row.staffName}
               </span>
             </button>
+              <RecordActions
+                label={row.name}
+                busy={busy}
+                onEdit={() => setEditClient(row as ClientRow)}
+                onDelete={() => {
+                  setReason("");
+                  setPending({
+                    action: "remove",
+                    target: { kind: "client", row: row as ClientRow },
+                  });
+                }}
+              />
+            </div>
           ))}
         </div>
       )}
@@ -435,6 +487,16 @@ function UserManager() {
                 onClick={() => navigate(`/dashboard/staff/${selected.row._id}`)}
               >
                 Open 360°
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  const row = selected.row as StaffRow;
+                  setSelected(null);
+                  setEditStaff(row);
+                }}
+              >
+                Edit
               </Button>
               {selected.row.status === "ACTIVE" ? (
                 <Button
@@ -512,6 +574,16 @@ function UserManager() {
                 Open client file
               </Button>
               <Button
+                variant="outline"
+                onClick={() => {
+                  const row = selected.row as ClientRow;
+                  setSelected(null);
+                  setEditClient(row);
+                }}
+              >
+                Edit
+              </Button>
+              <Button
                 variant="destructive"
                 onClick={() => {
                   setReason("");
@@ -552,6 +624,19 @@ function UserManager() {
           are touched.
         </p>
       </ConfirmDialog>
+
+      {/* Admin edit dialogs — SUPER_ADMIN only */}
+      <StaffEditDialog
+        open={!!editStaff}
+        onOpenChange={(open) => !open && setEditStaff(null)}
+        target={editStaff}
+        branches={branchOptions}
+      />
+      <ClientEditDialog
+        open={!!editClient}
+        onOpenChange={(open) => !open && setEditClient(null)}
+        target={editClient}
+      />
     </div>
   );
 }

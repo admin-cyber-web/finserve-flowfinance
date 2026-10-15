@@ -546,5 +546,4 @@ export const runAsSuperAdmin = internalMutation({
   },
 });
 
-
 export {};

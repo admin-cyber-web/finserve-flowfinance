@@ -7,14 +7,20 @@ import {
   SectionTitle,
   StatusChip,
 } from "@/components/fs/primitives";
+import {
+  ClientEditDialog,
+  RecordActions,
+  RemoveConfirm,
+} from "@/components/fs/RecordEdits";
 import { Button } from "@/components/ui/button";
 import { useProfile } from "@/hooks/use-profile";
 import { formatINR } from "@/lib/finance/money";
 import { cn } from "@/lib/utils";
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { Plus, Search, UserPlus } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router";
+import { toast } from "sonner";
 
 const FILTERS = [
   { id: "all", label: "All" },
@@ -24,17 +30,44 @@ const FILTERS = [
 
 export default function Clients() {
   const navigate = useNavigate();
-  const { can } = useProfile();
+  const { can, profile } = useProfile();
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<(typeof FILTERS)[number]["id"]>("all");
+  const [busy, setBusy] = useState(false);
+  const [editTarget, setEditTarget] = useState<ClientRow | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<ClientRow | null>(null);
 
   const clients = useQuery(api.clients.list, q.trim() ? { search: q.trim() } : {});
+  const removeClient = useMutation(api.admin.deactivateClient);
+
+  /** Edit/Remove are admin controls: rendered only for SUPER_ADMIN and
+   * re-authorized on the server by clients.update / admin.deactivateClient. */
+  const isAdmin = profile?.role === "SUPER_ADMIN";
 
   const rows = (clients ?? []).filter((c) => {
     if (filter === "kyc") return c.kycStatus !== "VERIFIED";
     if (filter === "overdue") return c.overdueLoans > 0;
     return true;
   });
+
+  const confirmRemove = async () => {
+    if (!removeTarget) return;
+    setBusy(true);
+    try {
+      await removeClient({
+        clientId: removeTarget._id,
+        reason: "Removed by SUPER_ADMIN",
+      });
+      toast.success(`${removeTarget.name} (${removeTarget.code}) removed`);
+      setRemoveTarget(null);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not remove client");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  type ClientRow = NonNullable<typeof clients>[number];
 
   return (
     <div className="space-y-4">
@@ -96,10 +129,13 @@ export default function Clients() {
       ) : (
         <div className="flex flex-col gap-2">
           {rows.map((c) => (
-            <button
+            <div
               key={c._id}
+              className="flex items-stretch border-2 border-ink bg-card shadow-hard-sm transition-transform active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
+            >
+            <button
               onClick={() => navigate(`/dashboard/clients/${c._id}`)}
-              className="flex items-center justify-between gap-3 border-2 border-ink bg-card p-3 text-left shadow-hard-sm transition-transform active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
+              className="flex min-w-0 flex-1 items-center justify-between gap-3 p-3 text-left"
             >
               <span className="min-w-0">
                 <span className="block truncate text-sm font-black">{c.name}</span>
@@ -133,6 +169,15 @@ export default function Clients() {
                 )}
               </span>
             </button>
+              {isAdmin && (
+                <RecordActions
+                  label={c.name}
+                  busy={busy}
+                  onEdit={() => setEditTarget(c)}
+                  onDelete={() => setRemoveTarget(c)}
+                />
+              )}
+            </div>
           ))}
         </div>
       )}
@@ -142,6 +187,22 @@ export default function Clients() {
         Tap a client to open Client 360° — loans, payments, documents, notes and
         the full activity trail in one place.
       </p>
+
+      <ClientEditDialog
+        open={!!editTarget}
+        onOpenChange={(open) => !open && setEditTarget(null)}
+        target={editTarget}
+      />
+      <RemoveConfirm
+        open={!!removeTarget}
+        onOpenChange={(open) => !open && setRemoveTarget(null)}
+        title={`Remove ${removeTarget?.name ?? "client"}?`}
+        name={removeTarget?.name ?? ""}
+        id={removeTarget?.code ?? ""}
+        impact="The client is deactivated and hidden from lists; KYC, loans and receipts stay intact as history."
+        loading={busy}
+        onConfirm={() => void confirmRemove()}
+      />
     </div>
   );
 }

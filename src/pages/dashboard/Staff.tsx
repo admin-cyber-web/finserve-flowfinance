@@ -6,10 +6,14 @@ import {
   RowSkeleton,
   SectionTitle,
   StatusChip,
-  formatDate,
 } from "@/components/fs/primitives";
 import { Button } from "@/components/ui/button";
 import { BottomSheet } from "@/components/fs/primitives";
+import {
+  RecordActions,
+  RemoveConfirm,
+  StaffEditDialog,
+} from "@/components/fs/RecordEdits";
 import { useProfile } from "@/hooks/use-profile";
 import { ROLE_LABELS, type FsRole } from "@/lib/finance/types";
 import { cn } from "@/lib/utils";
@@ -29,8 +33,15 @@ export default function Staff() {
   const { profile, can } = useProfile();
   const staff = useQuery(api.profiles.listStaff, { includeInactive: false });
   const createStaff = useMutation(api.users.createStaffUser);
+  const removeStaff = useMutation(api.admin.deleteStaff);
 
   const [roleFilter, setRoleFilter] = useState<(typeof ROLE_FILTERS)[number]>("ALL");
+  const [editTarget, setEditTarget] = useState<StaffRow | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<StaffRow | null>(null);
+
+  /** Edit/Remove are admin controls: rendered only for SUPER_ADMIN and
+   * re-authorized server-side by admin.updateStaff / admin.deleteStaff. */
+  const isAdmin = profile?.role === "SUPER_ADMIN";
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState<{
@@ -102,6 +113,25 @@ export default function Staff() {
     }
   };
 
+  const confirmRemove = async () => {
+    if (!removeTarget) return;
+    setBusy(true);
+    try {
+      await removeStaff({
+        profileId: removeTarget._id,
+        reason: "Removed by SUPER_ADMIN",
+      });
+      toast.success(`${removeTarget.name} (${removeTarget.staffId}) removed`);
+      setRemoveTarget(null);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not remove account");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  type StaffRow = NonNullable<typeof staff>[number]["profile"];
+
   return (
     <div className="space-y-4 pb-10">
       <PageHeader
@@ -136,10 +166,13 @@ export default function Staff() {
       ) : (
         <div className="flex flex-col gap-2">
           {rows.map((r) => (
-            <button
+            <div
               key={r.profile._id}
+              className="flex items-stretch border-2 border-ink bg-card shadow-hard-sm active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
+            >
+            <button
               onClick={() => navigate(`/dashboard/staff/${r.profile._id}`)}
-              className="flex items-center justify-between gap-3 border-2 border-ink bg-card p-3 text-left shadow-hard-sm active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
+              className="flex min-w-0 flex-1 items-center justify-between gap-3 p-3 text-left"
             >
               <span className="min-w-0">
                 <span className="block truncate text-sm font-black">{r.profile.name}</span>
@@ -168,6 +201,15 @@ export default function Staff() {
                 )}
               </span>
             </button>
+              {isAdmin && (
+                <RecordActions
+                  label={r.profile.name}
+                  busy={busy}
+                  onEdit={() => setEditTarget(r.profile)}
+                  onDelete={() => setRemoveTarget(r.profile)}
+                />
+              )}
+            </div>
           ))}
         </div>
       )}
@@ -281,6 +323,24 @@ export default function Staff() {
           </div>
         )}
       </BottomSheet>
+
+      {/* Admin edit / remove — SUPER_ADMIN only */}
+      <StaffEditDialog
+        open={!!editTarget}
+        onOpenChange={(o) => !o && setEditTarget(null)}
+        target={editTarget}
+        branches={branches}
+      />
+      <RemoveConfirm
+        open={!!removeTarget}
+        onOpenChange={(o) => !o && setRemoveTarget(null)}
+        title={`Remove ${removeTarget?.name ?? "account"}?`}
+        name={removeTarget?.name ?? ""}
+        id={removeTarget?.staffId ?? ""}
+        impact="The profile is deactivated and every session and device is revoked; wallet and audit history are preserved."
+        loading={busy}
+        onConfirm={() => void confirmRemove()}
+      />
     </div>
   );
 }
