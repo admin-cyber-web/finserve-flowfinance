@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuth } from "./use-auth";
 import { can, type Permission } from "@/lib/finance/permissions";
 import type { Id } from "@/convex/_generated/dataModel";
 import { api } from "@/convex/_generated/api";
-import { useConvex, useQuery } from "convex/react";
+import { useQuery } from "convex/react";
 
 /**
  * The signed-in FinServe identity: user + workspace profile + effective
@@ -55,36 +55,13 @@ export function useSession() {
   };
 }
 
-/** Idempotent sample-dataset bootstrap — runs once per browser session. */
+/**
+ * Demo seeding has been permanently disabled: the dashboard boots straight
+ * into the real workspace (which may be empty) and never creates sample
+ * users, clients, loans, wallets or transactions.
+ */
 export function useSeed() {
-  const convex = useConvex();
-  const [state, setState] = useState<"idle" | "seeding" | "ready" | "error">(
-    "idle",
-  );
-  const started = useRef(false);
-
-  useEffect(() => {
-    if (started.current) return;
-    started.current = true;
-    if (sessionStorage.getItem("finserve-seeded") === "1") {
-      setState("ready");
-      return;
-    }
-    setState("seeding");
-    (async () => {
-      try {
-        await convex.mutation(api.seed.seedOrgPhase, {});
-        await convex.mutation(api.seed.seedActivityPhase, {});
-        sessionStorage.setItem("finserve-seeded", "1");
-        setState("ready");
-      } catch (err) {
-        console.error("Seed failed", err);
-        setState("error");
-      }
-    })();
-  }, [convex]);
-
-  return state;
+  return "ready" as const;
 }
 
 /** True while the browser is offline (used by the field-sync banner). */

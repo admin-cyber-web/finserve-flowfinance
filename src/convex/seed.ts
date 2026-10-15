@@ -1,27 +1,30 @@
 import { v } from "convex/values";
 import { mutation } from "./_generated/server";
-import { seedActivity, seedOrg } from "../lib/server/seed";
 
 /**
- * Demo dataset — idempotent and atomic. `seedOrg` must succeed before
- * `seedActivity`; the dashboard runs them in order once per browser.
+ * Demo seeding is permanently disabled.
+ *
+ * These mutations used to run `seedOrg` / `seedActivity` from
+ * `src/lib/server/seed.ts` (that file has been removed). They are kept only
+ * as no-ops so that any stale client bundle that still calls them can never
+ * recreate demo users, clients, loans, wallets or transactions. They perform
+ * no reads and no writes.
  */
 export const seedOrgPhase = mutation({
   args: {},
-  handler: async (ctx) => {
-    const result = await seedOrg(ctx);
-    return { ok: true, ...result };
+  handler: async () => {
+    return { ok: true, disabled: true, skipped: true };
   },
 });
 
 export const seedActivityPhase = mutation({
   args: {},
-  handler: async (ctx) => {
-    const result = await seedActivity(ctx);
-    return { ok: true, ...result };
+  handler: async () => {
+    return { ok: true, disabled: true, skipped: true };
   },
 });
 
+/** Read-only check — reports whether any workspace data exists. */
 export const isSeeded = mutation({
   args: { phase: v.union(v.literal("org"), v.literal("activity")) },
   handler: async (ctx, { phase }) => {

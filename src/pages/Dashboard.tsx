@@ -2,7 +2,7 @@ import { AdminShell } from "@/app/AdminShell";
 import { MobileShell } from "@/app/MobileShell";
 import { Logo } from "@/components/fs/primitives";
 import { Button } from "@/components/ui/button";
-import { useProfile, useSeed } from "@/hooks/use-profile";
+import { useProfile } from "@/hooks/use-profile";
 import { Loader2, TriangleAlert } from "lucide-react";
 import { Navigate, Route, Routes } from "react-router";
 
@@ -93,19 +93,10 @@ function NoWorkspace() {
 }
 
 export default function Dashboard() {
-  const seedState = useSeed();
-  const { profile, loading, signOut } = useProfile();
+  const { profile, loading } = useProfile();
 
-  if (loading || seedState === "idle" || seedState === "seeding") {
-    return (
-      <BootScreen
-        label={
-          seedState === "seeding" || seedState === "idle"
-            ? "Preparing workspace…"
-            : "Loading your workspace…"
-        }
-      />
-    );
+  if (loading) {
+    return <BootScreen label="Loading your workspace…" />;
   }
 
   if (!profile) {
@@ -149,26 +140,7 @@ export default function Dashboard() {
     </Routes>
   );
 
-  const seedError =
-    seedState === "error" ? (
-      <div className="mb-3 flex items-center justify-between gap-2 border-2 border-ink bg-blush px-3 py-2 text-xs font-black uppercase">
-        <span>Workspace setup failed — some records may be missing</span>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => void signOut().then(() => window.location.reload())}
-        >
-          Reload
-        </Button>
-      </div>
-    ) : null;
-
-  const content = (
-    <>
-      {seedError}
-      {inner}
-    </>
-  );
+  const content = inner;
 
   if (isField) {
     return <MobileShell>{content}</MobileShell>;

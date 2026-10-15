@@ -225,8 +225,13 @@ export function AdminShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="min-h-screen bg-paper">
-      {/* Content — always full screen; navigation opens via the START overlay */}
-      <div>
+      {/* Content — full screen; shifts right when the START sidebar is open */}
+      <div
+        className={cn(
+          "transition-[padding] duration-300 ease-out",
+          menuOpen && "lg:pl-64",
+        )}
+      >
         <header className="sticky top-0 z-30 flex items-center gap-3 border-b-2 border-ink bg-card px-3 py-3 lg:px-6">
           <div className="min-w-0 flex-1">
             <h1 className="truncate text-base font-black uppercase tracking-tight lg:text-lg">
@@ -408,92 +413,86 @@ export function AdminShell({ children }: { children: ReactNode }) {
         <StartButton open={menuOpen} onClick={() => setMenuOpen((v) => !v)} />
       </div>
 
-      {/* Slide-up menu overlay — sits above the dashboard without changing
-          its width, so the dashboard stays full screen while open. */}
+      {/* Dim-behind scrim for small screens (desktop shifts content instead) */}
       <div
+        onClick={() => setMenuOpen(false)}
+        aria-hidden="true"
         className={cn(
-          "fixed inset-0 z-50",
-          menuOpen ? "" : "pointer-events-none",
+          "fixed inset-0 z-40 bg-ink transition-opacity duration-300 lg:hidden",
+          menuOpen ? "opacity-50" : "pointer-events-none opacity-0",
         )}
+      />
+
+      {/* START menu — a compact left sidebar that slides up from the bottom.
+          It stays within a fixed-width strip on the left; on desktop the
+          dashboard shifts right (lg:pl-64) so it remains fully visible. */}
+      <aside
+        id="start-menu"
         aria-hidden={!menuOpen}
+        className={cn(
+          "fixed bottom-0 left-0 top-0 z-50 flex w-64 max-w-[80vw] flex-col overflow-hidden border-r-2 border-ink bg-navy transition-transform duration-300 ease-out",
+          menuOpen ? "translate-y-0" : "translate-y-full",
+        )}
       >
+        <div className="flex items-center justify-between border-b-2 border-paper/20 px-3 py-2.5">
+          <BrandWordmark className="block" />
+          <button
+            onClick={() => setMenuOpen(false)}
+            aria-label="Close menu"
+            className="grid size-8 place-items-center border-2 border-paper/40 text-paper active:translate-y-[1px]"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-2">
+          <NavList
+            pathname={location.pathname}
+            onNavigate={() => setMenuOpen(false)}
+            allowed={allowed}
+            approvalsBadge={unread}
+            saffronHover
+          />
+        </div>
+        {/* User details — hidden until the START menu is opened */}
         <div
-          onClick={() => setMenuOpen(false)}
           className={cn(
-            "absolute inset-0 bg-ink transition-opacity duration-300",
-            menuOpen ? "opacity-50" : "opacity-0",
-          )}
-        />
-        <div
-          id="start-menu"
-          className={cn(
-            "absolute inset-x-0 bottom-0 flex max-h-[85vh] flex-col border-t-2 border-ink bg-navy transition-transform duration-300 ease-out",
-            menuOpen ? "translate-y-0" : "translate-y-full",
+            "border-t-2 border-paper/20 px-3 pt-2.5 pb-16",
+            accountBlocked && "pb-28",
           )}
         >
-          <div className="flex items-center justify-between border-b-2 border-paper/20 px-4 py-3">
-            <BrandWordmark className="block" />
-            <button
-              onClick={() => setMenuOpen(false)}
-              aria-label="Close menu"
-              className="grid size-9 place-items-center border-2 border-paper/40 text-paper active:translate-y-[1px]"
-            >
-              <X className="size-4" />
-            </button>
+          <div className="mb-2 flex items-center gap-2">
+            <span className="grid size-8 shrink-0 place-items-center border-2 border-paper bg-gold text-xs font-black text-ink">
+              {initials(profile?.name)}
+            </span>
+            <div className="min-w-0">
+              <div className="truncate text-xs font-black text-paper">
+                {profile?.name}
+              </div>
+              <div className="truncate font-mono text-[10px] font-bold uppercase text-paper/60">
+                {profile?.staffId}
+                {profile?.branch?.code ? ` · ${profile.branch.code}` : ""}
+              </div>
+            </div>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto p-3">
-            <NavList
-              pathname={location.pathname}
-              onNavigate={() => setMenuOpen(false)}
-              allowed={allowed}
-              approvalsBadge={unread}
-              saffronHover
-            />
-          </div>
-          {/* User details — hidden until the menu is opened */}
-          <div
-            className={cn(
-              "border-t-2 border-paper/20 px-3 pt-3 pb-16",
-              accountBlocked && "pb-28",
-            )}
-          >
-            <div className="mb-2 flex items-center gap-2">
-              <span className="grid size-9 shrink-0 place-items-center border-2 border-paper bg-gold text-xs font-black text-ink">
-                {initials(profile?.name)}
+          <div className="flex items-center gap-2">
+            <div className="flex flex-1 items-center justify-center gap-1.5 border-2 border-ink bg-white px-2 py-1.5 shadow-hard-sm">
+              <span className="grid size-6 shrink-0 place-items-center border-2 border-ink bg-royal text-white shadow-hard-sm">
+                <IndianRupee className="size-3" />
               </span>
-              <div className="min-w-0">
-                <div className="truncate text-xs font-black text-paper">
-                  {profile?.name}
-                </div>
-                <div className="truncate font-mono text-[10px] font-bold uppercase text-paper/60">
-                  {profile?.staffId}
-                  {profile?.branch?.code ? ` · ${profile.branch.code}` : ""}
-                </div>
-                <div className="truncate text-[10px] font-bold uppercase text-paper/50">
-                  {profile?.branch?.name ?? "Organization-wide"}
-                </div>
-              </div>
+              <span className="text-[10px] font-black uppercase tracking-[0.18em] text-muted-foreground">
+                {roleLabel}
+              </span>
             </div>
-            <div className="flex items-center gap-2">
-              <div className="flex flex-1 items-center justify-center gap-2 border-2 border-ink bg-white px-3 py-2 shadow-hard-sm">
-                <span className="grid size-7 shrink-0 place-items-center border-2 border-ink bg-royal text-white shadow-hard-sm">
-                  <IndianRupee className="size-4" />
-                </span>
-                <span className="text-[10px] font-black uppercase tracking-[0.18em] text-muted-foreground">
-                  {roleLabel}
-                </span>
-              </div>
-              <Button
-                variant="destructive"
-                size="sm"
-                onClick={() => void signOut().then(() => navigate("/auth"))}
-              >
-                <LogOut className="size-4" /> Sign out
-              </Button>
-            </div>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => void signOut().then(() => navigate("/auth"))}
+            >
+              <LogOut className="size-4" /> Sign out
+            </Button>
           </div>
         </div>
-      </div>
+      </aside>
 
       {profile?.status && profile.status !== "ACTIVE" && (
         <div className="fixed inset-x-0 bottom-0 z-50 flex items-center justify-between gap-3 border-t-2 border-ink bg-destructive px-4 py-2 text-xs font-black uppercase text-white">
