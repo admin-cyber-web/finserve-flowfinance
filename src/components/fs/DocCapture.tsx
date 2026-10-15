@@ -32,6 +32,9 @@ const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
 const DOC_TYPES = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
 
+/** Mirrors the server-side per-document upload cap (5 MB). */
+const DOC_MAX_BYTES = 5 * 1024 * 1024;
+
 /** Candidate document types rendered in the doc-picker dropdown. */
 export const DOC_KIND_OPTIONS: { id: string; label: string }[] = [
   { id: "AADHAAR", label: "Aadhaar" },

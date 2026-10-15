@@ -24,8 +24,6 @@ import {
   writeWalletTx,
   type Mtx,
 } from "./convexHelpers";
-import { completedMonthsBetween } from "../finance/money";
-import { completedMonthsBetween } from "../finance/money";
 
 /* ------------------------------ Read helpers ------------------------------ */
 
@@ -417,7 +415,6 @@ export async function recordCollection(
   });
 
   // 2. Wallet ledger (cash only in, UPI/BANK recorded with no cash effect).
-  let walletTxnId: Id<"walletTransactions"> | undefined;
   const wallet = await ctx.db
     .query("wallets")
     .withIndex("by_profile", (q) => q.eq("profileId", args.actor._id))
@@ -429,7 +426,7 @@ export async function recordCollection(
         : args.mode === "UPI"
           ? "UPI_COLLECTION"
           : "BANK_COLLECTION";
-    const written = await writeWalletTx(ctx, {
+    await writeWalletTx(ctx, {
       walletId: wallet._id,
       profileId: args.actor._id,
       branchId: loan.branchId,
@@ -445,7 +442,6 @@ export async function recordCollection(
       remarks: `${args.mode} collection — ${loan.loanId}`,
       createdAt: nowMs,
     });
-    walletTxnId = written.txnId;
   }
 
   // 3. Receipt (unique per day, immediately shareable).

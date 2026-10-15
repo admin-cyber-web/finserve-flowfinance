@@ -173,10 +173,12 @@ export const get = query({
     );
 
     const view = deriveLoanView(loan, rows, Date.now());
-    const connectedMonthlyIncome = loan.connectedMonthlyIncome ?? client?.monthlyIncome ?? 0;
-    const connectedHouseholdIncome =
-      loan.connectedHouseholdIncome ?? client?.householdIncome ?? 0;
-    const completedMonths = completedMonthsBetween(loan.disbursedAt, Date.now());
+    const connectedMonthlyIncome = client?.monthlyIncome ?? 0;
+    const connectedHouseholdIncome = client?.householdIncome ?? 0;
+    const completedMonths = completedMonthsBetween(
+      loan.disbursedAt ?? Date.now(),
+      Date.now(),
+    );
     return {
       loan,
       view,
