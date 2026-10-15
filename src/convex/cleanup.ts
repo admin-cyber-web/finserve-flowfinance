@@ -517,6 +517,53 @@ export const freshStartReport = query({
 });
 
 /**
+ * Ops housekeeping: report which of the given file-storage blobs still exist
+ * (used to prove the cleanup leaves no orphaned uploads behind).
+ */
+export const storageStatus = internalQuery({
+  args: { storageIds: v.array(v.string()) },
+  handler: async (ctx, { storageIds }) => {
+    const out: Record<
+      string,
+      { exists: boolean; size?: number; contentType?: string }
+    > = {};
+    for (const id of storageIds) {
+      const meta = await ctx.db.system.get("_storage", id as Id<"_storage">);
+      out[id] = meta
+        ? {
+            exists: true,
+            size: meta.size,
+            contentType: meta.contentType ?? undefined,
+          }
+        : { exists: false };
+    }
+    return out;
+  },
+});
+
+/**
+ * Ops housekeeping: remove file-storage blobs that no row references any
+ * more (e.g. a photo uploaded by a form submission that was rejected).
+ */
+export const deleteStorageFiles = internalMutation({
+  args: { storageIds: v.array(v.string()) },
+  handler: async (ctx, { storageIds }) => {
+    let deleted = 0;
+    const alreadyGone: string[] = [];
+    for (const id of storageIds) {
+      const meta = await ctx.db.system.get("_storage", id as Id<"_storage">);
+      if (!meta) {
+        alreadyGone.push(id);
+        continue;
+      }
+      await ctx.storage.delete(id as Id<"_storage">);
+      deleted += 1;
+    }
+    return { ok: true, deleted, alreadyGone };
+  },
+});
+
+/**
  * The cleanup's own audit entries (proof that the removal was recorded with
  * actor, timestamp, target and action). Read-only.
  */
