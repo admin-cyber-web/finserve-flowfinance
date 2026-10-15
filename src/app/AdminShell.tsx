@@ -453,45 +453,6 @@ export function AdminShell({ children }: { children: ReactNode }) {
             saffronHover
           />
         </div>
-        {/* User details — hidden until the START menu is opened */}
-        <div
-          className={cn(
-            "border-t-2 border-paper/20 px-3 pt-2.5 pb-16",
-            accountBlocked && "pb-28",
-          )}
-        >
-          <div className="mb-2 flex items-center gap-2">
-            <span className="grid size-8 shrink-0 place-items-center border-2 border-paper bg-gold text-xs font-black text-ink">
-              {initials(profile?.name)}
-            </span>
-            <div className="min-w-0">
-              <div className="truncate text-xs font-black text-paper">
-                {profile?.name}
-              </div>
-              <div className="truncate font-mono text-[10px] font-bold uppercase text-paper/60">
-                {profile?.staffId}
-                {profile?.branch?.code ? ` · ${profile.branch.code}` : ""}
-              </div>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="flex flex-1 items-center justify-center gap-1.5 border-2 border-ink bg-white px-2 py-1.5 shadow-hard-sm">
-              <span className="grid size-6 shrink-0 place-items-center border-2 border-ink bg-royal text-white shadow-hard-sm">
-                <IndianRupee className="size-3" />
-              </span>
-              <span className="text-[10px] font-black uppercase tracking-[0.18em] text-muted-foreground">
-                {roleLabel}
-              </span>
-            </div>
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={() => void signOut().then(() => navigate("/auth"))}
-            >
-              <LogOut className="size-4" /> Sign out
-            </Button>
-          </div>
-        </div>
       </aside>
 
       {profile?.status && profile.status !== "ACTIVE" && (
