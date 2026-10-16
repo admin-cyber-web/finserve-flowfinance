@@ -21,8 +21,8 @@ import {
   Search,
   UserPlus,
 } from "lucide-react";
-import { DocCapture } from "@/components/fs/DocCapture";
-import { useState } from "react";
+import { DocCapture, DOC_KIND_OPTIONS, type DocItem } from "@/components/fs/DocCapture";
+import { useState, type Dispatch, type SetStateAction } from "react";
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
 
@@ -34,6 +34,38 @@ type CenterOption = {
 };
 
 const GENDERS = ["MALE", "FEMALE", "OTHER"] as const;
+
+/** "KYC documents available" checkboxes (Aadhaar / PAN / Voter ID / Other). */
+function KycDocChecks({
+  value,
+  onChange,
+}: {
+  value: string[];
+  onChange: Dispatch<SetStateAction<string[]>>;
+}) {
+  const toggle = (id: string, checked: boolean) =>
+    onChange((cur) =>
+      checked ? [...cur, id] : cur.filter((k) => k !== id),
+    );
+  return (
+    <div className="flex flex-wrap gap-3 border-2 border-ink bg-white px-3 py-2">
+      {DOC_KIND_OPTIONS.map((opt) => (
+        <label
+          key={opt.id}
+          className="flex items-center gap-1.5 text-xs font-bold uppercase"
+        >
+          <input
+            type="checkbox"
+            className="size-4 accent-[var(--color-navy,#1b2a4a)]"
+            checked={value.includes(opt.id)}
+            onChange={(e) => toggle(opt.id, e.target.checked)}
+          />
+          {opt.label}
+        </label>
+      ))}
+    </div>
+  );
+}
 
 /**
  * New Client flow.
@@ -69,6 +101,23 @@ export default function ClientNew() {
   const [monthlyIncome, setMonthlyIncome] = useState("");
   const [householdIncome, setHouseholdIncome] = useState("");
   const [kycDocRef, setKycDocRef] = useState("");
+  const [panNumber, setPanNumber] = useState("");
+  const [voterId, setVoterId] = useState("");
+  const [kycDocs, setKycDocs] = useState<string[]>(["AADHAAR"]);
+
+  // Co-applicant — section 2 of the application form. All fields are
+  // controlled so everything typed here survives and is saved with the
+  // application (it re-opens from the client page after submission).
+  const [coName, setCoName] = useState("");
+  const [coFatherName, setCoFatherName] = useState("");
+  const [coRelationship, setCoRelationship] = useState("");
+  const [coGender, setCoGender] = useState<(typeof GENDERS)[number]>("MALE");
+  const [coMobile, setCoMobile] = useState("");
+  const [coAddress, setCoAddress] = useState("");
+  const [coAadhaar, setCoAadhaar] = useState("");
+  const [coPan, setCoPan] = useState("");
+  const [coVoter, setCoVoter] = useState("");
+  const [coKycDocs, setCoKycDocs] = useState<string[]>(["AADHAAR"]);
 
   // Applicant photo (geo-tagged) / KYC documents (normal)
   const [applicantPhoto, setApplicantPhoto] = useState<CapturedClientPhoto | null>(null);
@@ -156,9 +205,59 @@ export default function ClientNew() {
     if (!/^\d{12}$/.test(kycDocRef.trim())) {
       return toast.error("Aadhaar number must be exactly 12 digits.");
     }
+    const pan = panNumber.trim().toUpperCase();
+    if (pan && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan)) {
+      return toast.error("PAN number must look like ABCDE1234F.");
+    }
+    const voter = voterId.trim().toUpperCase();
+    if (voter && !/^[A-Z]{3}[0-9]{7}$/.test(voter)) {
+      return toast.error("Voter ID must look like ABC1234567.");
+    }
     if (!applicantPhoto) {
       return toast.error("Capture the geo-tagged applicant photo to continue.");
     }
+
+    // Co-applicant block (form section 2) — name, relationship and the
+    // geo-tagged photograph are mandatory, exactly as the form states.
+    if (coName.trim().length < 2) {
+      return toast.error("Co-applicant name is required.");
+    }
+    if (!coRelationship.trim()) {
+      return toast.error(
+        "Co-applicant relationship with the applicant is required.",
+      );
+    }
+    if (coMobile.trim() && !/^[6-9]\d{9}$/.test(coMobile.trim())) {
+      return toast.error("Enter a valid 10-digit co-applicant mobile number.");
+    }
+    if (coAadhaar.trim() && !/^\d{12}$/.test(coAadhaar.trim())) {
+      return toast.error("Co-applicant Aadhaar must be exactly 12 digits.");
+    }
+    const coPanValue = coPan.trim().toUpperCase();
+    if (coPanValue && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(coPanValue)) {
+      return toast.error("Co-applicant PAN number must look like ABCDE1234F.");
+    }
+    const coVoterValue = coVoter.trim().toUpperCase();
+    if (coVoterValue && !/^[A-Z]{3}[0-9]{7}$/.test(coVoterValue)) {
+      return toast.error("Co-applicant Voter ID must look like ABC1234567.");
+    }
+    if (!coApplicantPhoto) {
+      return toast.error(
+        "Capture the geo-tagged co-applicant photo to continue.",
+      );
+    }
+
+    // Only fully-uploaded document rows are ever saved — an in-flight or
+    // failed file is surfaced here instead of being silently dropped.
+    if (
+      applicantDocs.some((d) => d.status !== "uploaded" || !d.storageId) ||
+      coApplicantDocs.some((d) => d.status !== "uploaded" || !d.storageId)
+    ) {
+      return toast.error(
+        "Some document uploads have not finished — wait for them, or remove the failed ones.",
+      );
+    }
+
     if (!declaration) {
       return toast.error("Accept the declaration before submitting.");
     }
@@ -178,35 +277,34 @@ export default function ClientNew() {
         storageId: Id<"_storage">;
       };
 
-      // Upload applicant KYC docs
-      let applicantDocIds: Array<{ storageId: Id<"_storage">; kind: string }> = [];
-      for (const doc of applicantDocs) {
-        if (doc.status !== "uploaded" || !doc.storageId) continue;
-        applicantDocIds.push({ storageId: doc.storageId, kind: doc.kind });
-      }
+      // Applicant KYC documents were uploaded the moment they were picked —
+      // they only need collecting here (the guard above ensures storageId).
+      const applicantDocsPayload = applicantDocs.map((d) => ({
+        docKind: d.kind,
+        fileName: d.file.name,
+        storageId: d.storageId as Id<"_storage">,
+      }));
 
-      // Upload co-applicant photo
-      let coApplicantPhotoStorageId: Id<"_storage"> | null = null;
-      if (coApplicantPhoto) {
-        const capUrl = await getUploadUrl({});
-        const capResp = await fetch(capUrl, {
-          method: "POST",
-          headers: { "Content-Type": coApplicantPhoto.blob.type || "image/jpeg" },
-          body: coApplicantPhoto.blob,
-        });
-        if (!capResp.ok) throw new Error("Co-applicant photo upload failed — please retry.");
-        const capJson = (await capResp.json()) as { storageId: Id<"_storage"> };
-        coApplicantPhotoStorageId = capJson.storageId;
-      }
+      // Co-applicant geo photo — stamped by the same geo-tagging camera,
+      // uploaded to private storage; the GPS fix travels with it and is
+      // re-validated server-side with the same rules as the applicant's.
+      const capUrl = await getUploadUrl({});
+      const capResp = await fetch(capUrl, {
+        method: "POST",
+        headers: { "Content-Type": coApplicantPhoto.blob.type || "image/jpeg" },
+        body: coApplicantPhoto.blob,
+      });
+      if (!capResp.ok) throw new Error("Co-applicant photo upload failed — please retry.");
+      const capJson = (await capResp.json()) as { storageId: Id<"_storage"> };
+      const coPhotoStorageId = capJson.storageId;
 
-      // Upload co-applicant KYC docs
-      let coApplicantDocIds: Array<{ storageId: Id<"_storage">; kind: string }> = [];
-      for (const doc of coApplicantDocs) {
-        if (doc.status !== "uploaded" || !doc.storageId) continue;
-        coApplicantDocIds.push({ storageId: doc.storageId, kind: doc.kind });
-      }
+      const coDocsPayload = coApplicantDocs.map((d) => ({
+        docKind: d.kind,
+        fileName: d.file.name,
+        storageId: d.storageId as Id<"_storage">,
+      }));
 
-      // 2) Submit the client, linked to the selected centre.
+      // 3) Submit the client, linked to the selected centre.
       const result = await createClient({
         name: name.trim(),
         fatherName: fatherName.trim() || undefined,
@@ -217,6 +315,9 @@ export default function ClientNew() {
         occupation: occupation.trim(),
         monthlyIncome: monthly,
         householdIncome: household,
+        panNumber: pan || undefined,
+        voterId: voter || undefined,
+        kycDocuments: kycDocs.length > 0 ? kycDocs : undefined,
         kycDocType: "AADHAAR",
         kycDocRef: kycDocRef.trim(),
         centerCode: selected.code,
@@ -229,11 +330,33 @@ export default function ClientNew() {
           photoCapturedAt: applicantPhoto.frameAt,
           permissionStatus: applicantPhoto.geo.permissionStatus,
         },
-        // applicantDocIds are persisted through the existing documents flow; wire them here once the mutation supports them.
-        // coApplicantPhotoStorageId and coApplicantDocIds follow the same pattern once the backend accepts them.
-        // applicantDocIds,
-        // coApplicantPhotoStorageId,
-        // coApplicantDocIds,
+        // Applicant KYC document photos — normal captures, no geo-tagging,
+        // saved against THIS applicant's side of the application.
+        documents: applicantDocsPayload,
+        // Co-applicant: details + geo-tagged photograph + normal KYC
+        // documents, all kept attached to the co-applicant block.
+        coApplicant: {
+          name: coName.trim(),
+          fatherName: coFatherName.trim() || undefined,
+          relationship: coRelationship.trim(),
+          gender: coGender,
+          mobile: coMobile.trim() || undefined,
+          address: coAddress.trim() || undefined,
+          aadhaarNumber: coAadhaar.trim() || undefined,
+          panNumber: coPanValue || undefined,
+          voterId: coVoterValue || undefined,
+          kycDocuments: coKycDocs.length > 0 ? coKycDocs : undefined,
+          coGpsStorageId: coPhotoStorageId,
+          coGpsGeo: {
+            latitude: coApplicantPhoto.geo.latitude,
+            longitude: coApplicantPhoto.geo.longitude,
+            accuracyMeters: coApplicantPhoto.geo.accuracyMeters,
+            capturedAt: coApplicantPhoto.geo.capturedAt,
+            photoCapturedAt: coApplicantPhoto.frameAt,
+            permissionStatus: coApplicantPhoto.geo.permissionStatus,
+          },
+          documents: coDocsPayload,
+        },
         declarationAccepted: true,
       });
 
@@ -523,21 +646,45 @@ export default function ClientNew() {
               placeholder="XXXX XXXX XXXX"
             />
           </label>
+          <label className="block">
+            <span className={label}>PAN number (if available)</span>
+            <Input
+              className={field}
+              value={panNumber}
+              onChange={(e) => setPanNumber(e.target.value)}
+              maxLength={10}
+              placeholder="ABCDE1234F"
+            />
+          </label>
+          <label className="block">
+            <span className={label}>Voter ID (if available)</span>
+            <Input
+              className={field}
+              value={voterId}
+              onChange={(e) => setVoterId(e.target.value)}
+              maxLength={10}
+              placeholder="ABC1234567"
+            />
+          </label>
+          <div className="sm:col-span-2">
+            <span className={label}>KYC documents available</span>
+            <KycDocChecks value={kycDocs} onChange={setKycDocs} />
+          </div>
         </div>
       </div>
 
       {/* Applicant photo — geo-tagged camera */}
       <div className="border-2 border-ink bg-card p-3 shadow-hard">
         <div className="mb-2 flex items-center gap-2 text-xs font-black uppercase">
-          <MapPin className="size-4 text-destructive" /> Applicant photo *
+          <MapPin className="size-4 text-destructive" /> Applicant photo * — geo-tagged
         </div>
         <ClientPhotoCapture value={applicantPhoto} onChange={setApplicantPhoto} />
       </div>
 
       {/* Applicant KYC documents — normal photos/PDFs, no geo */}
       <DocCapture
-        label="Applicant documents"
-        hint="Normal photos or PDF — no geo-tagging"
+        label="Applicant KYC document photos"
+        hint="Normal photos or PDF — no geo-tagging. Add, preview, retake or remove before submitting."
         value={applicantDocs}
         setValue={setApplicantDocs}
         geoRequired={false}
@@ -548,36 +695,120 @@ export default function ClientNew() {
         <div className="mb-2 flex items-center gap-2 text-xs font-black uppercase">
           <UserPlus className="size-4 text-foreground" /> Co-applicant
         </div>
-        <div className="grid gap-3">
-          <div className="grid grid-cols-2 gap-2">
-            <input className="w-full border-2 border-ink bg-white px-3 py-2 text-sm font-bold outline-none" placeholder="Co-applicant name" />
-            <input className="w-full border-2 border-ink bg-white px-3 py-2 text-sm font-bold outline-none" placeholder="Father name" />
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <input className="w-full border-2 border-ink bg-white px-3 py-2 text-sm font-bold outline-none" placeholder="Relationship" />
-            <select>
-              <option value="MALE">Male</option>
-              <option value="FEMALE">Female</option>
-              <option value="OTHER">Other</option>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="block sm:col-span-2">
+            <span className={label}>Co-applicant name *</span>
+            <Input
+              className={field}
+              value={coName}
+              onChange={(e) => setCoName(e.target.value)}
+              placeholder="As per Aadhaar"
+            />
+          </label>
+          <label className="block">
+            <span className={label}>Father name</span>
+            <Input
+              className={field}
+              value={coFatherName}
+              onChange={(e) => setCoFatherName(e.target.value)}
+            />
+          </label>
+          <label className="block">
+            <span className={label}>Relationship with applicant *</span>
+            <Input
+              className={field}
+              value={coRelationship}
+              onChange={(e) => setCoRelationship(e.target.value)}
+              placeholder="e.g. Husband"
+            />
+          </label>
+          <label className="block">
+            <span className={label}>Gender *</span>
+            <select
+              value={coGender}
+              onChange={(e) =>
+                setCoGender(e.target.value as (typeof GENDERS)[number])
+              }
+              className={cn(field, "h-[42px]")}
+            >
+              {GENDERS.map((g) => (
+                <option key={g} value={g}>
+                  {g}
+                </option>
+              ))}
             </select>
+          </label>
+          <label className="block">
+            <span className={label}>Mobile number</span>
+            <Input
+              className={field}
+              value={coMobile}
+              onChange={(e) => setCoMobile(e.target.value)}
+              inputMode="numeric"
+              maxLength={10}
+              placeholder="9876543210"
+            />
+          </label>
+          <label className="block sm:col-span-2">
+            <span className={label}>Complete address</span>
+            <textarea
+              value={coAddress}
+              onChange={(e) => setCoAddress(e.target.value)}
+              rows={2}
+              placeholder="House, village, post, district"
+              className={cn(field, "resize-y")}
+            />
+          </label>
+          <label className="block">
+            <span className={label}>Aadhaar number</span>
+            <Input
+              className={field}
+              value={coAadhaar}
+              onChange={(e) => setCoAadhaar(e.target.value)}
+              inputMode="numeric"
+              maxLength={12}
+              placeholder="XXXX XXXX XXXX"
+            />
+          </label>
+          <label className="block">
+            <span className={label}>PAN number (if available)</span>
+            <Input
+              className={field}
+              value={coPan}
+              onChange={(e) => setCoPan(e.target.value)}
+              maxLength={10}
+              placeholder="ABCDE1234F"
+            />
+          </label>
+          <label className="block">
+            <span className={label}>Voter ID (if available)</span>
+            <Input
+              className={field}
+              value={coVoter}
+              onChange={(e) => setCoVoter(e.target.value)}
+              maxLength={10}
+              placeholder="ABC1234567"
+            />
+          </label>
+          <div className="sm:col-span-2">
+            <span className={label}>KYC documents available</span>
+            <KycDocChecks value={coKycDocs} onChange={setCoKycDocs} />
           </div>
-          <input className="w-full border-2 border-ink bg-white px-3 py-2 text-sm font-bold outline-none" placeholder="Co-applicant mobile" />
-          <input className="w-full border-2 border-ink bg-white px-3 py-2 text-sm font-bold outline-none" placeholder="Complete address" />
         </div>
       </div>
 
       {/* Co-applicant photo — geo-tagged camera */}
       <div className="border-2 border-ink bg-card p-3 shadow-hard">
         <div className="mb-2 flex items-center gap-2 text-xs font-black uppercase">
-          <MapPin className="size-4 text-destructive" /> Co-applicant photo *
+          <MapPin className="size-4 text-destructive" /> Co-applicant photo * — geo-tagged
         </div>
         <ClientPhotoCapture value={coApplicantPhoto} onChange={setCoApplicantPhoto} />
       </div>
 
       {/* Co-applicant KYC documents — normal photos/PDFs, no geo */}
       <DocCapture
-        label="Co-applicant documents"
-        hint="Normal photos or PDF — no geo-tagging"
+        label="Co-applicant KYC document photos"
+        hint="Normal photos or PDF — no geo-tagging. Add, preview, retake or remove before submitting."
         value={coApplicantDocs}
         setValue={setCoApplicantDocs}
         geoRequired={false}

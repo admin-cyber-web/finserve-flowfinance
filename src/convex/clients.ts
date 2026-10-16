@@ -329,6 +329,90 @@ export const get = query({
   },
 });
 
+/** One uploaded KYC document reference passed to `create`. */
+type UploadedDocArg = {
+  docKind: string;
+  fileName: string;
+  storageId: Id<"_storage">;
+};
+
+type ValidatedKycDoc = {
+  docKind: string;
+  fileName: string;
+  storageId: Id<"_storage">;
+  sizeBytes: number;
+  mimeType: string;
+};
+
+/**
+ * Validate uploaded KYC document files against storage metadata: kind
+ * (Aadhaar / PAN / Voter ID / Other), MIME type and size — the same rules
+ * the capture UI enforces before uploading. On rejection EVERY file in
+ * `docs` is deleted and an AppError is thrown, so a failed submission never
+ * leaves orphaned files behind (the mutation itself rolls back, so no
+ * half-created application remains either).
+ *
+ * Used for BOTH the applicant's documents and the co-applicant's documents:
+ * both are normal captures with no geo-tagging, and each set is inserted
+ * against the correct side of the application by the caller.
+ */
+async function validateUploadedKycDocs(
+  ctx: { db: any; storage: any },
+  docs: UploadedDocArg[],
+  subject: string, // "Applicant document" | "Co-applicant document"
+): Promise<ValidatedKycDoc[]> {
+  const MAX_DOC_BYTES = 5 * 1024 * 1024;
+  const allowedTypes = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
+  const kinds = ["AADHAAR", "PAN", "VOTER_ID", "OTHER"];
+  const validated: ValidatedKycDoc[] = [];
+  let error: string | null = null;
+  for (const d of docs) {
+    if (error) break;
+    if (!kinds.includes(d.docKind)) {
+      error = `${subject} type must be Aadhaar, PAN, Voter ID or Other.`;
+      break;
+    }
+    let fileName: string;
+    try {
+      fileName = requiredString(d.fileName, `${subject} file name`, 120);
+    } catch {
+      error = `${subject} has an invalid file name.`;
+      break;
+    }
+    const meta = await ctx.db.system.get("_storage", d.storageId);
+    if (!meta) {
+      error = `${subject} file is missing — upload it again.`;
+      break;
+    }
+    if (!meta.contentType || !allowedTypes.includes(meta.contentType)) {
+      error = `${subject}s must be JPEG, PNG, WebP or PDF files.`;
+      break;
+    }
+    if (meta.size <= 0 || meta.size > MAX_DOC_BYTES) {
+      error = `${subject}s must be between 1 byte and ${Math.round(MAX_DOC_BYTES / 1024 / 1024)} MB.`;
+      break;
+    }
+    validated.push({
+      docKind: d.docKind,
+      fileName,
+      storageId: d.storageId,
+      sizeBytes: meta.size,
+      mimeType: meta.contentType,
+    });
+  }
+  if (error) {
+    for (const d of docs) {
+      try {
+        await ctx.storage.delete(d.storageId);
+      } catch {
+        // already gone — the thrown AppError below is what matters
+      }
+    }
+    throw new AppError(error);
+  }
+  return validated;
+}
+
 export const create = mutation({
   args: {
     name: v.string(),
@@ -366,6 +450,20 @@ export const create = mutation({
     panNumber: v.optional(v.string()),
     voterId: v.optional(v.string()),
     kycDocuments: v.optional(v.array(v.string())),
+    // Applicant KYC document photos/files (Aadhaar/PAN/Voter/Other) —
+    // NORMAL captures with NO geo-tagging. Each file is uploaded to private
+    // storage before this mutation runs and re-validated from storage
+    // metadata inside the handler. Rows land on `clientDocuments` for this
+    // applicant; co-applicant files travel under coApplicant.documents.
+    documents: v.optional(
+      v.array(
+        v.object({
+          docKind: v.string(),
+          fileName: v.string(),
+          storageId: v.id("_storage"),
+        }),
+      ),
+    ),
     coApplicant: v.optional(
       v.object({
         name: v.string(),
@@ -402,7 +500,8 @@ export const create = mutation({
             latitude: v.number(),
             longitude: v.number(),
             accuracyMeters: v.number(),
-            capturedAt: v.number(),
+            capturedAt: v.number(), // GPS fix timestamp
+            photoCapturedAt: v.optional(v.number()), // photo frame timestamp
             permissionStatus: v.optional(v.string()),
           }),
         ),
@@ -618,7 +717,9 @@ export const create = mutation({
         kycDocuments: co.kycDocuments
           ?.slice(0, 4)
           .map((d) => oneOf(d, ["AADHAAR", "PAN", "VOTER_ID", "OTHER"], "coApplicant.kycDocuments")),
-        photoStorageId: co.photoStorageId,
+        // The geo camera stores the stamped file under coGpsStorageId;
+        // it is surfaced here too so the co-applicant card can show it.
+        photoStorageId: co.photoStorageId ?? co.coGpsStorageId,
       };
     }
 
@@ -972,9 +1073,69 @@ export const create = mutation({
       });
     }
 
-    // ---- Optional co-applicant photo (real upload, never a file name) ----
-    if (args.coApplicant?.photoStorageId) {
-      const coMeta = await ctx.db.system.get("_storage", args.coApplicant.photoStorageId);
+    // ---- Applicant KYC documents (normal captures — no geo-tagging) ------
+    // Uploaded to private storage before this mutation ran and re-validated
+    // from storage metadata here. These rows carry NO coApplicant flag, so
+    // they stay attached to the applicant side of this application only.
+    const applicantDocArgs = (args.documents ?? []).slice(0, 12);
+    let applicantDocCount = 0;
+    if (applicantDocArgs.length > 0) {
+      const validatedApplicantDocs = await validateUploadedKycDocs(
+        ctx,
+        applicantDocArgs,
+        "Applicant document",
+      );
+      for (const d of validatedApplicantDocs) {
+        await ctx.db.insert("clientDocuments", {
+          clientId,
+          type: "KYC",
+          fileName: d.fileName,
+          status: "UPLOADED",
+          uploadedBy: me._id,
+          storageId: d.storageId,
+          sizeBytes: d.sizeBytes,
+          mimeType: d.mimeType,
+          docKind: d.docKind,
+          createdAt: now,
+        });
+      }
+      applicantDocCount = validatedApplicantDocs.length;
+    }
+
+    // ---- Co-applicant photo — geo-tagged via the existing geo camera -----
+    // The stamped JPEG travels with the fix it was stamped with
+    // (coGpsStorageId + coGpsGeo) and the two must arrive together, so a
+    // photo can never be stored as geo-tagged without coordinates the server
+    // has validated with the SAME rules as the applicant's photo. The legacy
+    // plain photoStorageId path (no geo) still works for older callers.
+    const coGpsId = args.coApplicant?.coGpsStorageId ?? null;
+    const coGpsGeo = args.coApplicant?.coGpsGeo ?? null;
+    if ((coGpsId && !coGpsGeo) || (!coGpsId && coGpsGeo)) {
+      if (coGpsId) await ctx.storage.delete(coGpsId);
+      throw new AppError(
+        "Co-applicant photo location is missing — capture it again with GPS on.",
+      );
+    }
+    const coPhotoId = coGpsId ?? args.coApplicant?.photoStorageId ?? null;
+    if (coPhotoId) {
+      if (coGpsGeo) {
+        const coFix: GeoFix = {
+          latitude: coGpsGeo.latitude,
+          longitude: coGpsGeo.longitude,
+          accuracyMeters: coGpsGeo.accuracyMeters,
+          capturedAt: coGpsGeo.capturedAt,
+          permissionStatus: coGpsGeo.permissionStatus ?? "granted",
+        };
+        const coGeoError = geoValidationError(coFix, now);
+        if (coGeoError) {
+          await ctx.storage.delete(coPhotoId);
+          throw new AppError(
+            `Co-applicant photo location rejected: ${coGeoError}`,
+          );
+        }
+      }
+
+      const coMeta = await ctx.db.system.get("_storage", coPhotoId);
       const coTypes = ["image/jpeg", "image/png", "image/webp"];
       if (
         !coMeta ||
@@ -983,18 +1144,45 @@ export const create = mutation({
         coMeta.size <= 0 ||
         coMeta.size > MAX_CLIENT_PHOTO_BYTES
       ) {
-        if (coMeta) await ctx.storage.delete(args.coApplicant.photoStorageId);
+        if (coMeta) await ctx.storage.delete(coPhotoId);
         throw new AppError(
           "Co-applicant photo must be a JPEG, PNG or WebP image under 5 MB — capture it again.",
         );
       }
+
+      const coFileName = `co-applicant-photo-${code}.jpg`;
+      if (coGpsGeo) {
+        // Geo capture row — flagged so `clients.geoPhoto` keeps surfacing
+        // the APPLICANT's photo while this one lives on the co-applicant
+        // card (same file, same access checks as the rest of this mutation).
+        await ctx.db.insert("clientGeoPhotos", {
+          clientId,
+          storageId: coPhotoId,
+          fileName: coFileName,
+          sizeBytes: coMeta.size,
+          mimeType: coMeta.contentType,
+          latitude: coGpsGeo.latitude,
+          longitude: coGpsGeo.longitude,
+          accuracyMeters: Math.round(coGpsGeo.accuracyMeters * 100) / 100,
+          capturedAt: coGpsGeo.capturedAt,
+          photoCapturedAt: coGpsGeo.photoCapturedAt ?? coGpsGeo.capturedAt,
+          uploadedAt: now,
+          uploadedBy: me._id,
+          branchId,
+          permissionStatus: coGpsGeo.permissionStatus ?? "granted",
+          device: args.device,
+          status: "GEO_TAGGED",
+          coApplicant: true,
+        });
+      }
+
       await ctx.db.insert("clientDocuments", {
         clientId,
         type: "OTHER",
-        fileName: `co-applicant-photo-${code}.jpg`,
+        fileName: coFileName,
         status: "UPLOADED",
         uploadedBy: me._id,
-        storageId: args.coApplicant.photoStorageId,
+        storageId: coPhotoId,
         sizeBytes: coMeta.size,
         mimeType: coMeta.contentType,
         coApplicant: true,
@@ -1002,65 +1190,18 @@ export const create = mutation({
       });
     }
 
-    // ---- Optional co-applicant documents (Aadhaar/PAN/Voter/Other) -------
-    // Uploaded to private storage before this mutation ran; every file is
-    // re-validated against storage metadata (type + size + kind) so a direct
-    // backend call cannot smuggle in a bad file. On rejection ALL uploaded
-    // co-applicant files are deleted and the mutation rolls back (no client
-    // is created, no orphaned files remain).
+    // ---- Co-applicant documents (normal captures — no geo-tagging) -------
+    // Same validation as the applicant's documents, inserted with the
+    // coApplicant flag so they stay attached to the co-applicant block of
+    // this application only.
     const coDocArgs = (args.coApplicant?.documents ?? []).slice(0, 8);
     let coDocCount = 0;
     if (coDocArgs.length > 0) {
-      const MAX_CO_DOC_BYTES = 5 * 1024 * 1024;
-      const coDocTypes = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
-      const coDocKinds = ["AADHAAR", "PAN", "VOTER_ID", "OTHER"];
-      let coDocError: string | null = null;
-      const validatedCoDocs: {
-        docKind: string;
-        fileName: string;
-        storageId: Id<"_storage">;
-        sizeBytes: number;
-        mimeType: string;
-      }[] = [];
-      for (const d of coDocArgs) {
-        if (coDocError) break;
-        if (!coDocKinds.includes(d.docKind)) {
-          coDocError = "Co-applicant document type must be Aadhaar, PAN, Voter ID or Other.";
-          break;
-        }
-        let fileName: string;
-        try {
-          fileName = requiredString(d.fileName, "coApplicant.documents.fileName", 120);
-        } catch {
-          coDocError = "A co-applicant document has an invalid file name.";
-          break;
-        }
-        const coDocMeta = await ctx.db.system.get("_storage", d.storageId);
-        if (!coDocMeta) {
-          coDocError = "A co-applicant document file is missing — upload it again.";
-          break;
-        }
-        if (!coDocMeta.contentType || !coDocTypes.includes(coDocMeta.contentType)) {
-          coDocError = "Co-applicant documents must be JPEG, PNG, WebP or PDF files.";
-          break;
-        }
-        if (coDocMeta.size <= 0 || coDocMeta.size > MAX_CO_DOC_BYTES) {
-          coDocError =
-            `Co-applicant documents must be between 1 byte and ${Math.round(MAX_CO_DOC_BYTES / 1024 / 1024)} MB.`;
-          break;
-        }
-        validatedCoDocs.push({
-          docKind: d.docKind,
-          fileName,
-          storageId: d.storageId,
-          sizeBytes: coDocMeta.size,
-          mimeType: coDocMeta.contentType,
-        });
-      }
-      if (coDocError) {
-        for (const d of coDocArgs) await ctx.storage.delete(d.storageId);
-        throw new AppError(coDocError);
-      }
+      const validatedCoDocs = await validateUploadedKycDocs(
+        ctx,
+        coDocArgs,
+        "Co-applicant document",
+      );
       for (const d of validatedCoDocs) {
         await ctx.db.insert("clientDocuments", {
           clientId,
@@ -1119,6 +1260,7 @@ export const create = mutation({
         stampFileName,
         familyMembers: familyRows.length,
         hasCoApplicant: Boolean(coApplicant),
+        applicantDocs: applicantDocCount,
         coApplicantDocs: coDocCount,
         hasLoanRequest: Boolean(loanRequest),
         hasBankAccount: Boolean(bankAccount),
@@ -1184,11 +1326,15 @@ export const geoPhoto = query({
       throw new AppError("You can only view your own profile.");
     }
 
-    const photo = await ctx.db
+    // Latest APPLICANT geo photo — co-applicant captures are stored with
+    // `coApplicant: true` and shown on the co-applicant card instead, so
+    // they can never replace the applicant's photo here.
+    const rows = await ctx.db
       .query("clientGeoPhotos")
       .withIndex("by_client", (q) => q.eq("clientId", clientId))
       .order("desc")
-      .first();
+      .collect();
+    const photo = rows.find((r) => !r.coApplicant) ?? null;
     if (!photo) return null;
 
     const url = await ctx.storage.getUrl(photo.storageId);

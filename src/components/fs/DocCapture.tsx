@@ -3,7 +3,13 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { useMutation } from "convex/react";
-import { useState, type ChangeEvent, type Dispatch, type SetStateAction } from "react";
+import {
+  useRef,
+  useState,
+  type ChangeEvent,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import { Camera, FileText, Upload } from "lucide-react";
 import { toast } from "sonner";
 
@@ -79,6 +85,9 @@ interface DocCaptureProps {
   geoRequired?: boolean;
 }
 
+/** How long a pending "Retake" choice stays valid after the camera opens. */
+const RETAKE_WINDOW_MS = 2 * 60 * 1000;
+
 export function DocCapture({
   label,
   hint,
@@ -90,6 +99,18 @@ export function DocCapture({
 }: DocCaptureProps) {
   const getUploadUrl = useMutation(api.clients.photoUploadUrl);
   const [kind, setKind] = useState<string>(kindOptions[0]?.id ?? "OTHER");
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  // Set by a per-row "Retake" click: the next camera capture REPLACES that
+  // row in place (new preview + fresh upload) instead of appending another.
+  // Cleared on pick, on cancel, or as soon as the window lapses — so a
+  // never-captured retake can never silently swap a later, unrelated pick.
+  const retakeRef = useRef<{ key: string; at: number } | null>(null);
+
+  const startRetake = (key: string) => {
+    if (!value.some((d) => d.key === key)) return;
+    retakeRef.current = { key, at: Date.now() };
+    cameraInputRef.current?.click();
+  };
 
   const upload = async (key: string, file: File) => {
     try {
@@ -129,6 +150,33 @@ export function DocCapture({
       toast.error(problem);
       return;
     }
+    // A recent "Retake" click replaces its row in place — old preview is
+    // revoked, the new file uploads under the same key. These are always
+    // normal captures: documents are NEVER geo-tagged, regardless of how
+    // the person's photograph (which IS geo-tagged) was captured.
+    const retake = retakeRef.current;
+    retakeRef.current = null;
+    if (
+      retake &&
+      Date.now() - retake.at <= RETAKE_WINDOW_MS &&
+      value.some((d) => d.key === retake.key)
+    ) {
+      setValue((cur) =>
+        cur.map((d) => {
+          if (d.key !== retake.key) return d;
+          URL.revokeObjectURL(d.previewUrl);
+          return {
+            ...d,
+            file,
+            previewUrl: URL.createObjectURL(file),
+            status: "uploading" as const,
+            storageId: undefined,
+          };
+        }),
+      );
+      void upload(retake.key, file);
+      return;
+    }
     const key = newDocKey();
     setValue((cur) => [
       ...cur,
@@ -138,9 +186,6 @@ export function DocCapture({
         file,
         previewUrl: URL.createObjectURL(file),
         status: "uploading",
-        geo: geoRequired
-          ? ({ latitude: 0, longitude: 0, accuracyMeters: 0, capturedAt: 0 } as any)
-          : undefined,
       },
     ]);
     void upload(key, file);
@@ -181,10 +226,20 @@ export function DocCapture({
             </option>
           ))}
         </select>
-        <label className="inline-flex cursor-pointer items-center gap-1.5 border-2 border-ink bg-white px-3 py-1.5 text-xs font-black uppercase shadow-hard-sm transition-colors hover:bg-gold focus-within:ring-2 focus-within:ring-ink">
+        <label
+          className="inline-flex cursor-pointer items-center gap-1.5 border-2 border-ink bg-white px-3 py-1.5 text-xs font-black uppercase shadow-hard-sm transition-colors hover:bg-gold focus-within:ring-2 focus-within:ring-ink"
+          onPointerDown={() => {
+            // A direct click on "Take photo" always appends — clear any
+            // retake left over from an abandoned camera prompt. (Retake's
+            // programmatic input.click() fires a click, never a pointerdown,
+            // so it does NOT trigger this clear.)
+            retakeRef.current = null;
+          }}
+        >
           <Camera className="size-3.5" />
           Take photo
           <input
+            ref={cameraInputRef}
             type="file"
             accept="image/jpeg,image/png,image/webp"
             capture={cameraFit}
@@ -192,7 +247,12 @@ export function DocCapture({
             onChange={onPick}
           />
         </label>
-        <label className="inline-flex cursor-pointer items-center gap-1.5 border-2 border-ink bg-white px-3 py-1.5 text-xs font-black uppercase shadow-hard-sm transition-colors hover:bg-gold focus-within:ring-2 focus-within:ring-ink">
+        <label
+          className="inline-flex cursor-pointer items-center gap-1.5 border-2 border-ink bg-white px-3 py-1.5 text-xs font-black uppercase shadow-hard-sm transition-colors hover:bg-gold focus-within:ring-2 focus-within:ring-ink"
+          onPointerDown={() => {
+            retakeRef.current = null;
+          }}
+        >
           <Upload className="size-3.5" />
           Upload file
           <input
@@ -259,6 +319,16 @@ export function DocCapture({
                       Retry
                     </Button>
                   </>
+                )}
+                {isImage && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => startRetake(d.key)}
+                    aria-label={`Retake ${d.file.name}`}
+                  >
+                    Retake
+                  </Button>
                 )}
                 <Button
                   size="sm"

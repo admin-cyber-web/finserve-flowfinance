@@ -258,6 +258,10 @@ const schema = defineSchema(
       permissionStatus: v.optional(v.string()), // geolocation permission at capture
       device: v.optional(v.string()),
       status: v.string(), // GEO_TAGGED
+      // Marks a co-applicant capture so the applicant's own geo photo stays
+      // the one surfaced by `clients.geoPhoto` (the co-applicant photo is
+      // shown in the co-applicant card on the client page).
+      coApplicant: v.optional(v.boolean()),
     }).index("by_client", ["clientId"]),
 
     // Family members of an applicant, captured as structured rows on the
