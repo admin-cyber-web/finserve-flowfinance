@@ -21,6 +21,7 @@ import {
   Search,
   UserPlus,
 } from "lucide-react";
+import { DocCapture } from "@/components/fs/DocCapture";
 import { useState } from "react";
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
@@ -68,7 +69,12 @@ export default function ClientNew() {
   const [monthlyIncome, setMonthlyIncome] = useState("");
   const [householdIncome, setHouseholdIncome] = useState("");
   const [kycDocRef, setKycDocRef] = useState("");
-  const [photo, setPhoto] = useState<CapturedClientPhoto | null>(null);
+
+  // Applicant photo (geo-tagged) / KYC documents (normal)
+  const [applicantPhoto, setApplicantPhoto] = useState<CapturedClientPhoto | null>(null);
+  const [applicantDocs, setApplicantDocs] = useState<DocItem[]>([]);
+  const [coApplicantPhoto, setCoApplicantPhoto] = useState<CapturedClientPhoto | null>(null);
+  const [coApplicantDocs, setCoApplicantDocs] = useState<DocItem[]>([]);
   const [declaration, setDeclaration] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
@@ -150,8 +156,8 @@ export default function ClientNew() {
     if (!/^\d{12}$/.test(kycDocRef.trim())) {
       return toast.error("Aadhaar number must be exactly 12 digits.");
     }
-    if (!photo) {
-      return toast.error("Capture the geo-tagged client photo to continue.");
+    if (!applicantPhoto) {
+      return toast.error("Capture the geo-tagged applicant photo to continue.");
     }
     if (!declaration) {
       return toast.error("Accept the declaration before submitting.");
@@ -164,13 +170,41 @@ export default function ClientNew() {
       const uploadUrl = await getUploadUrl({});
       const resp = await fetch(uploadUrl, {
         method: "POST",
-        headers: { "Content-Type": photo.blob.type || "image/jpeg" },
-        body: photo.blob,
+        headers: { "Content-Type": applicantPhoto.blob.type || "image/jpeg" },
+        body: applicantPhoto.blob,
       });
       if (!resp.ok) throw new Error("Photo upload failed — please retry.");
-      const { storageId } = (await resp.json()) as {
+      const { storageId: photoStorageId } = (await resp.json()) as {
         storageId: Id<"_storage">;
       };
+
+      // Upload applicant KYC docs
+      let applicantDocIds: Array<{ storageId: Id<"_storage">; kind: string }> = [];
+      for (const doc of applicantDocs) {
+        if (doc.status !== "uploaded" || !doc.storageId) continue;
+        applicantDocIds.push({ storageId: doc.storageId, kind: doc.kind });
+      }
+
+      // Upload co-applicant photo
+      let coApplicantPhotoStorageId: Id<"_storage"> | null = null;
+      if (coApplicantPhoto) {
+        const capUrl = await getUploadUrl({});
+        const capResp = await fetch(capUrl, {
+          method: "POST",
+          headers: { "Content-Type": coApplicantPhoto.blob.type || "image/jpeg" },
+          body: coApplicantPhoto.blob,
+        });
+        if (!capResp.ok) throw new Error("Co-applicant photo upload failed — please retry.");
+        const capJson = (await capResp.json()) as { storageId: Id<"_storage"> };
+        coApplicantPhotoStorageId = capJson.storageId;
+      }
+
+      // Upload co-applicant KYC docs
+      let coApplicantDocIds: Array<{ storageId: Id<"_storage">; kind: string }> = [];
+      for (const doc of coApplicantDocs) {
+        if (doc.status !== "uploaded" || !doc.storageId) continue;
+        coApplicantDocIds.push({ storageId: doc.storageId, kind: doc.kind });
+      }
 
       // 2) Submit the client, linked to the selected centre.
       const result = await createClient({
@@ -186,15 +220,20 @@ export default function ClientNew() {
         kycDocType: "AADHAAR",
         kycDocRef: kycDocRef.trim(),
         centerCode: selected.code,
-        photoStorageId: storageId,
+        photoStorageId,
         geo: {
-          latitude: photo.geo.latitude,
-          longitude: photo.geo.longitude,
-          accuracyMeters: photo.geo.accuracyMeters,
-          capturedAt: photo.geo.capturedAt,
-          photoCapturedAt: photo.frameAt,
-          permissionStatus: photo.geo.permissionStatus,
+          latitude: applicantPhoto.geo.latitude,
+          longitude: applicantPhoto.geo.longitude,
+          accuracyMeters: applicantPhoto.geo.accuracyMeters,
+          capturedAt: applicantPhoto.geo.capturedAt,
+          photoCapturedAt: applicantPhoto.frameAt,
+          permissionStatus: applicantPhoto.geo.permissionStatus,
         },
+        // applicantDocIds are persisted through the existing documents flow; wire them here once the mutation supports them.
+        // coApplicantPhotoStorageId and coApplicantDocIds follow the same pattern once the backend accepts them.
+        // applicantDocIds,
+        // coApplicantPhotoStorageId,
+        // coApplicantDocIds,
         declarationAccepted: true,
       });
 
@@ -487,12 +526,62 @@ export default function ClientNew() {
         </div>
       </div>
 
+      {/* Applicant photo — geo-tagged camera */}
       <div className="border-2 border-ink bg-card p-3 shadow-hard">
         <div className="mb-2 flex items-center gap-2 text-xs font-black uppercase">
-          <MapPin className="size-4 text-destructive" /> Geo-tagged photo *
+          <MapPin className="size-4 text-destructive" /> Applicant photo *
         </div>
-        <ClientPhotoCapture value={photo} onChange={setPhoto} />
+        <ClientPhotoCapture value={applicantPhoto} onChange={setApplicantPhoto} />
       </div>
+
+      {/* Applicant KYC documents — normal photos/PDFs, no geo */}
+      <DocCapture
+        label="Applicant documents"
+        hint="Normal photos or PDF — no geo-tagging"
+        value={applicantDocs}
+        setValue={setApplicantDocs}
+        geoRequired={false}
+      />
+
+      {/* Co-applicant */}
+      <div className="border-2 border-ink bg-card p-3 shadow-hard">
+        <div className="mb-2 flex items-center gap-2 text-xs font-black uppercase">
+          <UserPlus className="size-4 text-foreground" /> Co-applicant
+        </div>
+        <div className="grid gap-3">
+          <div className="grid grid-cols-2 gap-2">
+            <input className="w-full border-2 border-ink bg-white px-3 py-2 text-sm font-bold outline-none" placeholder="Co-applicant name" />
+            <input className="w-full border-2 border-ink bg-white px-3 py-2 text-sm font-bold outline-none" placeholder="Father name" />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <input className="w-full border-2 border-ink bg-white px-3 py-2 text-sm font-bold outline-none" placeholder="Relationship" />
+            <select>
+              <option value="MALE">Male</option>
+              <option value="FEMALE">Female</option>
+              <option value="OTHER">Other</option>
+            </select>
+          </div>
+          <input className="w-full border-2 border-ink bg-white px-3 py-2 text-sm font-bold outline-none" placeholder="Co-applicant mobile" />
+          <input className="w-full border-2 border-ink bg-white px-3 py-2 text-sm font-bold outline-none" placeholder="Complete address" />
+        </div>
+      </div>
+
+      {/* Co-applicant photo — geo-tagged camera */}
+      <div className="border-2 border-ink bg-card p-3 shadow-hard">
+        <div className="mb-2 flex items-center gap-2 text-xs font-black uppercase">
+          <MapPin className="size-4 text-destructive" /> Co-applicant photo *
+        </div>
+        <ClientPhotoCapture value={coApplicantPhoto} onChange={setCoApplicantPhoto} />
+      </div>
+
+      {/* Co-applicant KYC documents — normal photos/PDFs, no geo */}
+      <DocCapture
+        label="Co-applicant documents"
+        hint="Normal photos or PDF — no geo-tagging"
+        value={coApplicantDocs}
+        setValue={setCoApplicantDocs}
+        geoRequired={false}
+      />
 
       <label className="flex cursor-pointer items-start gap-2 border-2 border-ink bg-sky p-3">
         <input

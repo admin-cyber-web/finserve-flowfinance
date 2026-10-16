@@ -75,6 +75,8 @@ interface DocCaptureProps {
   kindOptions?: { id: string; label: string }[];
   /** Which capture source the camera button uses (default documents). */
   cameraFit?: "environment" | "user";
+  /** Whether KYC photos need geo-tagging (default: no). */
+  geoRequired?: boolean;
 }
 
 export function DocCapture({
@@ -84,6 +86,7 @@ export function DocCapture({
   setValue,
   kindOptions = DOC_KIND_OPTIONS,
   cameraFit = "environment",
+  geoRequired = false,
 }: DocCaptureProps) {
   const getUploadUrl = useMutation(api.clients.photoUploadUrl);
   const [kind, setKind] = useState<string>(kindOptions[0]?.id ?? "OTHER");
@@ -135,6 +138,9 @@ export function DocCapture({
         file,
         previewUrl: URL.createObjectURL(file),
         status: "uploading",
+        geo: geoRequired
+          ? ({ latitude: 0, longitude: 0, accuracyMeters: 0, capturedAt: 0 } as any)
+          : undefined,
       },
     ]);
     void upload(key, file);
