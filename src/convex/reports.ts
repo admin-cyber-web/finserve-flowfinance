@@ -3,6 +3,7 @@ import { query } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
 import { AppError, istDateKey, requirePermission, requireProfile, walletBalance } from "../lib/server/convexHelpers";
 import { deriveBalance } from "../lib/finance/wallet";
+import { buildDateReport, rangeBounds, resolveRange } from "../lib/finance/dateReport";
 
 /**
  * One reusable report engine behind every report in the Reports section.
@@ -917,5 +918,171 @@ export const overdue = query({
     }
 
     return { rows, buckets };
+  },
+});
+
+/* --------------------------- Date-wise report ---------------------------- */
+
+/**
+ * The query behind the "Date Range" tab: From/To dates in the institution's
+ * local day (IST), inclusive on both ends, resolved to real records from the
+ * ledgers. Authentication, permission and role scope are enforced here — the
+ * client only ever renders what this query returns, and the date range is
+ * applied on the backend, not just in the UI.
+ *
+ * Indexes used: `collections.by_created` and `walletTransactions.by_created`
+ * (range reads — these tables are only ever filtered by createdAt) and
+ * `loanSchedules.by_due` (overdue = unpaid rows due before now). The rest are
+ * small tables collected whole because KYC/outstanding figures need current
+ * state, not only in-range rows.
+ */
+export const dateReport = query({
+  args: {
+    fromDay: v.string(), // YYYY-MM-DD, institution-local (IST)
+    toDay: v.string(),
+    category: v.optional(v.string()), // ALL | CLIENTS | KYC | LOANS | DISBURSEMENTS | COLLECTIONS | OVERDUE | RECOVERY | HANDOVER | WALLET
+    branchId: v.optional(v.id("branches")),
+    staffId: v.optional(v.id("profiles")),
+    centerCode: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx, { allowInactive: true });
+    requirePermission(me, "reports");
+
+    const range = resolveRange(args.fromDay, args.toDay);
+    if ("error" in range) throw new AppError(range.error);
+    const bounds = rangeBounds(range.fromDay, range.toDay);
+    if (!bounds) throw new AppError("Invalid date range.");
+    const now = Date.now();
+
+    // Branch scope: a BRANCH_MANAGER is pinned to their own branch; staff and
+    // branch filters can only narrow a SUPER_ADMIN / ACCOUNTANT view — they
+    // can never widen it (the engine re-checks this per record as well).
+    let branchFilter: string | null = args.branchId ?? null;
+    if (me.role === "BRANCH_MANAGER") {
+      if (branchFilter && branchFilter !== me.branchId) {
+        throw new AppError("You can only report on your own branch.");
+      }
+      branchFilter = me.branchId ?? null;
+    }
+    const staffFilter: string | null = args.staffId ?? null;
+
+    const [
+      clients,
+      applications,
+      loans,
+      collections,
+      handovers,
+      issues,
+      recovery,
+      wallets,
+      walletTxns,
+      schedules,
+      profiles,
+      branches,
+      centers,
+    ] = await Promise.all([
+      ctx.db.query("clients").collect(),
+      ctx.db.query("loanApplications").collect(),
+      ctx.db.query("loans").collect(),
+      ctx.db
+        .query("collections")
+        .withIndex("by_created", (q) =>
+          q.gte("createdAt", bounds.from).lte("createdAt", bounds.to),
+        )
+        .collect(),
+      ctx.db.query("cashHandovers").collect(),
+      ctx.db.query("cashIssues").collect(),
+      ctx.db.query("recoveryActivities").collect(),
+      ctx.db.query("wallets").collect(),
+      ctx.db
+        .query("walletTransactions")
+        .withIndex("by_created", (q) =>
+          q.gte("createdAt", bounds.from).lte("createdAt", bounds.to),
+        )
+        .collect(),
+      ctx.db
+        .query("loanSchedules")
+        .withIndex("by_due", (q) => q.lt("dueDate", now))
+        .collect(),
+      ctx.db.query("profiles").collect(),
+      ctx.db.query("branches").collect(),
+      ctx.db.query("centers").collect(),
+    ]);
+
+    // Centre filter — resolved against the centres table so only real,
+    // in-scope centre IDs can ever match.
+    let centerFilter: string | null = null;
+    const rawCenter = args.centerCode?.trim() ?? "";
+    if (rawCenter) {
+      const wanted = rawCenter.toUpperCase();
+      const center = centers.find((c) => c.code.toUpperCase() === wanted);
+      if (!center) {
+        throw new AppError(`No centre exists with ID ${rawCenter}.`);
+      }
+      centerFilter = center.code;
+    }
+
+    const report = buildDateReport({
+      bounds,
+      category: args.category ?? "ALL",
+      limit: args.limit ?? 500,
+      now,
+      role: me.role,
+      viewerId: me._id,
+      viewerBranchId: me.branchId ?? null,
+      branchId: branchFilter,
+      staffId: staffFilter,
+      centerCode: centerFilter,
+      clients,
+      applications,
+      loans,
+      schedules,
+      collections,
+      handovers,
+      issues,
+      recovery,
+      wallets,
+      walletTxns,
+      profiles,
+    });
+
+    // Filter options the viewer is actually allowed to use.
+    const inBranchScope = (b: { _id: typeof branches[number]["_id"] }) =>
+      me.role === "BRANCH_MANAGER" || me.role === "FIELD_STAFF"
+        ? b._id === me.branchId
+        : true;
+    const branchOpts = branches
+      .filter(inBranchScope)
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((b) => ({ id: b._id, name: b.name, code: b.code }));
+    const staffOpts = (
+      me.role === "FIELD_STAFF"
+        ? []
+        : me.role === "BRANCH_MANAGER"
+          ? profiles.filter((p) => p.branchId === me.branchId)
+          : profiles
+    )
+      .slice()
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((p) => ({ id: p._id, name: p.name, role: p.role, branchId: p.branchId ?? null }));
+    const centerOpts = centers
+      .filter((c) => {
+        if (me.role === "FIELD_STAFF") return c.staffId === me._id;
+        if (me.role === "BRANCH_MANAGER") return c.branchId === me.branchId;
+        return true;
+      })
+      .sort((a, b) => a.code.localeCompare(b.code))
+      .map((c) => ({ code: c.code, name: c.name, branchId: c.branchId }));
+
+    return {
+      ...report,
+      filterOptions: {
+        branches: branchOpts,
+        staff: staffOpts,
+        centers: centerOpts,
+      },
+    };
   },
 });

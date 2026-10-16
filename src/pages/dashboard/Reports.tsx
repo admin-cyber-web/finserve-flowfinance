@@ -18,9 +18,22 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/components/ui/tabs";
+import {
+  DATE_REPORT_CATEGORIES,
+  DATE_REPORT_CATEGORY_LABELS,
+  DATE_REPORT_PRESETS,
+  DATE_REPORT_PRESET_LABELS,
+  istDayKey,
+  istDayStart,
+  presetRange,
+  resolveRange,
+  type DateReportCategory,
+  type DateReportPreset,
+} from "@/lib/finance/dateReport";
 import { LOAN_STATUSES } from "@/lib/finance/types";
 import { cn } from "@/lib/utils";
 import { useQuery } from "convex/react";
+import { useNavigate } from "react-router";
 import {
   Building2,
   Download,
@@ -34,12 +47,13 @@ import { toast } from "sonner";
 import ReportClient from "./ReportClient";
 
 /* ---------------------------------------------------------------------------
- * Reports — five report categories over the real database:
+ * Reports — six report categories over the real database:
  *   Overview    portfolio metrics (clients, loans, repayments, dues)
  *   Transactions ledger-derived transaction report (pre-existing engine)
  *   Clients      authorized client list + Client ID search → full report
  *   Staff        staff-wise and branch-manager-wise reports with filters
  *   Centres      centre-wise client report by Centre ID (e.g. BALLIA-001)
+ *   Date range   IST date-wise report: quick ranges, real records, CSV export
  * Every figure comes from authenticated Convex queries with backend scoping.
  * --------------------------------------------------------------------------- */
 
@@ -66,18 +80,48 @@ const COLL_STATUSES = [
   { id: "REVERSAL", label: "Reversal" },
 ] as const;
 
+/** Institution-local (IST) day key — never shifts with the device timezone. */
 function isoDaysAgo(days: number): string {
-  return new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+  return istDayKey(Date.now() - days * 86_400_000);
 }
 
-/** Safe day timestamp — falls back when a date input is cleared/partial. */
+/**
+ * Safe start-of-day timestamp in IST — the day boundaries must match the
+ * backend's business-date clock, so ranges never miss the first/last hours
+ * of the From/To day. Falls back when a date input is cleared/partial.
+ */
 function dayTs(iso: string, fallbackDaysAgo = 30): number {
-  const t = new Date(iso).getTime();
-  return Number.isFinite(t) ? t : Date.now() - fallbackDaysAgo * 86_400_000;
+  const t = istDayStart(iso);
+  if (t !== null) return t;
+  return (
+    istDayStart(istDayKey(Date.now() - fallbackDaysAgo * 86_400_000)) ??
+    Date.now()
+  );
 }
 
 const selectCls =
   "h-10 w-full border-2 border-ink bg-white px-2 text-xs font-black uppercase outline-none";
+
+/**
+ * Cash direction of a date-report row for colouring — mirrors how the rest
+ * of the app reads these records (collection IN, reversal/disbursal OUT…).
+ */
+function rowDirection(r: { kind: string; status: string }): "IN" | "OUT" | "NONE" {
+  switch (r.kind) {
+    case "COLLECTION":
+      return r.status === "REVERSAL" ? "OUT" : "IN";
+    case "LOAN_DISBURSED":
+      return "OUT";
+    case "CASH_ISSUE":
+      return "IN";
+    case "HANDOVER":
+      return r.status === "ACCEPTED" ? "OUT" : "NONE";
+    case "WALLET":
+      return r.status === "CREDIT" ? "IN" : r.status === "DEBIT" ? "OUT" : "NONE";
+    default:
+      return "NONE";
+  }
+}
 
 export default function Reports() {
   const [tab, setTab] = useState("overview");
@@ -197,15 +241,256 @@ export default function Reports() {
     setCenterCode(centerInput.trim().toUpperCase());
   };
 
+  /* ------------------------------ date range ----------------------------- */
+  const navigate = useNavigate();
+  const [drPreset, setDrPreset] = useState<DateReportPreset>("LAST_30");
+  const [drFrom, setDrFrom] = useState(() => isoDaysAgo(29));
+  const [drTo, setDrTo] = useState(() => istDayKey(Date.now()));
+  const [drCategory, setDrCategory] = useState<DateReportCategory>("ALL");
+  const [drBranch, setDrBranch] = useState("");
+  const [drStaff, setDrStaff] = useState("");
+  const [drCenter, setDrCenter] = useState("");
+  // The applied (already generated) period. Dates only ever reach the query
+  // through a successful validation — an invalid range can never fetch.
+  const [drApplied, setDrApplied] = useState<{ fromDay: string; toDay: string } | null>(
+    () => {
+      const p = presetRange("LAST_30");
+      return p ? { fromDay: p.fromIso, toDay: p.toIso } : null;
+    },
+  );
+
+  const drCheck = useMemo(() => resolveRange(drFrom, drTo), [drFrom, drTo]);
+  const drError = "error" in drCheck ? drCheck.error : null;
+  const drDirty =
+    drApplied !== null &&
+    (drApplied.fromDay !== drFrom || drApplied.toDay !== drTo);
+
+  const dateReport = useQuery(
+    api.reports.dateReport,
+    drApplied
+      ? {
+          fromDay: drApplied.fromDay,
+          toDay: drApplied.toDay,
+          category: drCategory,
+          branchId: (drBranch || undefined) as Id<"branches"> | undefined,
+          staffId: (drStaff || undefined) as Id<"profiles"> | undefined,
+          centerCode: drCenter || undefined,
+          limit: 2000,
+        }
+      : "skip",
+  );
+  const drSummary = dateReport?.summary;
+  const drComplete =
+    dateReport != null && dateReport.rowTotal === dateReport.rows.length;
+  const drBranchName = (id?: string | null) =>
+    (id && dateReport?.filterOptions.branches.find((b) => b.id === id)?.name) ||
+    id ||
+    "All branches in scope";
+
+  const applyPreset = (p: DateReportPreset) => {
+    setDrPreset(p);
+    const r = presetRange(p);
+    if (!r) return; // CUSTOM — the pickers stand as typed
+    setDrFrom(r.fromIso);
+    setDrTo(r.toIso);
+    setDrApplied({ fromDay: r.fromIso, toDay: r.toIso });
+  };
+
+  const generate = (e?: FormEvent) => {
+    e?.preventDefault();
+    const r = resolveRange(drFrom, drTo);
+    if ("error" in r) {
+      toast.error(r.error);
+      return;
+    }
+    setDrApplied({ fromDay: drFrom, toDay: drTo });
+  };
+
+  const pickBranch = (v: string) => {
+    setDrBranch(v);
+    setDrStaff("");
+    setDrCenter("");
+  };
+
+  /* Staff-wise / branch-wise activity over the listed records (complete lists only). */
+  const drByStaff = useMemo(() => {
+    if (!dateReport || !drComplete) return null;
+    const m = new Map<
+      string,
+      { key: string; name: string; records: number; collected: number; disbursed: number }
+    >();
+    for (const r of dateReport.rows) {
+      const cur = m.get(r.staffName) ?? {
+        key: r.staffName,
+        name: r.staffName,
+        records: 0,
+        collected: 0,
+        disbursed: 0,
+      };
+      cur.records += 1;
+      if (r.kind === "COLLECTION" && r.status === "NORMAL")
+        cur.collected += r.amount ?? 0;
+      if (r.kind === "LOAN_DISBURSED") cur.disbursed += r.amount ?? 0;
+      m.set(r.staffName, cur);
+    }
+    return [...m.values()].sort(
+      (a, b) => b.collected - a.collected || b.records - a.records,
+    );
+  }, [dateReport, drComplete]);
+
+  const drByBranch = useMemo(() => {
+    if (!dateReport || !drComplete) return null;
+    const m = new Map<
+      string,
+      { key: string; name: string; records: number; collected: number; disbursed: number }
+    >();
+    const nameOf = (id?: string | null) =>
+      (id && dateReport.filterOptions.branches.find((b) => b.id === id)?.name) ||
+      id ||
+      "All branches in scope";
+    for (const r of dateReport.rows) {
+      const key = r.branchId ?? "";
+      const cur = m.get(key) ?? {
+        key,
+        name: nameOf(r.branchId),
+        records: 0,
+        collected: 0,
+        disbursed: 0,
+      };
+      cur.records += 1;
+      if (r.kind === "COLLECTION" && r.status === "NORMAL")
+        cur.collected += r.amount ?? 0;
+      if (r.kind === "LOAN_DISBURSED") cur.disbursed += r.amount ?? 0;
+      m.set(key, cur);
+    }
+    return [...m.values()].sort(
+      (a, b) => b.collected - a.collected || b.records - a.records,
+    );
+  }, [dateReport, drComplete]);
+
+  /* CSV export — metadata, totals and every listed record of this report. */
+  const dateCsv = useMemo(() => {
+    if (!dateReport) return "";
+    const cell = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const s = dateReport.summary;
+    const nameOf = (id?: string | null) =>
+      (id && dateReport.filterOptions.branches.find((b) => b.id === id)?.name) ||
+      id ||
+      "All branches in scope";
+    const meta: (string | number)[][] = [
+      ["KIRAT MICRO CREDIT — date-wise report"],
+      ["Period (IST, inclusive)", dateReport.range.fromKey, dateReport.range.toKey],
+      [
+        "Category",
+        DATE_REPORT_CATEGORY_LABELS[
+          dateReport.category as DateReportCategory
+        ] ?? dateReport.category,
+      ],
+      ["Branch filter", drBranch ? nameOf(drBranch) : "All branches in scope"],
+      [
+        "Staff filter",
+        drStaff
+          ? dateReport.filterOptions.staff.find((x) => x.id === drStaff)?.name ??
+            drStaff
+          : "All staff in scope",
+      ],
+      ["Centre filter", drCenter || "All centres in scope"],
+      ["Generated at", new Date().toISOString()],
+      [],
+      ["Summary", "Value"],
+      ["Clients registered", s.clientsRegistered],
+      [
+        "KYC verified / rejected / pending",
+        `${s.kycVerified} / ${s.kycRejected} / ${s.kycPending}`,
+      ],
+      ["Loans applied (amount INR)", `${s.loansApplied} (${s.loansAppliedAmount})`],
+      [
+        "Loans approved (amount INR)",
+        `${s.loansApproved} (${s.loansApprovedAmount})`,
+      ],
+      ["Loans rejected", s.loansRejected],
+      ["Loans disbursed (amount INR)", `${s.loansDisbursed} (${s.disbursedAmount})`],
+      [
+        "Collections received (amount INR)",
+        `${s.collectionsCount} (${s.collectionsAmount})`,
+      ],
+      [
+        "Collection reversals (amount INR)",
+        `${s.reversalsCount} (${s.reversalsAmount})`,
+      ],
+      ["Outstanding balance (current)", s.outstanding],
+      [
+        "Overdue accounts / instalments / amount",
+        `${s.overdueAccounts} / ${s.overdueInstalments} / ${s.overdueAmount}`,
+      ],
+      [
+        "Recovery activities (promised INR)",
+        `${s.recoveryCount} (${s.recoveryPromised})`,
+      ],
+      ["Cash handovers (amount INR)", `${s.handoverCount} (${s.handoverAmount})`],
+      [
+        "Wallet transactions (credit / debit)",
+        `${s.walletTxnCount} (${s.walletCredit} / ${s.walletDebit})`,
+      ],
+      [],
+      [
+        "Date (IST)",
+        "Category",
+        "Record",
+        "Party",
+        "Reference",
+        "Amount (INR)",
+        "Status",
+        "Staff",
+        "Branch",
+      ],
+      ...dateReport.rows.map((r) => [
+        istDayKey(r.date),
+        r.label,
+        r.kind,
+        r.party,
+        r.reference,
+        r.amount === null ? "" : String(r.amount),
+        r.status,
+        r.staffName,
+        nameOf(r.branchId),
+      ]),
+    ];
+    return meta.map((row) => row.map(cell).join(",")).join("\n");
+  }, [dateReport, drBranch, drStaff, drCenter]);
+
+  const downloadDateCsv = () => {
+    if (!dateCsv || !dateReport) return;
+    const blob = new Blob([dateCsv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `kirat-date-report-${dateReport.range.fromKey}-to-${dateReport.range.toKey}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success("CSV downloaded");
+  };
+
   return (
     <div className="space-y-4 pb-10">
       <PageHeader
         title="Reports"
         subtitle="Ledger-derived — every figure traces to a transaction"
         action={
-          <Button size="sm" variant="outline" onClick={download} disabled={!csv}>
-            <Download className="size-4" /> CSV
-          </Button>
+          tab === "daterange" ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={downloadDateCsv}
+              disabled={!dateCsv}
+            >
+              <Download className="size-4" /> CSV
+            </Button>
+          ) : (
+            <Button size="sm" variant="outline" onClick={download} disabled={!csv}>
+              <Download className="size-4" /> CSV
+            </Button>
+          )
         }
       />
 
@@ -225,6 +510,9 @@ export default function Reports() {
           </TabsTrigger>
           <TabsTrigger value="centres" className="flex-1 text-xs font-black uppercase">
             Centres
+          </TabsTrigger>
+          <TabsTrigger value="daterange" className="flex-1 text-xs font-black uppercase">
+            Date range
           </TabsTrigger>
         </TabsList>
 
@@ -1057,6 +1345,477 @@ export default function Reports() {
                     Next
                   </Button>
                 </div>
+              )}
+            </>
+          )}
+        </TabsContent>
+
+        {/* ---------------------------- DATE RANGE --------------------------- */}
+        <TabsContent value="daterange" className="mt-4 space-y-4">
+          {/* Quick filters — evaluated in the institution's local day (IST) */}
+          <div className="flex flex-wrap gap-1.5">
+            {DATE_REPORT_PRESETS.map((p) => (
+              <button
+                key={p}
+                onClick={() => applyPreset(p)}
+                className={cn(
+                  "border-2 border-ink px-2.5 py-1.5 text-[11px] font-black uppercase",
+                  drPreset === p ? "bg-navy text-paper shadow-hard-sm" : "bg-white",
+                )}
+              >
+                {DATE_REPORT_PRESET_LABELS[p]}
+              </button>
+            ))}
+          </div>
+
+          {/* From / To + generate */}
+          <form onSubmit={generate} className="space-y-2">
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <label
+                  htmlFor="dr-from"
+                  className="text-[10px] font-black uppercase text-muted-foreground"
+                >
+                  From date
+                </label>
+                <input
+                  id="dr-from"
+                  type="date"
+                  value={drFrom}
+                  max={drTo}
+                  onChange={(e) => {
+                    setDrFrom(e.target.value);
+                    setDrPreset("CUSTOM");
+                  }}
+                  className="h-11 w-full border-2 border-ink bg-white px-2 text-sm font-bold outline-none"
+                />
+              </div>
+              <div className="space-y-1">
+                <label
+                  htmlFor="dr-to"
+                  className="text-[10px] font-black uppercase text-muted-foreground"
+                >
+                  To date
+                </label>
+                <input
+                  id="dr-to"
+                  type="date"
+                  value={drTo}
+                  min={drFrom}
+                  onChange={(e) => {
+                    setDrTo(e.target.value);
+                    setDrPreset("CUSTOM");
+                  }}
+                  className="h-11 w-full border-2 border-ink bg-white px-2 text-sm font-bold outline-none"
+                />
+              </div>
+            </div>
+            {drError ? (
+              <p className="text-[11px] font-black uppercase text-destructive">
+                {drError}
+              </p>
+            ) : drDirty ? (
+              <p className="text-[11px] font-black uppercase text-muted-foreground">
+                Dates changed — press Generate report to refresh the results.
+              </p>
+            ) : null}
+            <div className="flex flex-wrap items-center gap-2">
+              <Button type="submit" disabled={drError !== null}>
+                <Search className="size-4" /> Generate report
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={downloadDateCsv}
+                disabled={!dateCsv}
+              >
+                <Download className="size-4" /> Export CSV
+              </Button>
+            </div>
+          </form>
+
+          {/* Scope filters — every option is scoped server-side to the viewer */}
+          {dateReport && (
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+              {dateReport.filterOptions.branches.length > 1 && (
+                <div className="space-y-1">
+                  <label
+                    htmlFor="dr-branch"
+                    className="text-[10px] font-black uppercase text-muted-foreground"
+                  >
+                    Branch
+                  </label>
+                  <select
+                    id="dr-branch"
+                    className={selectCls}
+                    value={drBranch}
+                    onChange={(e) => pickBranch(e.target.value)}
+                  >
+                    <option value="">All branches (my scope)</option>
+                    {dateReport.filterOptions.branches.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {dateReport.filterOptions.staff.length > 0 && (
+                <div className="space-y-1">
+                  <label
+                    htmlFor="dr-staff"
+                    className="text-[10px] font-black uppercase text-muted-foreground"
+                  >
+                    Staff member
+                  </label>
+                  <select
+                    id="dr-staff"
+                    className={selectCls}
+                    value={drStaff}
+                    onChange={(e) => setDrStaff(e.target.value)}
+                  >
+                    <option value="">All staff (my scope)</option>
+                    {dateReport.filterOptions.staff
+                      .filter((s) => !drBranch || s.branchId === drBranch)
+                      .map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name} · {s.role}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+              )}
+              {dateReport.filterOptions.centers.length > 0 && (
+                <div className="space-y-1">
+                  <label
+                    htmlFor="dr-center"
+                    className="text-[10px] font-black uppercase text-muted-foreground"
+                  >
+                    Centre ID
+                  </label>
+                  <select
+                    id="dr-center"
+                    className={selectCls}
+                    value={drCenter}
+                    onChange={(e) => setDrCenter(e.target.value)}
+                  >
+                    <option value="">All centres</option>
+                    {dateReport.filterOptions.centers
+                      .filter((c) => !drBranch || c.branchId === drBranch)
+                      .map((c) => (
+                        <option key={c.code} value={c.code}>
+                          {c.code} · {c.name}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Report category */}
+          <div className="flex flex-wrap gap-1.5">
+            {DATE_REPORT_CATEGORIES.map((c) => (
+              <button
+                key={c}
+                onClick={() => setDrCategory(c)}
+                className={cn(
+                  "border-2 border-ink px-2.5 py-1.5 text-[11px] font-black uppercase",
+                  drCategory === c ? "bg-ink text-paper shadow-hard-sm" : "bg-white",
+                )}
+              >
+                {DATE_REPORT_CATEGORY_LABELS[c]}
+              </button>
+            ))}
+          </div>
+
+          {/* Results */}
+          {!dateReport ? (
+            <RowSkeleton rows={6} />
+          ) : (
+            <>
+              {/* Period banner — what this report actually covers */}
+              <section className="border-2 border-ink bg-navy px-3 py-3 text-paper shadow-hard">
+                <div className="flex flex-wrap items-end justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-[10px] font-black uppercase text-gold">
+                      Report period — institution-local dates, both ends included
+                    </div>
+                    <div className="font-mono text-sm font-black">
+                      {dateReport.range.fromKey} → {dateReport.range.toKey}
+                    </div>
+                  </div>
+                  <div className="min-w-0 text-right text-[11px] font-bold text-paper/80">
+                    <div>
+                      {DATE_REPORT_CATEGORY_LABELS[
+                        dateReport.category as DateReportCategory
+                      ] ?? dateReport.category}
+                    </div>
+                    <div>
+                      {drBranch ? drBranchName(drBranch) : "All branches in scope"}
+                      {drStaff
+                        ? ` · ${
+                            dateReport.filterOptions.staff.find(
+                              (x) => x.id === drStaff,
+                            )?.name ?? "staff"
+                          }`
+                        : ""}
+                      {drCenter ? ` · centre ${drCenter}` : ""}
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              {drSummary && (
+                <>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <StatCard
+                      label="New clients registered"
+                      value={drSummary.clientsRegistered}
+                      sub={`KYC: ${drSummary.kycVerified} verified · ${drSummary.kycPending} pending`}
+                    />
+                    <StatCard
+                      label="Loans applied for"
+                      value={drSummary.loansApplied}
+                      sub={<Money value={drSummary.loansAppliedAmount} className="text-xs" />}
+                    />
+                    <StatCard
+                      label="Loans approved"
+                      value={drSummary.loansApproved}
+                      sub={<Money value={drSummary.loansApprovedAmount} className="text-xs" />}
+                      tone="ok"
+                    />
+                    <StatCard
+                      label="Loans rejected"
+                      value={drSummary.loansRejected}
+                      tone={drSummary.loansRejected > 0 ? "bad" : "idle"}
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <StatCard
+                      label="Disbursed"
+                      value={<Money value={drSummary.disbursedAmount} className="text-xl" />}
+                      sub={`${drSummary.loansDisbursed} loan(s)`}
+                      tone="info"
+                    />
+                    <StatCard
+                      label="Collections received"
+                      value={<Money value={drSummary.collectionsAmount} className="text-xl" />}
+                      sub={
+                        drSummary.reversalsCount > 0
+                          ? `${drSummary.collectionsCount} receipts · ${drSummary.reversalsCount} refund(s) of ₹${drSummary.reversalsAmount.toLocaleString("en-IN")}`
+                          : `${drSummary.collectionsCount} receipt(s)`
+                      }
+                      tone="ok"
+                    />
+                    <StatCard
+                      label="Outstanding balance"
+                      value={<Money value={drSummary.outstanding} className="text-xl" />}
+                      sub="current — all open loans"
+                      tone="warn"
+                    />
+                    <StatCard
+                      label="Overdue accounts"
+                      value={drSummary.overdueAccounts}
+                      sub={
+                        <>
+                          {drSummary.overdueInstalments} instalment(s) ·{" "}
+                          <Money value={drSummary.overdueAmount} className="text-xs" />
+                        </>
+                      }
+                      tone={drSummary.overdueAccounts > 0 ? "bad" : "idle"}
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <StatCard
+                      label="Recovery activity"
+                      value={drSummary.recoveryCount}
+                      sub={
+                        <>
+                          promised <Money value={drSummary.recoveryPromised} className="text-xs" />
+                        </>
+                      }
+                    />
+                    <StatCard
+                      label="Cash handovers"
+                      value={<Money value={drSummary.handoverAmount} className="text-xl" />}
+                      sub={`${drSummary.handoverCount} handover(s)`}
+                    />
+                    <StatCard
+                      label="Wallet transactions"
+                      value={drSummary.walletTxnCount}
+                      sub={`credit ₹${drSummary.walletCredit.toLocaleString("en-IN")} · debit ₹${drSummary.walletDebit.toLocaleString("en-IN")}`}
+                    />
+                    <StatCard
+                      label="Records listed"
+                      value={dateReport.rowTotal}
+                      sub={drComplete ? "complete list" : `showing ${dateReport.rows.length}`}
+                    />
+                  </div>
+                </>
+              )}
+
+              <p className="text-[11px] font-semibold text-muted-foreground">
+                Period figures ({dateReport.range.fromKey} → {dateReport.range.toKey}, IST)
+                count only records dated inside the range. Outstanding and overdue are
+                current positions derived from the loan ledger — never sums of the range.
+                Collections count NORMAL receipts only; reversals are listed separately so
+                no rupee is counted twice.
+              </p>
+
+              {/* Staff-wise / branch-wise activity in the period */}
+              {drByStaff && drByStaff.length > 0 && (
+                <section>
+                  <SectionTitle>Staff-wise activity in this period</SectionTitle>
+                  <div className="overflow-x-auto">
+                    <table className="w-full border-collapse">
+                      <thead>
+                        <tr>
+                          {["Staff", "Records", "Collected", "Disbursed"].map((h) => (
+                            <th
+                              key={h}
+                              className="border-2 border-ink bg-muted px-2 py-1.5 text-left text-[10px] font-black uppercase"
+                            >
+                              {h}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {drByStaff.map((r) => (
+                          <tr key={r.key}>
+                            <td className="border-2 border-ink px-2 py-1.5 text-xs font-black">
+                              {r.name}
+                            </td>
+                            <td className="border-2 border-ink px-2 py-1.5 text-xs font-bold">
+                              {r.records}
+                            </td>
+                            <td className="border-2 border-ink px-2 py-1.5">
+                              <Money value={r.collected} className="text-xs" />
+                            </td>
+                            <td className="border-2 border-ink px-2 py-1.5">
+                              <Money value={r.disbursed} className="text-xs" />
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              )}
+              {drByBranch && drByBranch.length > 1 && (
+                <section>
+                  <SectionTitle>Branch-wise activity in this period</SectionTitle>
+                  <div className="overflow-x-auto">
+                    <table className="w-full border-collapse">
+                      <thead>
+                        <tr>
+                          {["Branch", "Records", "Collected", "Disbursed"].map((h) => (
+                            <th
+                              key={h}
+                              className="border-2 border-ink bg-muted px-2 py-1.5 text-left text-[10px] font-black uppercase"
+                            >
+                              {h}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {drByBranch.map((r) => (
+                          <tr key={r.key}>
+                            <td className="border-2 border-ink px-2 py-1.5 text-xs font-black">
+                              {r.name}
+                            </td>
+                            <td className="border-2 border-ink px-2 py-1.5 text-xs font-bold">
+                              {r.records}
+                            </td>
+                            <td className="border-2 border-ink px-2 py-1.5">
+                              <Money value={r.collected} className="text-xs" />
+                            </td>
+                            <td className="border-2 border-ink px-2 py-1.5">
+                              <Money value={r.disbursed} className="text-xs" />
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              )}
+
+              <SectionTitle>
+                {dateReport.rowTotal} record{dateReport.rowTotal === 1 ? "" : "s"} —{" "}
+                {DATE_REPORT_CATEGORY_LABELS[dateReport.category as DateReportCategory] ??
+                  dateReport.category}
+              </SectionTitle>
+              {dateReport.rows.length === 0 ? (
+                <EmptyState
+                  title={`No records between ${dateReport.range.fromKey} and ${dateReport.range.toKey}`}
+                  hint="Nothing in your authorization scope matches this range and category. Widen the dates, switch the category or clear the branch, staff and centre filters."
+                  icon={<FileBarChart className="size-5" />}
+                />
+              ) : (
+                <div className="flex flex-col gap-1.5">
+                  {dateReport.rows.map((r) => {
+                    const dir = rowDirection(r);
+                    return (
+                      <div
+                        key={r.id}
+                        className="flex items-center justify-between gap-3 border-2 border-ink bg-card px-3 py-2 shadow-hard-sm"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-xs font-black uppercase">{r.label}</p>
+                          <p className="truncate text-[11px] font-semibold text-muted-foreground">
+                            {istDayKey(r.date)} · {r.party} · {r.reference} · {r.staffName}
+                          </p>
+                        </div>
+                        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                          {r.amount !== null && (
+                            <Money
+                              value={r.amount}
+                              className={cn(
+                                "text-sm",
+                                dir === "IN" && "text-success",
+                                dir === "OUT" && "text-destructive",
+                              )}
+                            />
+                          )}
+                          <StatusChip status={r.status} />
+                          {r.clientId && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              aria-label={`Open ${r.party} report`}
+                              onClick={() => {
+                                setTab("clients");
+                                setSelectedClientId(r.clientId as Id<"clients">);
+                              }}
+                            >
+                              Client
+                            </Button>
+                          )}
+                          {r.loanDbId && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              aria-label={`Open loan ${r.reference}`}
+                              onClick={() => navigate(`/dashboard/loans/${r.loanDbId}`)}
+                            >
+                              Loan
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {!drComplete && dateReport.rows.length > 0 && (
+                <p className="text-[11px] font-semibold text-muted-foreground">
+                  Showing {dateReport.rows.length} of {dateReport.rowTotal} matching records —
+                  narrow the range or pick a category for the rest. The CSV export contains
+                  every record listed here.
+                </p>
               )}
             </>
           )}
