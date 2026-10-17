@@ -8,20 +8,39 @@ import { EmptyState, PageHeader, RowSkeleton } from "@/components/fs/primitives"
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useProfile } from "@/hooks/use-profile";
-import { cn } from "@/lib/utils";
+import { cn, sentenceCase } from "@/lib/utils";
 import { useMutation, useQuery } from "convex/react";
 import {
+  Briefcase,
   Building2,
   CheckCircle2,
   ChevronLeft,
+  ClipboardCheck,
+  HandCoins,
+  HeartHandshake,
+  Landmark,
   Loader2,
   Lock,
   MapPin,
+  Phone,
   Plus,
   Search,
+  Users,
   UserPlus,
 } from "lucide-react";
 import { DocCapture, DOC_KIND_OPTIONS, type DocItem } from "@/components/fs/DocCapture";
+import {
+  FREQUENCIES,
+  LOAN_PURPOSES,
+  OFFICE_CREDIT,
+  OFFICE_KYC,
+  OFFICE_VERIFICATION,
+} from "@/lib/finance/types";
+import type {
+  BankAccountValue,
+  LoanRequestValue,
+  NomineeValue,
+} from "@/lib/finance/validate";
 import { useState, type Dispatch, type SetStateAction } from "react";
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
@@ -34,6 +53,25 @@ type CenterOption = {
 };
 
 const GENDERS = ["MALE", "FEMALE", "OTHER"] as const;
+
+/** One character-reference row (Reference 1 / Reference 2). */
+type ReferenceRow = { name: string; mobile: string };
+
+/** One family-member row of the application table. */
+type FamilyMemberRow = {
+  name: string;
+  age: string;
+  relationship: string;
+  occupation: string;
+};
+
+const emptyReference = (): ReferenceRow => ({ name: "", mobile: "" });
+const emptyFamilyMember = (): FamilyMemberRow => ({
+  name: "",
+  age: "",
+  relationship: "",
+  occupation: "",
+});
 
 /** "KYC documents available" checkboxes (Aadhaar / PAN / Voter ID / Other). */
 function KycDocChecks({
@@ -118,6 +156,54 @@ export default function ClientNew() {
   const [coPan, setCoPan] = useState("");
   const [coVoter, setCoVoter] = useState("");
   const [coKycDocs, setCoKycDocs] = useState<string[]>(["AADHAAR"]);
+
+  // Section 1 — Income & business details. "Estimated monthly income" is the
+  // same `monthlyIncome` state collected in the applicant block above, so the
+  // two inputs can never disagree.
+  const [typeOfBusiness, setTypeOfBusiness] = useState("");
+  const [businessAddress, setBusinessAddress] = useState("");
+  const [householdExpenses, setHouseholdExpenses] = useState("");
+  const [otherIncome, setOtherIncome] = useState("");
+  const [existingLoanEmi, setExistingLoanEmi] = useState("");
+
+  // Section 2 — loan details: a request recorded on the application only.
+  const [loanAmount, setLoanAmount] = useState("");
+  const [loanPurpose, setLoanPurpose] = useState("");
+  const [loanTenure, setLoanTenure] = useState("");
+  const [loanFrequency, setLoanFrequency] = useState("");
+  const [loanInstallment, setLoanInstallment] = useState("");
+
+  // Section 3 — bank account details (all five together or not at all).
+  const [bankHolder, setBankHolder] = useState("");
+  const [bankName, setBankName] = useState("");
+  const [bankBranch, setBankBranch] = useState("");
+  const [bankAccountNo, setBankAccountNo] = useState("");
+  const [bankIfsc, setBankIfsc] = useState("");
+
+  // Section 4 — nominee details.
+  const [nomineeName, setNomineeName] = useState("");
+  const [nomineeRelationship, setNomineeRelationship] = useState("");
+  const [nomineeAge, setNomineeAge] = useState("");
+  const [nomineeMobile, setNomineeMobile] = useState("");
+  const [nomineeAddress, setNomineeAddress] = useState("");
+
+  // Section 5 — two character references.
+  const [references, setReferences] = useState<ReferenceRow[]>([
+    emptyReference(),
+    emptyReference(),
+  ]);
+
+  // Family members — the backend requires at least one complete row.
+  const [familyRows, setFamilyRows] = useState<FamilyMemberRow[]>([
+    emptyFamilyMember(),
+  ]);
+
+  // Section 6 — FOR OFFICE USE ONLY (honoured only for authorised roles).
+  const [officeOfficer, setOfficeOfficer] = useState("");
+  const [officeCustomer, setOfficeCustomer] = useState("");
+  const [officeKyc, setOfficeKyc] = useState("");
+  const [officeCredit, setOfficeCredit] = useState("");
+  const [officeApproved, setOfficeApproved] = useState("");
 
   // Applicant photo (geo-tagged) / KYC documents (normal)
   const [applicantPhoto, setApplicantPhoto] = useState<CapturedClientPhoto | null>(null);
@@ -247,6 +333,212 @@ export default function ClientNew() {
       );
     }
 
+    /* ---------------- Restored sections 1–5 + family ------------------ */
+
+    // Section 1 — optional amounts, but a typed value must still be an
+    // amount. Blank means "not provided", never zero.
+    const expenses = householdExpenses.trim()
+      ? Number(householdExpenses)
+      : undefined;
+    if (expenses !== undefined && (!Number.isFinite(expenses) || expenses < 0)) {
+      return toast.error("Monthly household expenses must be a valid amount.");
+    }
+    const otherInc = otherIncome.trim() ? Number(otherIncome) : undefined;
+    if (otherInc !== undefined && (!Number.isFinite(otherInc) || otherInc < 0)) {
+      return toast.error("Other income must be a valid amount.");
+    }
+    const emi = existingLoanEmi.trim() ? Number(existingLoanEmi) : undefined;
+    if (emi !== undefined && (!Number.isFinite(emi) || emi < 0)) {
+      return toast.error("Existing loan / EMI must be a valid amount.");
+    }
+
+    // Section 2 — the loan block is optional, but half a request is not.
+    let loanRequest: LoanRequestValue | undefined;
+    const loanTouched =
+      loanAmount.trim() !== "" ||
+      loanPurpose !== "" ||
+      loanTenure.trim() !== "" ||
+      loanFrequency !== "" ||
+      loanInstallment.trim() !== "";
+    if (loanTouched) {
+      const amount = Number(loanAmount);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        return toast.error("Loan amount requested must be greater than zero.");
+      }
+      if (!loanPurpose) return toast.error("Select a purpose of loan.");
+      const tenure = Number(loanTenure);
+      if (!Number.isInteger(tenure) || tenure < 1 || tenure > 120) {
+        return toast.error("Loan tenure must be between 1 and 120 months.");
+      }
+      if (!loanFrequency) {
+        return toast.error("Select a repayment frequency.");
+      }
+      const installment = loanInstallment.trim()
+        ? Number(loanInstallment)
+        : undefined;
+      if (
+        installment !== undefined &&
+        (!Number.isFinite(installment) || installment < 0)
+      ) {
+        return toast.error("Estimated installment must be a valid amount.");
+      }
+      loanRequest = {
+        amountRequested: amount,
+        purpose: loanPurpose,
+        tenureMonths: tenure,
+        repaymentFrequency: loanFrequency,
+        estimatedInstallment: installment,
+      };
+    }
+
+    // Section 3 — all five bank fields together, or none at all.
+    let bankAccount: BankAccountValue | undefined;
+    const bankValues = [
+      bankHolder.trim(),
+      bankName.trim(),
+      bankBranch.trim(),
+      bankAccountNo.trim(),
+      bankIfsc.trim(),
+    ];
+    const bankFilled = bankValues.filter((f) => f !== "").length;
+    if (bankFilled > 0) {
+      if (bankFilled < 5) {
+        return toast.error(
+          "Fill in all bank account details, or leave them all blank.",
+        );
+      }
+      const accountNumber = bankAccountNo.replace(/\s/g, "");
+      if (!/^\d{6,20}$/.test(accountNumber)) {
+        return toast.error("Bank account number must be 6-20 digits.");
+      }
+      const ifscCode = bankIfsc.trim().toUpperCase();
+      if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifscCode)) {
+        return toast.error("Invalid IFSC code — expected e.g. SBIN0001234.");
+      }
+      bankAccount = {
+        accountHolderName: bankHolder.trim(),
+        bankName: bankName.trim(),
+        branch: bankBranch.trim(),
+        accountNumber,
+        ifscCode,
+      };
+    }
+
+    // Section 4 — nominee: name, relationship and age travel together.
+    let nominee: NomineeValue | undefined;
+    const nomineeTouched =
+      nomineeName.trim() !== "" ||
+      nomineeRelationship.trim() !== "" ||
+      nomineeAge.trim() !== "" ||
+      nomineeMobile.trim() !== "" ||
+      nomineeAddress.trim() !== "";
+    if (nomineeTouched) {
+      if (!nomineeName.trim() || !nomineeRelationship.trim()) {
+        return toast.error(
+          "Nominee name and relationship with the applicant are required.",
+        );
+      }
+      const nomineeAgeNum = Number(nomineeAge);
+      if (!Number.isInteger(nomineeAgeNum) || nomineeAgeNum < 1 || nomineeAgeNum > 120) {
+        return toast.error("Nominee age must be between 1 and 120.");
+      }
+      if (
+        nomineeMobile.trim() &&
+        !/^[6-9]\d{9}$/.test(nomineeMobile.trim())
+      ) {
+        return toast.error("Enter a valid 10-digit nominee mobile number.");
+      }
+      nominee = {
+        name: nomineeName.trim(),
+        relationship: nomineeRelationship.trim(),
+        age: nomineeAgeNum,
+        mobile: nomineeMobile.trim() || undefined,
+        address: nomineeAddress.trim() || undefined,
+      };
+    }
+
+    // Section 5 — two reference rows: blank rows are ignored, half rows
+    // (a name without a mobile, or the reverse) are rejected.
+    const referenceValues = references
+      .map((r) => ({ name: r.name.trim(), mobile: r.mobile.trim() }))
+      .filter((r) => r.name !== "" || r.mobile !== "");
+    for (let i = 0; i < referenceValues.length; i++) {
+      const ref = referenceValues[i];
+      if (!ref.name) {
+        return toast.error(`Reference ${i + 1} name is required.`);
+      }
+      if (!/^[6-9]\d{9}$/.test(ref.mobile)) {
+        return toast.error(
+          `Reference ${i + 1} mobile must be a 10-digit Indian number.`,
+        );
+      }
+    }
+    // Family members — at least one complete row, mirroring the backend rule
+    // that keeps the application's family table from being empty.
+    const familyValues: FamilyMemberRow[] = [];
+    for (const row of familyRows) {
+      const member: FamilyMemberRow = {
+        name: row.name.trim(),
+        age: row.age.trim(),
+        relationship: row.relationship.trim(),
+        occupation: row.occupation.trim(),
+      };
+      if (
+        !member.name &&
+        !member.age &&
+        !member.relationship &&
+        !member.occupation
+      ) {
+        continue; // untouched row — not submitted
+      }
+      if (!member.name) {
+        return toast.error("Family member name is required.");
+      }
+      if (!member.relationship) {
+        return toast.error("Family member relationship is required.");
+      }
+      if (member.age) {
+        const ageNum = Number(member.age);
+        if (!Number.isInteger(ageNum) || ageNum < 1 || ageNum > 100) {
+          return toast.error("Family member age must be between 1 and 100.");
+        }
+      }
+      familyValues.push(member);
+    }
+    if (familyValues.length === 0) {
+      return toast.error("Add at least one family member to the application.");
+    }
+
+    /* ---------------- Section 6 — FOR OFFICE USE ONLY ------------------ */
+    const officeTouched =
+      officeOfficer.trim() !== "" ||
+      officeCustomer !== "" ||
+      officeKyc !== "" ||
+      officeCredit !== "" ||
+      officeApproved.trim() !== "";
+    let officeUse:
+      | {
+          fieldOfficerName?: string;
+          customerVerification?: string;
+          kycVerification?: string;
+          creditAssessment?: string;
+          approvedLoanAmount?: number;
+        }
+      | undefined;
+    if (officeTouched) {
+      const approved = officeApproved.trim() ? Number(officeApproved) : undefined;
+      if (approved !== undefined && (!Number.isFinite(approved) || approved < 0)) {
+        return toast.error("Approved loan amount must be a valid amount.");
+      }
+      officeUse = {
+        fieldOfficerName: officeOfficer.trim() || undefined,
+        customerVerification: officeCustomer || undefined,
+        kycVerification: officeKyc || undefined,
+        creditAssessment: officeCredit || undefined,
+        approvedLoanAmount: approved,
+      };
+    }
+
     // Only fully-uploaded document rows are ever saved — an in-flight or
     // failed file is surfaced here instead of being silently dropped.
     if (
@@ -357,6 +649,28 @@ export default function ClientNew() {
           },
           documents: coDocsPayload,
         },
+        // Restored application sections 1–5 + family members. Every value
+        // typed into the form travels to the backend, which re-validates it
+        // before it lands on the client record.
+        typeOfBusiness: typeOfBusiness.trim() || undefined,
+        businessAddress: businessAddress.trim() || undefined,
+        householdExpenses: expenses,
+        otherIncome: otherInc,
+        existingLoanEmi: emi,
+        familyRows: familyValues.map((r) => ({
+          name: r.name,
+          age: r.age ? Number(r.age) : undefined,
+          relationship: r.relationship,
+          occupation: r.occupation || undefined,
+        })),
+        loanRequest,
+        bankAccount,
+        nominee,
+        references: referenceValues.length > 0 ? referenceValues : undefined,
+        // Section 6 — server-side, this is only honoured for SUPER_ADMIN /
+        // BRANCH_MANAGER: a field officer's entry can never mark a client
+        // verified, recommended or approved.
+        officeUse,
         declarationAccepted: true,
       });
 
@@ -814,6 +1128,419 @@ export default function ClientNew() {
         geoRequired={false}
       />
 
+      {/* Section 1 — Income & business details */}
+      <div className="border-2 border-ink bg-card p-3 shadow-hard">
+        <div className="mb-3 flex items-center gap-2 text-xs font-black uppercase">
+          <Briefcase className="size-4 text-foreground" /> Income &amp; business details
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="block">
+            <span className={label}>Type of business</span>
+            <Input
+              className={field}
+              value={typeOfBusiness}
+              onChange={(e) => setTypeOfBusiness(e.target.value)}
+              placeholder="e.g. Kirana store"
+            />
+          </label>
+          <label className="block">
+            <span className={label}>Estimated monthly income (₹) *</span>
+            <Input
+              className={field}
+              value={monthlyIncome}
+              onChange={(e) => setMonthlyIncome(e.target.value)}
+              inputMode="decimal"
+              placeholder="0"
+            />
+          </label>
+          <label className="block">
+            <span className={label}>Monthly household expenses (₹)</span>
+            <Input
+              className={field}
+              value={householdExpenses}
+              onChange={(e) => setHouseholdExpenses(e.target.value)}
+              inputMode="decimal"
+              placeholder="0"
+            />
+          </label>
+          <label className="block">
+            <span className={label}>Other income (₹)</span>
+            <Input
+              className={field}
+              value={otherIncome}
+              onChange={(e) => setOtherIncome(e.target.value)}
+              inputMode="decimal"
+              placeholder="0"
+            />
+          </label>
+          <label className="block">
+            <span className={label}>Existing loan / EMI (₹)</span>
+            <Input
+              className={field}
+              value={existingLoanEmi}
+              onChange={(e) => setExistingLoanEmi(e.target.value)}
+              inputMode="decimal"
+              placeholder="0"
+            />
+          </label>
+          <label className="block sm:col-span-2">
+            <span className={label}>Business address</span>
+            <textarea
+              value={businessAddress}
+              onChange={(e) => setBusinessAddress(e.target.value)}
+              rows={2}
+              placeholder="Shop / plot, village, post, district"
+              className={cn(field, "resize-y")}
+            />
+          </label>
+        </div>
+      </div>
+
+      {/* Section 2 — Loan details: a request on the application only */}
+      <div className="border-2 border-ink bg-card p-3 shadow-hard">
+        <div className="mb-1 flex items-center gap-2 text-xs font-black uppercase">
+          <HandCoins className="size-4 text-foreground" /> Loan details
+        </div>
+        <p className="mb-3 border-2 border-ink bg-sky p-2 text-[11px] font-bold">
+          Recorded as a request on this application — no loan is created,
+          approved or disbursed from this form.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="block">
+            <span className={label}>Loan amount requested (₹)</span>
+            <Input
+              className={field}
+              value={loanAmount}
+              onChange={(e) => setLoanAmount(e.target.value)}
+              inputMode="decimal"
+              placeholder="0"
+            />
+          </label>
+          <label className="block">
+            <span className={label}>Purpose of loan</span>
+            <select
+              value={loanPurpose}
+              onChange={(e) => setLoanPurpose(e.target.value)}
+              className={cn(field, "h-[42px]")}
+            >
+              <option value="">Select purpose…</option>
+              {LOAN_PURPOSES.map((p) => (
+                <option key={p} value={p}>
+                  {sentenceCase(p)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className={label}>Loan tenure (months)</span>
+            <Input
+              className={field}
+              value={loanTenure}
+              onChange={(e) => setLoanTenure(e.target.value)}
+              inputMode="numeric"
+              maxLength={3}
+              placeholder="e.g. 12"
+            />
+          </label>
+          <label className="block">
+            <span className={label}>Repayment frequency</span>
+            <select
+              value={loanFrequency}
+              onChange={(e) => setLoanFrequency(e.target.value)}
+              className={cn(field, "h-[42px]")}
+            >
+              <option value="">Select frequency…</option>
+              {FREQUENCIES.map((f) => (
+                <option key={f} value={f}>
+                  {sentenceCase(f)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className={label}>Estimated installment (₹)</span>
+            <Input
+              className={field}
+              value={loanInstallment}
+              onChange={(e) => setLoanInstallment(e.target.value)}
+              inputMode="decimal"
+              placeholder="0"
+            />
+          </label>
+        </div>
+      </div>
+
+      {/* Section 3 — Bank account details */}
+      <div className="border-2 border-ink bg-card p-3 shadow-hard">
+        <div className="mb-3 flex items-center gap-2 text-xs font-black uppercase">
+          <Landmark className="size-4 text-foreground" /> Bank account details
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="block sm:col-span-2">
+            <span className={label}>Account holder name</span>
+            <Input
+              className={field}
+              value={bankHolder}
+              onChange={(e) => setBankHolder(e.target.value)}
+              placeholder="As per bank records"
+            />
+          </label>
+          <label className="block">
+            <span className={label}>Bank name</span>
+            <Input
+              className={field}
+              value={bankName}
+              onChange={(e) => setBankName(e.target.value)}
+              placeholder="e.g. State Bank of India"
+            />
+          </label>
+          <label className="block">
+            <span className={label}>Branch</span>
+            <Input
+              className={field}
+              value={bankBranch}
+              onChange={(e) => setBankBranch(e.target.value)}
+            />
+          </label>
+          <label className="block">
+            <span className={label}>Account number (6–20 digits)</span>
+            <Input
+              className={field}
+              value={bankAccountNo}
+              onChange={(e) => setBankAccountNo(e.target.value)}
+              inputMode="numeric"
+              maxLength={24}
+              placeholder="000000000000"
+            />
+          </label>
+          <label className="block">
+            <span className={label}>IFSC code</span>
+            <Input
+              className={field}
+              value={bankIfsc}
+              onChange={(e) => setBankIfsc(e.target.value)}
+              maxLength={11}
+              placeholder="SBIN0001234"
+            />
+          </label>
+          <p className="border-2 border-ink bg-sky p-2 text-[11px] font-bold sm:col-span-2">
+            Leave all five fields blank when the applicant has no account yet —
+            a partially filled block is rejected.
+          </p>
+        </div>
+      </div>
+
+      {/* Section 4 — Nominee details */}
+      <div className="border-2 border-ink bg-card p-3 shadow-hard">
+        <div className="mb-3 flex items-center gap-2 text-xs font-black uppercase">
+          <HeartHandshake className="size-4 text-foreground" /> Nominee details
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="block sm:col-span-2">
+            <span className={label}>Nominee name</span>
+            <Input
+              className={field}
+              value={nomineeName}
+              onChange={(e) => setNomineeName(e.target.value)}
+              placeholder="As per Aadhaar"
+            />
+          </label>
+          <label className="block">
+            <span className={label}>Relationship with applicant</span>
+            <Input
+              className={field}
+              value={nomineeRelationship}
+              onChange={(e) => setNomineeRelationship(e.target.value)}
+              placeholder="e.g. Husband"
+            />
+          </label>
+          <label className="block">
+            <span className={label}>Age</span>
+            <Input
+              className={field}
+              value={nomineeAge}
+              onChange={(e) => setNomineeAge(e.target.value)}
+              inputMode="numeric"
+              maxLength={3}
+              placeholder="0"
+            />
+          </label>
+          <label className="block">
+            <span className={label}>Mobile number</span>
+            <Input
+              className={field}
+              value={nomineeMobile}
+              onChange={(e) => setNomineeMobile(e.target.value)}
+              inputMode="numeric"
+              maxLength={10}
+              placeholder="9876543210"
+            />
+          </label>
+          <label className="block sm:col-span-2">
+            <span className={label}>Address</span>
+            <textarea
+              value={nomineeAddress}
+              onChange={(e) => setNomineeAddress(e.target.value)}
+              rows={2}
+              placeholder="House, village, post, district"
+              className={cn(field, "resize-y")}
+            />
+          </label>
+        </div>
+        <p className="border-2 border-ink bg-sky p-2 text-[11px] font-bold">
+          Optional block — when you start it, the nominee's name, relationship
+          and age are all required.
+        </p>
+      </div>
+
+      {/* Section 5 — Reference details (two entries) */}
+      <div className="border-2 border-ink bg-card p-3 shadow-hard">
+        <div className="mb-3 flex items-center gap-2 text-xs font-black uppercase">
+          <Phone className="size-4 text-foreground" /> Reference details
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {[0, 1].map((i) => (
+            <div key={i} className="border-2 border-ink bg-white p-2">
+              <div className="mb-1.5 text-[10px] font-black uppercase tracking-[0.14em]">
+                Reference {i + 1}
+              </div>
+              <label className="mb-2 block">
+                <span className={label}>Reference name</span>
+                <Input
+                  className={field}
+                  value={references[i].name}
+                  onChange={(e) =>
+                    setReferences((cur) =>
+                      cur.map((r, j) =>
+                        j === i ? { ...r, name: e.target.value } : r,
+                      ),
+                    )
+                  }
+                />
+              </label>
+              <label className="block">
+                <span className={label}>Reference mobile number</span>
+                <Input
+                  className={field}
+                  value={references[i].mobile}
+                  onChange={(e) =>
+                    setReferences((cur) =>
+                      cur.map((r, j) =>
+                        j === i ? { ...r, mobile: e.target.value } : r,
+                      ),
+                    )
+                  }
+                  inputMode="numeric"
+                  maxLength={10}
+                  placeholder="9876543210"
+                />
+              </label>
+            </div>
+          ))}
+        </div>
+        <p className="mt-2 border-2 border-ink bg-sky p-2 text-[11px] font-bold">
+          Both rows may be left blank — a row with only a name or only a
+          mobile number is rejected.
+        </p>
+      </div>
+
+      {/* Family members — backend requires at least one complete row */}
+      <div className="border-2 border-ink bg-card p-3 shadow-hard">
+        <div className="mb-3 flex items-center gap-2 text-xs font-black uppercase">
+          <Users className="size-4 text-foreground" /> Family members
+        </div>
+        <div className="space-y-3">
+          {familyRows.map((row, i) => (
+            <div key={i} className="border-2 border-ink bg-white p-2">
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="text-[10px] font-black uppercase tracking-[0.14em]">
+                  Member {i + 1}
+                </span>
+                {familyRows.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setFamilyRows((cur) => cur.filter((_, j) => j !== i))
+                    }
+                    className="border-2 border-ink bg-blush px-2 py-0.5 text-[10px] font-black uppercase text-destructive"
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <label className="block">
+                  <span className={label}>Name *</span>
+                  <Input
+                    className={field}
+                    value={row.name}
+                    onChange={(e) =>
+                      setFamilyRows((cur) =>
+                        cur.map((r, j) =>
+                          j === i ? { ...r, name: e.target.value } : r,
+                        ),
+                      )
+                    }
+                  />
+                </label>
+                <label className="block">
+                  <span className={label}>Age</span>
+                  <Input
+                    className={field}
+                    value={row.age}
+                    onChange={(e) =>
+                      setFamilyRows((cur) =>
+                        cur.map((r, j) =>
+                          j === i ? { ...r, age: e.target.value } : r,
+                        ),
+                      )
+                    }
+                    inputMode="numeric"
+                    maxLength={3}
+                  />
+                </label>
+                <label className="block">
+                  <span className={label}>Relationship *</span>
+                  <Input
+                    className={field}
+                    value={row.relationship}
+                    onChange={(e) =>
+                      setFamilyRows((cur) =>
+                        cur.map((r, j) =>
+                          j === i ? { ...r, relationship: e.target.value } : r,
+                        ),
+                      )
+                    }
+                    placeholder="e.g. Husband"
+                  />
+                </label>
+                <label className="block">
+                  <span className={label}>Occupation</span>
+                  <Input
+                    className={field}
+                    value={row.occupation}
+                    onChange={(e) =>
+                      setFamilyRows((cur) =>
+                        cur.map((r, j) =>
+                          j === i ? { ...r, occupation: e.target.value } : r,
+                        ),
+                      )
+                    }
+                  />
+                </label>
+              </div>
+            </div>
+          ))}
+        </div>
+        <button
+          type="button"
+          onClick={() => setFamilyRows((cur) => [...cur, emptyFamilyMember()])}
+          className="mt-2 flex w-full items-center justify-center gap-2 border-2 border-ink bg-gold px-3 py-2 text-xs font-black uppercase shadow-hard-sm transition-transform active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
+        >
+          <Plus className="size-4" /> Add family member
+        </button>
+      </div>
+
       <label className="flex cursor-pointer items-start gap-2 border-2 border-ink bg-sky p-3">
         <input
           type="checkbox"
@@ -826,6 +1553,83 @@ export default function ClientNew() {
           to this application. *
         </span>
       </label>
+
+      {/* Section 6 — FOR OFFICE USE ONLY, immediately after the declaration */}
+      <div className="border-2 border-ink bg-gold p-3 shadow-hard">
+        <div className="mb-2 flex items-center gap-2 text-xs font-black uppercase">
+          <ClipboardCheck className="size-4" /> For office use only
+        </div>
+        <p className="mb-3 border-2 border-ink bg-white p-2 text-[11px] font-bold">
+          Optional. Server-side these entries are recorded only for authorised
+          roles (branch manager / super admin) — a field officer's submission
+          can never mark a client verified or approved.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="block sm:col-span-2">
+            <span className={label}>Field officer name</span>
+            <Input
+              className={field}
+              value={officeOfficer}
+              onChange={(e) => setOfficeOfficer(e.target.value)}
+            />
+          </label>
+          <label className="block">
+            <span className={label}>Customer / group verification</span>
+            <select
+              value={officeCustomer}
+              onChange={(e) => setOfficeCustomer(e.target.value)}
+              className={cn(field, "h-[42px]")}
+            >
+              <option value="">Not assessed</option>
+              {OFFICE_VERIFICATION.map((o) => (
+                <option key={o} value={o}>
+                  {sentenceCase(o)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className={label}>KYC verification</span>
+            <select
+              value={officeKyc}
+              onChange={(e) => setOfficeKyc(e.target.value)}
+              className={cn(field, "h-[42px]")}
+            >
+              <option value="">Not assessed</option>
+              {OFFICE_KYC.map((o) => (
+                <option key={o} value={o}>
+                  {sentenceCase(o)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className={label}>Credit assessment</span>
+            <select
+              value={officeCredit}
+              onChange={(e) => setOfficeCredit(e.target.value)}
+              className={cn(field, "h-[42px]")}
+            >
+              <option value="">Not assessed</option>
+              {OFFICE_CREDIT.map((o) => (
+                <option key={o} value={o}>
+                  {sentenceCase(o)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className={label}>Approved loan amount (₹)</span>
+            <Input
+              className={field}
+              value={officeApproved}
+              onChange={(e) => setOfficeApproved(e.target.value)}
+              inputMode="decimal"
+              placeholder="0"
+            />
+          </label>
+        </div>
+      </div>
 
       <div className="flex gap-2">
         <Button

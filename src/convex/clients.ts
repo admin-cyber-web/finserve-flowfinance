@@ -23,12 +23,14 @@ import {
   intInRange,
   money,
   oneOf,
+  loanRequestValue,
+  bankAccountValue,
+  nomineeValue,
+  referencesValue,
 } from "../lib/finance/validate";
 import {
   KYC_STATUS,
   DOC_STATUS,
-  LOAN_PURPOSES,
-  FREQUENCIES,
   OFFICE_VERIFICATION,
   OFFICE_KYC,
   OFFICE_CREDIT,
@@ -434,6 +436,7 @@ export const create = mutation({
     businessAddress: v.optional(v.string()),
     monthlyIncome: v.number(),
     householdIncome: v.number(),
+    householdExpenses: v.optional(v.number()),
     otherIncome: v.optional(v.number()),
     existingLoanEmi: v.optional(v.number()),
     familyMembers: v.optional(v.number()), // legacy count — rows are truth
@@ -535,6 +538,16 @@ export const create = mutation({
         mobile: v.optional(v.string()),
         address: v.optional(v.string()),
       }),
+    ),
+    // Two character references given on the joining form — name + 10-digit
+    // mobile each, at most two rows; blank rows are dropped server-side.
+    references: v.optional(
+      v.array(
+        v.object({
+          name: v.string(),
+          mobile: v.string(),
+        }),
+      ),
     ),
     declarationAccepted: v.optional(v.boolean()),
     // FOR OFFICE USE ONLY — honored only for authorized roles (see handler).
@@ -646,6 +659,10 @@ export const create = mutation({
       args.existingLoanEmi !== undefined
         ? money(args.existingLoanEmi, "existingLoanEmi", { allowZero: true })
         : undefined;
+    const householdExpenses =
+      args.householdExpenses !== undefined
+        ? money(args.householdExpenses, "householdExpenses", { allowZero: true })
+        : undefined;
     const typeOfBusiness =
       optionalString(args.typeOfBusiness, "typeOfBusiness", 120) ?? occupation;
     const businessAddress = optionalString(args.businessAddress, "businessAddress", 300);
@@ -725,67 +742,21 @@ export const create = mutation({
 
     // Loan request — recorded on the application only. No loan, approval or
     // journal entry is created here; that stays in the loan workflow.
-    let loanRequest: Doc<"clients">["loanRequest"];
-    if (args.loanRequest) {
-      const lr = args.loanRequest;
-      loanRequest = {
-        amountRequested: money(lr.amountRequested, "loanRequest.amountRequested"),
-        purpose: oneOf(lr.purpose, LOAN_PURPOSES, "loanRequest.purpose"),
-        tenureMonths: intInRange(lr.tenureMonths, "loanRequest.tenureMonths", 1, 120),
-        repaymentFrequency: oneOf(
-          lr.repaymentFrequency,
-          FREQUENCIES,
-          "loanRequest.repaymentFrequency",
-        ),
-        estimatedInstallment:
-          lr.estimatedInstallment !== undefined
-            ? money(lr.estimatedInstallment, "loanRequest.estimatedInstallment", {
-                allowZero: true,
-              })
-            : undefined,
-      };
-    }
+    const loanRequest: Doc<"clients">["loanRequest"] = args.loanRequest
+      ? loanRequestValue(args.loanRequest)
+      : undefined;
 
-    let bankAccount: Doc<"clients">["bankAccount"];
-    if (args.bankAccount) {
-      const b = args.bankAccount;
-      const accountNumber = requiredString(
-        b.accountNumber,
-        "bankAccount.accountNumber",
-        24,
-      ).replace(/\s/g, "");
-      if (!/^\d{6,20}$/.test(accountNumber)) {
-        throw new AppError("Bank account number must be 6-20 digits.");
-      }
-      const ifscCode = requiredString(b.ifscCode, "bankAccount.ifscCode", 11).toUpperCase();
-      if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifscCode)) {
-        throw new AppError("Invalid IFSC code — expected e.g. SBIN0001234.");
-      }
-      bankAccount = {
-        accountHolderName: requiredString(
-          b.accountHolderName,
-          "bankAccount.accountHolderName",
-          80,
-        ),
-        bankName: requiredString(b.bankName, "bankAccount.bankName", 80),
-        branch: requiredString(b.branch, "bankAccount.branch", 80),
-        accountNumber,
-        ifscCode,
-      };
-    }
+    const bankAccount: Doc<"clients">["bankAccount"] = args.bankAccount
+      ? bankAccountValue(args.bankAccount)
+      : undefined;
 
-    let nominee: Doc<"clients">["nominee"];
-    if (args.nominee) {
-      nominee = {
-        name: requiredString(args.nominee.name, "nominee.name", 80),
-        relationship: requiredString(args.nominee.relationship, "nominee.relationship", 40),
-        age: intInRange(args.nominee.age, "nominee.age", 1, 120),
-        mobile: args.nominee.mobile
-          ? mobileNumber(args.nominee.mobile, "nominee.mobile")
-          : undefined,
-        address: optionalString(args.nominee.address, "nominee.address", 300),
-      };
-    }
+    const nominee: Doc<"clients">["nominee"] = args.nominee
+      ? nomineeValue(args.nominee)
+      : undefined;
+
+    // Character references — blank rows are dropped by the parser, so an
+    // untouched pair of rows leaves the field unset on the record.
+    const references = referencesValue(args.references);
 
     // The declaration must be accepted; the timestamp stored is the
     // server's receipt time — tamper-proof.
@@ -900,6 +871,7 @@ export const create = mutation({
       businessAddress,
       monthlyIncome,
       householdIncome: householdIncome || monthlyIncome,
+      householdExpenses,
       otherIncome,
       existingLoanEmi,
       familyMembers: familyRows.length,
@@ -907,6 +879,7 @@ export const create = mutation({
       loanRequest,
       bankAccount,
       nominee,
+      references,
       declarationAcceptedAt: now,
       officeUse,
       panNumber,
@@ -1356,6 +1329,62 @@ export const update = mutation({
     monthlyIncome: v.optional(v.number()),
     householdIncome: v.optional(v.number()),
     familyMembers: v.optional(v.number()),
+    // Application sections from the joining form — income & business, loan
+    // request, bank account, nominee and references. Each object REPLACES the
+    // stored block, `null` clears it, and an omitted field is never touched
+    // (so an edit of one section can never wipe another).
+    typeOfBusiness: v.optional(v.string()),
+    businessAddress: v.optional(v.string()),
+    otherIncome: v.optional(v.union(v.number(), v.null())),
+    householdExpenses: v.optional(v.union(v.number(), v.null())),
+    existingLoanEmi: v.optional(v.union(v.number(), v.null())),
+    loanRequest: v.optional(
+      v.union(
+        v.object({
+          amountRequested: v.number(),
+          purpose: v.string(),
+          tenureMonths: v.number(),
+          repaymentFrequency: v.string(),
+          estimatedInstallment: v.optional(v.number()),
+        }),
+        v.null(),
+      ),
+    ),
+    bankAccount: v.optional(
+      v.union(
+        v.object({
+          accountHolderName: v.string(),
+          bankName: v.string(),
+          branch: v.string(),
+          accountNumber: v.string(),
+          ifscCode: v.string(),
+        }),
+        v.null(),
+      ),
+    ),
+    nominee: v.optional(
+      v.union(
+        v.object({
+          name: v.string(),
+          relationship: v.string(),
+          age: v.number(),
+          mobile: v.optional(v.string()),
+          address: v.optional(v.string()),
+        }),
+        v.null(),
+      ),
+    ),
+    references: v.optional(
+      v.union(
+        v.array(
+          v.object({
+            name: v.string(),
+            mobile: v.string(),
+          }),
+        ),
+        v.null(),
+      ),
+    ),
     device: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -1384,6 +1413,38 @@ export const update = mutation({
       patch.householdIncome = money(args.householdIncome, "householdIncome", { allowZero: true });
     if (args.familyMembers !== undefined)
       patch.familyMembers = intInRange(args.familyMembers, "familyMembers", 1, 30);
+    // Application sections — the SAME validators create uses, so an edit can
+    // never store what the joining form itself would reject.
+    if (args.typeOfBusiness !== undefined)
+      patch.typeOfBusiness = optionalString(args.typeOfBusiness, "typeOfBusiness", 120);
+    if (args.businessAddress !== undefined)
+      patch.businessAddress = optionalString(args.businessAddress, "businessAddress", 300);
+    if (args.otherIncome !== undefined)
+      patch.otherIncome =
+        args.otherIncome === null
+          ? undefined
+          : money(args.otherIncome, "otherIncome", { allowZero: true });
+    if (args.householdExpenses !== undefined)
+      patch.householdExpenses =
+        args.householdExpenses === null
+          ? undefined
+          : money(args.householdExpenses, "householdExpenses", { allowZero: true });
+    if (args.existingLoanEmi !== undefined)
+      patch.existingLoanEmi =
+        args.existingLoanEmi === null
+          ? undefined
+          : money(args.existingLoanEmi, "existingLoanEmi", { allowZero: true });
+    if (args.loanRequest !== undefined)
+      patch.loanRequest =
+        args.loanRequest === null ? undefined : loanRequestValue(args.loanRequest);
+    if (args.bankAccount !== undefined)
+      patch.bankAccount =
+        args.bankAccount === null ? undefined : bankAccountValue(args.bankAccount);
+    if (args.nominee !== undefined)
+      patch.nominee = args.nominee === null ? undefined : nomineeValue(args.nominee);
+    if (args.references !== undefined)
+      patch.references =
+        args.references === null ? undefined : referencesValue(args.references);
     if (patch.name || patch.mobile) {
       patch.searchText = `${patch.name ?? client.name} ${patch.mobile ?? client.mobile} ${client.code} ${patch.village ?? client.village}`.toLowerCase();
     }

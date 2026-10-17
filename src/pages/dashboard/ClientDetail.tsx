@@ -297,6 +297,14 @@ export default function ClientDetail() {
                   : "—"
               }
             />
+            <KeyValue
+              k="Monthly household expenses"
+              v={
+                client.householdExpenses !== undefined
+                  ? `₹${client.householdExpenses.toLocaleString("en-IN")}`
+                  : "—"
+              }
+            />
 
             {client.coApplicant && (
               <div className="border-2 border-ink bg-sky p-3">
@@ -455,6 +463,22 @@ export default function ClientDetail() {
                 />
                 <KeyValue k="Mobile" v={client.nominee.mobile ?? "—"} mono />
                 <KeyValue k="Address" v={client.nominee.address ?? "—"} />
+              </div>
+            )}
+
+            {client.references && client.references.length > 0 && (
+              <div className="border-2 border-ink bg-white p-3">
+                <div className="mb-2 text-[10px] font-black uppercase tracking-[0.14em]">
+                  References
+                </div>
+                {client.references.map((r, i) => (
+                  <KeyValue
+                    key={`${r.mobile}-${i}`}
+                    k={`Reference ${i + 1}`}
+                    v={`${r.name} · ${r.mobile}`}
+                    mono
+                  />
+                ))}
               </div>
             )}
 

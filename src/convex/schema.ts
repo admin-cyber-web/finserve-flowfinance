@@ -151,6 +151,7 @@ const schema = defineSchema(
       typeOfBusiness: v.optional(v.string()),
       businessAddress: v.optional(v.string()),
       otherIncome: v.optional(v.number()),
+      householdExpenses: v.optional(v.number()),
       existingLoanEmi: v.optional(v.number()),
       // Optional co-applicant — validated when present, never auto-filled.
       coApplicant: v.optional(
@@ -198,6 +199,16 @@ const schema = defineSchema(
           mobile: v.optional(v.string()),
           address: v.optional(v.string()),
         }),
+      ),
+      // Two character references given on the joining form. Empty rows are
+      // never stored — only complete name + mobile pairs survive validation.
+      references: v.optional(
+        v.array(
+          v.object({
+            name: v.string(),
+            mobile: v.string(),
+          }),
+        ),
       ),
       declarationAcceptedAt: v.optional(v.number()),
       // FOR OFFICE USE ONLY — written only by authorized roles
