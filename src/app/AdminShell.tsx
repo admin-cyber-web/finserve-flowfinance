@@ -13,6 +13,7 @@ import {
   Bell,
   BookOpen,
   Banknote,
+  Coins,
   FileBarChart,
   IndianRupee,
   LayoutDashboard,
@@ -97,6 +98,7 @@ const NAV: NavItem[] = [
   { to: "/dashboard/clients", label: "Clients", icon: Users, permission: "view_clients" },
   { to: "/dashboard/loans", label: "Loans", icon: Banknote, permission: "view_loans" },
   { to: "/dashboard/approvals", label: "Approvals", icon: Stamp },
+  { to: "/dashboard/collection", label: "Collection", icon: Coins, permission: "collect_payment" },
   { to: "/dashboard/staff", label: "Staff & Wallets", icon: UserCog, permission: "staff_management" },
   {
     to: "/dashboard/users",
@@ -118,6 +120,7 @@ const TITLES: Record<string, string> = {
   "/dashboard/clients": "Clients",
   "/dashboard/loans": "Loans",
   "/dashboard/approvals": "Approvals",
+  "/dashboard/collection": "Collection",
   "/dashboard/staff": "Staff & Wallets",
   "/dashboard/users": "User Management",
   "/dashboard/cash": "Cash & Handovers",

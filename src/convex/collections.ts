@@ -4,13 +4,13 @@ import type { Doc, Id } from "./_generated/dataModel";
 import {
   AppError,
   istDateKey,
-  logAudit,
   requirePermission,
   requireProfile,
 } from "../lib/server/convexHelpers";
 import { recordCollection, reverseCollection } from "../lib/server/loanOps";
 import { money, oneOf, optionalString, requiredString } from "../lib/finance/validate";
 import { PAY_MODES } from "../lib/finance/types";
+import { matchCollectionSearch, overdueDays, round2 } from "../lib/finance/excelReports";
 
 /**
  * Today's collection board for a field staff member (or branch-wide for BM).
@@ -321,5 +321,109 @@ export const receipts = query({
       clientName: clientById.get(r.clientId)?.name ?? "—",
       status: collectionById.get(r.collectionId)?.status ?? "NORMAL",
     }));
+  },
+});
+
+/**
+ * Collection screen — open loans with money due as of today (IST), one row
+ * per loan:
+ *
+ *   arrear   = unpaid remainder of installments overdue as of today
+ *   totalDue = unpaid remainder of everything due on or before today
+ *              (arrear ⊆ totalDue — never double counted)
+ *
+ * Searchable by group name, group ID and LAN (loan account number). Saving a
+ * payment does NOT happen here — the screen posts through `collections.collect`,
+ * which owns validation, idempotency (duplicate prevention), the wallet
+ * ledger, receipts, the journal entry and the schedule/loan roll-forward.
+ */
+export const dueList = query({
+  args: {
+    q: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, { q, limit }) => {
+    const me = await requireProfile(ctx, { allowInactive: true });
+    requirePermission(me, "collect_payment");
+
+    const now = Date.now();
+    const [loans, schedules, clients, groups] = await Promise.all([
+      ctx.db.query("loans").collect(),
+      ctx.db
+        .query("loanSchedules")
+        .withIndex("by_due", (r) => r.lte("dueDate", now))
+        .collect(),
+      ctx.db.query("clients").collect(),
+      ctx.db.query("groups").collect(),
+    ]);
+
+    // Same scope rules as every money screen: staff see their own book,
+    // branch managers their branch, admins the whole book. Payments are only
+    // ever posted against loans the backend itself re-checks.
+    const openStatuses = ["ACTIVE", "OVERDUE", "DISBURSED"];
+    const scopedLoans = loans.filter(
+      (l) =>
+        openStatuses.includes(l.status) &&
+        (me.role === "FIELD_STAFF"
+          ? l.staffId === me._id
+          : me.role === "BRANCH_MANAGER"
+            ? l.branchId === me.branchId
+            : true),
+    );
+
+    const schedulesByLoan = new Map<string, typeof schedules>();
+    for (const s of schedules) {
+      const list = schedulesByLoan.get(s.loanId);
+      if (list) list.push(s);
+      else schedulesByLoan.set(s.loanId, [s]);
+    }
+    const clientById = new Map(clients.map((c) => [c._id, c]));
+    const groupByCode = new Map(groups.map((g) => [g.code, g]));
+
+    const rows: {
+      loanPk: string;
+      loanId: string;
+      clientCode: string;
+      customerName: string;
+      groupId: string;
+      groupName: string;
+      arrear: number;
+      totalDue: number;
+    }[] = [];
+    for (const loan of scopedLoans) {
+      let arrear = 0;
+      let totalDue = 0;
+      for (const s of schedulesByLoan.get(loan._id) ?? []) {
+        const rem = Math.max(0, round2(s.totalDue - s.paid));
+        if (rem <= 0) continue;
+        if (s.dueDate <= now) totalDue += rem;
+        if (overdueDays(s.dueDate, now) >= 1) arrear += rem;
+      }
+      arrear = round2(arrear);
+      totalDue = round2(totalDue);
+      if (totalDue <= 0) continue; // nothing to collect against today
+      const client = clientById.get(loan.clientId);
+      const groupCode = client?.groupCode;
+      const group = groupCode ? groupByCode.get(groupCode) : undefined;
+      rows.push({
+        loanPk: loan._id,
+        loanId: loan.loanId,
+        clientCode: client?.code ?? "—",
+        customerName: client?.name ?? "—",
+        groupId: groupCode ?? "—",
+        groupName: group?.name ?? "",
+        arrear,
+        totalDue,
+      });
+    }
+
+    // Search with group name / group ID / LAN ID — case-insensitive.
+    const matched = matchCollectionSearch(rows, q);
+
+    matched.sort(
+      (a, b) =>
+        b.arrear - a.arrear || b.totalDue - a.totalDue || a.loanId.localeCompare(b.loanId),
+    );
+    return matched.slice(0, limit ?? 200);
   },
 });

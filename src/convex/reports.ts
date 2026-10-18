@@ -4,6 +4,15 @@ import type { Doc } from "./_generated/dataModel";
 import { AppError, istDateKey, requirePermission, requireProfile, walletBalance } from "../lib/server/convexHelpers";
 import { deriveBalance } from "../lib/finance/wallet";
 import { buildDateReport, rangeBounds, resolveRange } from "../lib/finance/dateReport";
+import {
+  buildCollectionRows,
+  buildDisbursementRows,
+  buildDueDateRows,
+  buildOverdueRows,
+  type CollectionFacts,
+  type LoanFacts,
+  type ScheduleFacts,
+} from "../lib/finance/excelReports";
 
 /**
  * One reusable report engine behind every report in the Reports section.
@@ -1083,6 +1092,129 @@ export const dateReport = query({
         staff: staffOpts,
         centers: centerOpts,
       },
+    };
+  },
+});
+
+/**
+ * The four Excel reports behind the Reports screen — one institution-local
+ * date range, four row sets:
+ *
+ *   1. Disbursement Report     loans disbursed inside the range
+ *   2. Collection Report       successful payments inside the range
+ *   3. Due Date Collection     loans with an installment due inside the range
+ *   4. Overdue Report          arrears as of the To date, bucketed 1-7 / 8-15 /
+ *                              16-22 days (each rupee in at most one bucket)
+ *
+ * All scoping is server-side: BRANCH_MANAGER is pinned to their own branch,
+ * FIELD_STAFF only sees loans assigned to them, and an explicit branchId can
+ * only narrow a SUPER_ADMIN / ACCOUNTANT view. Collections are counted from
+ * the NORMAL rows of the collection ledger only — reversed payments and
+ * their compensating entries are excluded by the row builder, so no rupee is
+ * ever counted twice, and wallet transactions are never consulted.
+ */
+export const rangeReports = query({
+  args: {
+    fromDay: v.string(), // YYYY-MM-DD, institution-local (IST)
+    toDay: v.string(),
+    branchId: v.optional(v.id("branches")),
+  },
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx, { allowInactive: true });
+    requirePermission(me, "reports");
+
+    const range = resolveRange(args.fromDay, args.toDay);
+    if ("error" in range) throw new AppError(range.error);
+    const bounds = rangeBounds(range.fromDay, range.toDay);
+    if (!bounds) throw new AppError("Invalid date range.");
+
+    let branchFilter: string | null = args.branchId ?? null;
+    if (me.role === "BRANCH_MANAGER") {
+      if (branchFilter && branchFilter !== me.branchId) {
+        throw new AppError("You can only report on your own branch.");
+      }
+      branchFilter = me.branchId ?? null;
+    }
+    const staffFilter: string | null = me.role === "FIELD_STAFF" ? me._id : null;
+
+    const [loans, clients, groups, schedules, collections] = await Promise.all([
+      ctx.db.query("loans").collect(),
+      ctx.db.query("clients").collect(),
+      ctx.db.query("groups").collect(),
+      // Everything that could be due on or before the end of the To date —
+      // arrears of earlier installments ride along so the Due Date and
+      // Overdue rows can be computed without a second read.
+      ctx.db
+        .query("loanSchedules")
+        .withIndex("by_due", (q) => q.lte("dueDate", bounds.to))
+        .collect(),
+      ctx.db
+        .query("collections")
+        .withIndex("by_created", (q) =>
+          q.gte("createdAt", bounds.from).lte("createdAt", bounds.to),
+        )
+        .collect(),
+    ]);
+
+    const clientById = new Map(clients.map((c) => [c._id, c]));
+    const groupByCode = new Map(groups.map((g) => [g.code, g]));
+    const scopedLoans = loans.filter(
+      (l) =>
+        (!branchFilter || l.branchId === branchFilter) &&
+        (!staffFilter || l.staffId === staffFilter),
+    );
+    const loanById = new Map(scopedLoans.map((l) => [l._id, l]));
+
+    const facts = (loan: Doc<"loans">): LoanFacts => {
+      const client = clientById.get(loan.clientId);
+      const groupCode = client?.groupCode;
+      const group = groupCode ? groupByCode.get(groupCode) : undefined;
+      return {
+        loanPk: loan._id,
+        loanId: loan.loanId,
+        clientCode: client?.code ?? "—",
+        customerName: client?.name ?? "—",
+        groupId: groupCode ?? "—",
+        groupName: group?.name ?? groupCode ?? "—",
+        disbursedAt: loan.disbursedAt,
+        principal: loan.principal,
+        tenure: loan.tenure,
+        installment: loan.installment,
+      };
+    };
+
+    const scheduleFacts: ScheduleFacts[] = [];
+    for (const s of schedules) {
+      const loan = loanById.get(s.loanId);
+      if (!loan) continue; // outside the viewer's scope
+      scheduleFacts.push({
+        ...facts(loan),
+        dueDate: s.dueDate,
+        totalDue: s.totalDue,
+        paid: s.paid,
+      });
+    }
+
+    const collectionFacts: CollectionFacts[] = [];
+    for (const c of collections) {
+      const loan = loanById.get(c.loanId);
+      if (!loan) continue;
+      collectionFacts.push({
+        ...facts(loan),
+        collectionId: c._id,
+        status: c.status,
+        reversalOfId: c.reversalOfId,
+        paidAt: c.createdAt,
+        paidAmount: c.amount,
+      });
+    }
+
+    return {
+      range: { fromKey: range.fromDay, toKey: range.toDay },
+      disbursement: buildDisbursementRows(scopedLoans.map(facts), bounds),
+      collection: buildCollectionRows(collectionFacts, bounds),
+      dueDateCollection: buildDueDateRows(scheduleFacts, bounds),
+      overdue: buildOverdueRows(scheduleFacts, bounds),
     };
   },
 });

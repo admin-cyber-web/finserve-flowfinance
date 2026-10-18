@@ -16,6 +16,7 @@ import ClientNew from "./dashboard/ClientNew";
 import ClientHome from "./dashboard/ClientHome";
 import Clients from "./dashboard/Clients";
 import Collect from "./dashboard/Collect";
+import Collection from "./dashboard/Collection";
 import LoanDetail from "./dashboard/LoanDetail";
 import LoanNew from "./dashboard/LoanNew";
 import Loans from "./dashboard/Loans";
@@ -131,6 +132,7 @@ export default function Dashboard() {
       <Route path="cash" element={<Cash />} />
       <Route path="reports" element={<Reports />} />
       <Route path="approvals" element={<Approvals />} />
+      <Route path="collection" element={<Collection />} />
       <Route path="staff" element={<Staff />} />
       <Route path="staff/:id" element={<StaffDetail />} />
       <Route path="users" element={<Users />} />
