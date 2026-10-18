@@ -10,7 +10,7 @@ import {
 import { recordCollection, reverseCollection } from "../lib/server/loanOps";
 import { money, oneOf, optionalString, requiredString } from "../lib/finance/validate";
 import { PAY_MODES } from "../lib/finance/types";
-import { matchCollectionSearch, overdueDays, round2 } from "../lib/finance/excelReports";
+import { matchCollectionSearch, MatchCollectionSearchInput, overdueDays, round2 } from "../lib/finance/excelReports";
 
 /**
  * Today's collection board for a field staff member (or branch-wide for BM).
@@ -418,12 +418,10 @@ export const dueList = query({
     }
 
     // Search with group name / group ID / LAN ID — case-insensitive.
-    const matched = matchCollectionSearch(rows, q);
-
-    matched.sort(
+    const sorted = [...rows].sort(
       (a, b) =>
         b.arrear - a.arrear || b.totalDue - a.totalDue || a.loanId.localeCompare(b.loanId),
     );
-    return matched.slice(0, limit ?? 200);
+    return matchCollectionSearch(sorted, q).slice(0, limit ?? 200);
   },
 });

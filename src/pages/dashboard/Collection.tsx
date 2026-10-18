@@ -37,6 +37,17 @@ const TH_CLS =
   "border border-ink bg-muted px-1.5 py-1 text-left text-[10px] font-black uppercase whitespace-nowrap";
 const TD_CLS = "border border-ink px-1.5 py-1 font-semibold";
 
+type Row = NonNullable<Awaited<ReturnType<typeof useQuery>>>[number];
+
+/**
+ * React-side convenience for the collection board. The Convex query returns the
+ * server `dueList` shape, so `Row` already carries loanPk, loanId,
+ * clientCode, customerName, arrear, totalDue, groupId and groupName. The
+ * `CollectionRow` cast is only used in the save handler for behaviour that does
+ * not care about the exact visible shape.
+ */
+type CollectionRow = Row;
+
 export default function Collection() {
   const { can } = useProfile();
   const [q, setQ] = useState("");
@@ -55,7 +66,7 @@ export default function Collection() {
   // payment twice.
   const keysRef = useRef<Record<string, string>>({});
 
-  const save = async (row: NonNullable<typeof rows>[number]) => {
+  const save = async (row: Row) => {
     if (busyKey) return; // one submission in flight at a time
     const raw = (amounts[row.loanPk] ?? String(row.totalDue)).trim();
     const amount = Number(raw);
@@ -193,7 +204,7 @@ export default function Collection() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((r, i) => {
+              {rows.map((r: Row, i) => {
                 const busy = busyKey === r.loanPk;
                 return (
                   <tr key={r.loanPk} className="hover:bg-sky/40">

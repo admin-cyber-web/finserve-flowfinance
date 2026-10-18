@@ -244,7 +244,7 @@ describe("Due Date Collection", () => {
   });
 });
 
-/* ------------------------------ 4. Overdue ------------------------------- */
+/* ---------------------------- 4. Overdue ------------------------------- */
 
 describe("Overdue Report buckets", () => {
   test("bucketIndex partitions 1–7 / 8–15 / 16–22 with no overlap", () => {

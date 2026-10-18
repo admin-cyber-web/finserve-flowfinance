@@ -267,6 +267,36 @@ export function buildDueDateRows(
     .map((entry, i) => ({ ...entry.row, sr: i + 1 }));
 }
 
+/** Collection board search — case-insensitive Group Name / Group ID / LAN.
+ *
+ * Single shared helper, so both the [Collection] screen and this project's
+ * tests assert the exact match rule without re-implementing it. Returns every
+ * row whose groupName, groupId or loanId contains `q`; blank or absent query
+ * returns the full list.
+ */
+export interface MatchCollectionSearchInput {
+  groupName: string;
+  groupId: string;
+  loanId: string;
+}
+
+export function matchCollectionSearch(
+  rows: readonly MatchCollectionSearchInput[],
+  q: string | undefined,
+): readonly MatchCollectionSearchInput[] {
+  const needle = (q ?? "").trim().toLowerCase();
+  if (!needle) return rows;
+  const out: MatchCollectionSearchInput[] = [];
+  for (const row of rows) {
+    if (
+      row.groupName.toLowerCase().includes(needle) ||
+      row.groupId.toLowerCase().includes(needle) ||
+      row.loanId.toLowerCase().includes(needle)
+    )
+      out.push(row);
+  }
+  return out;
+}
 /* ------------------------------ 4. Overdue ------------------------------- */
 
 /**
