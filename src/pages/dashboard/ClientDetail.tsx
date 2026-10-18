@@ -176,12 +176,13 @@ export default function ClientDetail() {
         {/* ------------------------------ OVERVIEW --------------------------- */}
         <TabsContent value="overview" className="mt-4 space-y-4">
           <section className="border-2 border-ink bg-card p-4 shadow-hard-sm">
-            <KeyValue k="Father / husband" v={client.fatherName ?? "—"} />
+            <KeyValue k="Husband name" v={client.fatherName ?? "—"} />
             <KeyValue k="Age / gender" v={`${client.age} · ${client.gender.toLowerCase()}`} />
             <KeyValue k="Occupation" v={client.occupation} />
             <KeyValue k="Monthly income" v={<Money value={client.monthlyIncome} />} />
             <KeyValue k="Household income" v={<Money value={client.householdIncome} />} />
             <KeyValue k="Family members" v={String(client.familyMembers)} />
+            <KeyValue k="Maternal home address" v={client.maternalHomeAddress ?? "—"} />
             <KeyValue k="Address" v={`${client.address ?? "—"}, ${client.district}, ${client.pin}`} />
             <KeyValue k="KYC doc" v={client.kycDocRef ? `${client.kycDocType}: ${client.kycDocRef}` : client.kycDocType ?? "—"} mono />
             <KeyValue k="Assigned staff" v={data.assignedStaff?.name ?? "—"} />
@@ -263,8 +264,9 @@ export default function ClientDetail() {
             <SectionTitle>Application</SectionTitle>
             <KeyValue k="Applicant name" v={client.name} />
             <KeyValue k="Husband name" v={client.husbandName ?? "—"} />
-            <KeyValue k="Father name" v={client.fatherName ?? "—"} />
+            <KeyValue k="Husband name" v={client.fatherName ?? "—"} />
             <KeyValue k="Father's address" v={client.fatherAddress ?? "—"} />
+            <KeyValue k="Maternal home address" v={client.maternalHomeAddress ?? "—"} />
             <KeyValue k="Date of birth" v={client.dob ? formatDate(client.dob) : "—"} />
             <KeyValue
               k="PAN / Voter ID"

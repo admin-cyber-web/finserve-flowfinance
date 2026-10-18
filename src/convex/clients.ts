@@ -421,6 +421,7 @@ export const create = mutation({
     fatherName: v.optional(v.string()),
     husbandName: v.optional(v.string()),
     fatherAddress: v.optional(v.string()),
+    maternalHomeAddress: v.optional(v.string()),
     dob: v.optional(v.number()),
     age: v.number(),
     gender: v.string(),
@@ -856,6 +857,7 @@ export const create = mutation({
       fatherName: optionalString(args.fatherName, "fatherName", 80),
       husbandName: optionalString(args.husbandName, "husbandName", 80),
       fatherAddress: optionalString(args.fatherAddress, "fatherAddress", 300),
+      maternalHomeAddress: optionalString(args.maternalHomeAddress, "maternalHomeAddress", 300),
       dob,
       age,
       gender,
@@ -1321,6 +1323,7 @@ export const update = mutation({
     clientId: v.id("clients"),
     name: v.optional(v.string()),
     fatherName: v.optional(v.string()),
+    maternalHomeAddress: v.optional(v.string()),
     mobile: v.optional(v.string()),
     altMobile: v.optional(v.string()),
     address: v.optional(v.string()),
@@ -1397,6 +1400,8 @@ export const update = mutation({
     if (args.name !== undefined) patch.name = requiredString(args.name, "name", 80);
     if (args.fatherName !== undefined)
       patch.fatherName = optionalString(args.fatherName, "fatherName", 80);
+    if (args.maternalHomeAddress !== undefined)
+      patch.maternalHomeAddress = optionalString(args.maternalHomeAddress, "maternalHomeAddress", 300);
     if (args.mobile !== undefined) patch.mobile = mobileNumber(args.mobile);
     if (args.altMobile !== undefined)
       patch.altMobile = args.altMobile

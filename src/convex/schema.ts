@@ -129,6 +129,7 @@ const schema = defineSchema(
       code: v.string(), // C-000128
       name: v.string(),
       fatherName: v.optional(v.string()),
+      maternalHomeAddress: v.optional(v.string()),
       dob: v.optional(v.number()),
       age: v.number(),
       gender: v.string(), // MALE | FEMALE | OTHER

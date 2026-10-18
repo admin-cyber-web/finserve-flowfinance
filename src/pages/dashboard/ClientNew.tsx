@@ -131,6 +131,7 @@ export default function ClientNew() {
   // Step 2 — joining form
   const [name, setName] = useState("");
   const [fatherName, setFatherName] = useState("");
+  const [maternalHomeAddress, setMaternalHomeAddress] = useState("");
   const [age, setAge] = useState("");
   const [gender, setGender] = useState<(typeof GENDERS)[number]>("FEMALE");
   const [mobile, setMobile] = useState("");
@@ -600,6 +601,7 @@ export default function ClientNew() {
       const result = await createClient({
         name: name.trim(),
         fatherName: fatherName.trim() || undefined,
+        maternalHomeAddress: maternalHomeAddress.trim() || undefined,
         age: ageNum,
         gender,
         mobile: mobile.trim(),
@@ -869,11 +871,21 @@ export default function ClientNew() {
             />
           </label>
           <label className="block">
-            <span className={label}>Father / husband name</span>
+            <span className={label}>Husband name</span>
             <Input
               className={field}
               value={fatherName}
               onChange={(e) => setFatherName(e.target.value)}
+            />
+          </label>
+          <label className="block sm:col-span-2">
+            <span className={label}>Maternal home address</span>
+            <textarea
+              value={maternalHomeAddress}
+              onChange={(e) => setMaternalHomeAddress(e.target.value)}
+              rows={2}
+              placeholder="Father's home — house, village, post, district"
+              className={cn(field, "resize-y")}
             />
           </label>
           <label className="block">
