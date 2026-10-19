@@ -114,14 +114,19 @@ export default function Staff() {
   };
 
   const confirmRemove = async () => {
-    if (!removeTarget) return;
+    if (!removeTarget || busy) return;
     setBusy(true);
     try {
-      await removeStaff({
+      // The backend deactivates the account, revokes every session/device
+      // and preserves wallet + audit history — and the list query is
+      // reactive, so the row disappears the moment the mutation commits.
+      const result = await removeStaff({
         profileId: removeTarget._id,
         reason: "Removed by SUPER_ADMIN",
       });
-      toast.success(`${removeTarget.name} (${removeTarget.staffId}) removed`);
+      toast.success(
+        `${result.name} (${result.staffId}) removed — account deactivated, wallet and audit history preserved`,
+      );
       setRemoveTarget(null);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not remove account");

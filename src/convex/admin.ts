@@ -795,6 +795,11 @@ export const updateStaff = mutation({
     if (target.role === "CLIENT") {
       throw new AppError("Edit client details on the client record instead.");
     }
+    if (target.status === "DEACTIVATED") {
+      throw new AppError(
+        "This account has been removed. Reactivate it from Account status (profiles.setStatus) before editing it again.",
+      );
+    }
 
     const patch: Record<string, unknown> = {};
     if (args.name !== undefined) patch.name = requiredString(args.name, "name", 80);
@@ -1065,6 +1070,11 @@ export const deleteStaff = mutation({
       throw new AppError(
         "Use client deactivation, not staff removal, for clients.",
       );
+    }
+    if (target.status === "DEACTIVATED") {
+      // Never report success when nothing would change — a repeat click or a
+      // stale screen must not look like a second removal.
+      throw new AppError("This account has already been removed.");
     }
     if (target._id === me._id) {
       throw new AppError("You cannot remove yourself.");

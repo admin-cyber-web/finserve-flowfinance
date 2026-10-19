@@ -8,6 +8,7 @@ import {
   logAudit,
   requirePermission,
   requireProfile,
+  writeWalletTx,
   type Mtx,
 } from "../lib/server/convexHelpers";
 import { FS_ROLES, USER_STATUSES } from "../lib/finance/types";
@@ -571,7 +572,6 @@ export const staffWalletTx = internalMutation({
     createdBy: v.id("profiles"),
   },
   handler: async (ctx, { walletId, profileId, branchId, amount, createdBy }) => {
-    const { writeWalletTx } = await import("../lib/server/convexHelpers");
     await writeWalletTx(ctx, {
       walletId,
       profileId,

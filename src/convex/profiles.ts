@@ -233,7 +233,15 @@ export const listStaff = query({
     if (scoped) all = all.filter((p) => p.branchId === scoped);
     else if (args.branchId) all = all.filter((p) => p.branchId === args.branchId);
     if (args.role) all = all.filter((p) => p.role === args.role);
-    if (!args.includeInactive) all = all.filter((p) => p.role !== "CLIENT");
+    if (!args.includeInactive) {
+      // The ACTIVE staff directory: client profiles never appear, and staff
+      // removed by `admin.deleteStaff` (status DEACTIVATED — financial and
+      // audit history preserved) must not reappear on the list either.
+      // SUSPENDED / BLOCKED accounts stay visible with their status chip.
+      all = all.filter(
+        (p) => p.role !== "CLIENT" && p.status !== "DEACTIVATED",
+      );
+    }
 
     const wallets = await ctx.db.query("wallets").collect();
     const walletByProfile = new Map(wallets.map((w) => [w.profileId, w]));
