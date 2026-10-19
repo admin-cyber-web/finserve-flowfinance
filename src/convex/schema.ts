@@ -129,6 +129,9 @@ const schema = defineSchema(
       code: v.string(), // C-000128
       name: v.string(),
       fatherName: v.optional(v.string()),
+      // Applicant's own father name — kept separate from the legacy
+      // `fatherName` column, which stores the husband's name.
+      applicantFatherName: v.optional(v.string()),
       maternalHomeAddress: v.optional(v.string()),
       dob: v.optional(v.number()),
       age: v.number(),

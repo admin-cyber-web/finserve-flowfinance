@@ -177,6 +177,7 @@ export default function ClientDetail() {
         <TabsContent value="overview" className="mt-4 space-y-4">
           <section className="border-2 border-ink bg-card p-4 shadow-hard-sm">
             <KeyValue k="Husband name" v={client.fatherName ?? "—"} />
+            <KeyValue k="Father name" v={client.applicantFatherName ?? "—"} />
             <KeyValue k="Age / gender" v={`${client.age} · ${client.gender.toLowerCase()}`} />
             <KeyValue k="Occupation" v={client.occupation} />
             <KeyValue k="Monthly income" v={<Money value={client.monthlyIncome} />} />
@@ -263,8 +264,8 @@ export default function ClientDetail() {
           <section className="space-y-3 border-2 border-ink bg-card p-4 shadow-hard-sm">
             <SectionTitle>Application</SectionTitle>
             <KeyValue k="Applicant name" v={client.name} />
-            <KeyValue k="Husband name" v={client.husbandName ?? "—"} />
-            <KeyValue k="Husband name" v={client.fatherName ?? "—"} />
+            <KeyValue k="Husband name" v={client.husbandName ?? client.fatherName ?? "—"} />
+            <KeyValue k="Father name" v={client.applicantFatherName ?? "—"} />
             <KeyValue k="Father's address" v={client.fatherAddress ?? "—"} />
             <KeyValue k="Maternal home address" v={client.maternalHomeAddress ?? "—"} />
             <KeyValue k="Date of birth" v={client.dob ? formatDate(client.dob) : "—"} />
