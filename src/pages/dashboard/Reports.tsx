@@ -1,4 +1,5 @@
 import { api } from "@/convex/_generated/api";
+import ClientStatement from "@/components/fs/ClientStatement";
 import {
   EmptyState,
   PageHeader,
@@ -40,7 +41,7 @@ import { useMemo, useState, type ReactNode } from "react";
  * period. Nothing here is demo data — every figure is a stored record.
  */
 
-const REPORTS = ["disbursement", "collection", "due", "overdue"] as const;
+const REPORTS = ["disbursement", "collection", "due", "overdue", "statement"] as const;
 type ReportKey = (typeof REPORTS)[number];
 
 const REPORT_LABELS: Record<ReportKey, string> = {
@@ -48,6 +49,7 @@ const REPORT_LABELS: Record<ReportKey, string> = {
   collection: "Collection Report",
   due: "Due Date Collection",
   overdue: "Overdue Report",
+  statement: "Statement",
 };
 
 /** The first ten columns — identical in all four reports (the Excel sheet). */
@@ -69,6 +71,7 @@ const TAILS: Record<ReportKey, string[]> = {
   collection: ["MOB", "Paid Date", "Paid Amount"],
   due: ["MOB", "Arrear", "Arrear Days", "Total Due Amount"],
   overdue: ["BKT 1 (1–7 days)", "BKT 2 (8–15 days)", "BKT 3 (16–22 days)"],
+  statement: [],
 };
 
 const INPUT_CLS =
@@ -206,7 +209,9 @@ export default function Reports() {
         ? collection.length
         : active === "due"
           ? dueRows.length
-          : overdue.length;
+          : active === "overdue"
+            ? overdue.length
+            : 0;
 
   /* ------------------------------- CSV export ---------------------------- */
 
@@ -339,9 +344,14 @@ export default function Reports() {
     <div className="space-y-4">
       <PageHeader
         title="Reports"
-        subtitle="Disbursement · Collection · Due date · Overdue — one date range, four sheets"
+        subtitle="Disbursement · Collection · Due date · Overdue — one date range, four sheets · Statement"
       />
 
+      {/* The shared From/To period and CSV export belong to the four
+          date-range sheets; the Statement section brings its own search
+          and period filter inside its tab. */}
+      {active !== "statement" && (
+        <>
       {/* Quick ranges — evaluated in the institution's local day (IST) */}
       <div className="flex flex-wrap gap-1.5">
         {DATE_REPORT_PRESETS.filter((p) => p !== "CUSTOM").map((p) => (
@@ -434,6 +444,8 @@ export default function Reports() {
           <Download className="size-4" /> Export CSV — {REPORT_LABELS[active]}
         </Button>
       </div>
+        </>
+      )}
 
       {/* ------------------------- The four reports ------------------------ */}
       <Tabs value={active} onValueChange={(v) => setActive(v as ReportKey)}>
@@ -697,6 +709,12 @@ export default function Reports() {
             </TabsContent>
           </>
         )}
+
+        {/* 5 — Statement: its own search, period and ledger; independent of
+            the shared date-range bar above. */}
+        <TabsContent value="statement" className="mt-4">
+          <ClientStatement />
+        </TabsContent>
       </Tabs>
     </div>
   );

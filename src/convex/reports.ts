@@ -13,6 +13,14 @@ import {
   type LoanFacts,
   type ScheduleFacts,
 } from "../lib/finance/excelReports";
+import {
+  buildCombinedStatement,
+  buildLoanStatement,
+  loanPurposeLabel,
+  resolveClientMatches,
+  type StatementLoan,
+} from "../lib/finance/statement";
+import { deriveLoanView } from "../lib/server/loanOps";
 
 /**
  * One reusable report engine behind every report in the Reports section.
@@ -1218,3 +1226,356 @@ export const rangeReports = query({
     };
   },
 });
+
+/* ------------------------------ Statement -------------------------------- */
+
+/**
+ * Mask an identity number for display: every character except the last four
+ * becomes `X`, regrouped in fours (1234 5678 9012 → XXXX XXXX 9012). Only the
+ * SUPER_ADMIN role ever receives the unmasked value, and only from the
+ * `statement` query below — never from this file's search.
+ */
+function maskIdValue(value?: string | null): string | null {
+  if (!value) return null;
+  const compact = value.replace(/\s+/g, "");
+  if (compact.length === 0) return null;
+  const tail = compact.slice(-4);
+  const masked = `${"X".repeat(Math.max(0, compact.length - 4))}${tail}`;
+  return masked.replace(/(\S{4})(?=\S)/g, "$1 ").trim();
+}
+
+/**
+ * Statement search — resolve a Client ID / Customer ID / LAN ID / Loan ID to
+ * the right client record. Exact, case-insensitive matches on the stored
+ * codes only, and every exact candidate is returned so an ambiguous query
+ * never silently picks someone else's record. Scoped exactly like the four
+ * range reports: staff → own clients/loans, BM → own branch, admin and
+ * accountant → organisation-wide.
+ */
+export const statementSearch = query({
+  args: { q: v.string() },
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx, { allowInactive: true });
+    requirePermission(me, "reports");
+
+    const [allClients, allLoans] = await Promise.all([
+      ctx.db.query("clients").collect(),
+      ctx.db.query("loans").collect(),
+    ]);
+
+    const clients = allClients.filter((c) => {
+      if (me.role === "BRANCH_MANAGER") return c.branchId === me.branchId;
+      if (me.role === "FIELD_STAFF") return c.assignedTo === me._id || c.createdBy === me._id;
+      if (me.role === "CLIENT") return me.clientId === c._id;
+      return true;
+    });
+    const scopedIds = new Set(clients.map((c) => c._id));
+    const loansByClient: Record<string, string[]> = {};
+    for (const l of allLoans) {
+      if (!scopedIds.has(l.clientId)) continue;
+      if (me.role === "BRANCH_MANAGER" && l.branchId !== me.branchId) continue;
+      const arr = loansByClient[l.clientId] ?? [];
+      arr.push(l.loanId);
+      loansByClient[l.clientId] = arr;
+    }
+
+    const matches = resolveClientMatches(clients, loansByClient, args.q);
+    return {
+      query: args.q.trim(),
+      matches: matches.map((m) => ({
+        clientId: m.clientId as string,
+        code: m.code,
+        name: m.name,
+        mobileMasked: maskIdValue(m.mobile),
+        loanIds: m.loanIds,
+        matchedOn: m.matchedOn,
+      })),
+    };
+  },
+});
+
+/**
+ * Complete client statement — client details, loan details, next due date
+ * and the chronological ledger — built from the same stored ledgers the
+ * four range reports use. Backend-enforced role/branch scoping; identity
+ * numbers are masked unless the viewer is a SUPER_ADMIN. If `loanDbId` is
+ * omitted the combined statement across ALL of the client's loans is
+ * returned; if given it must belong to this client or the query refuses.
+ */
+export const statement = query({
+  args: {
+    clientId: v.id("clients"),
+    loanDbId: v.optional(v.id("loans")),
+    fromDay: v.optional(v.string()), // YYYY-MM-DD, institution-local (IST)
+    toDay: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx, { allowInactive: true });
+    requirePermission(me, "reports");
+
+    const client = await ctx.db.get(args.clientId);
+    if (!client) throw new AppError("Client not found.");
+    // Role/branch scope — the same rule the range reports apply.
+    const allowed =
+      me.role === "SUPER_ADMIN" ||
+      me.role === "ACCOUNTANT" ||
+      (me.role === "BRANCH_MANAGER" && client.branchId === me.branchId) ||
+      (me.role === "FIELD_STAFF" &&
+        (client.assignedTo === me._id || client.createdBy === me._id)) ||
+      (me.role === "CLIENT" && me.clientId === client._id);
+    if (!allowed) throw new AppError("This client is outside your access.");
+
+    // Period filter — full history when omitted, IST day bounds otherwise.
+    let filters: { fromMs: number; toMs: number } | null = null;
+    if (args.fromDay != null || args.toDay != null) {
+      if (args.fromDay == null || args.toDay == null) {
+        throw new AppError("Pick both From and To dates, or neither for full history.");
+      }
+      const range = resolveRange(args.fromDay, args.toDay);
+      if ("error" in range) throw new AppError(range.error);
+      const bounds = rangeBounds(range.fromDay, range.toDay);
+      if (!bounds) throw new AppError("Invalid date range.");
+      filters = { fromMs: bounds.from, toMs: bounds.to };
+    }
+
+    /* --------------------------- Loan documents -------------------------- */
+    let loans = (await ctx.db.query("loans").withIndex("by_client", (q) =>
+      q.eq("clientId", client._id),
+    ).collect()).filter(
+      (l) => me.role !== "BRANCH_MANAGER" || l.branchId === me.branchId,
+    );
+    if (args.loanDbId) {
+      const picked = loans.find((l) => l._id === args.loanDbId);
+      if (!picked) throw new AppError("That loan does not belong to this client.");
+      loans = [picked];
+    }
+    loans = [...loans].sort((a, b) => a.createdAt - b.createdAt);
+
+    const statementLoans: StatementLoan[] = [];
+    const loanViews: ReturnType<typeof deriveLoanView>[] = [];
+    const loanProducts: ({ name: string } | null)[] = [];
+    const now = Date.now();
+    for (const loan of loans) {
+      const [schedule, collections, receipts, application, product] =
+        await Promise.all([
+          ctx.db
+            .query("loanSchedules")
+            .withIndex("by_loan", (q) => q.eq("loanId", loan._id))
+            .collect(),
+          ctx.db
+            .query("collections")
+            .withIndex("by_loan", (q) => q.eq("loanId", loan._id))
+            .collect(),
+          ctx.db
+            .query("receipts")
+            .withIndex("by_client", (q) => q.eq("clientId", client._id))
+            .collect(),
+          loan.applicationId ? ctx.db.get(loan.applicationId) : null,
+          ctx.db.get(loan.productId),
+        ]);
+      statementLoans.push({
+        ...loan,
+        schedule: schedule
+          .sort((a, b) => a.index - b.index)
+          .map((r) => ({
+            _id: r._id,
+            index: r.index,
+            dueDate: r.dueDate,
+            principal: r.principal,
+            interest: r.interest,
+            totalDue: r.totalDue,
+            paid: r.paid,
+          })),
+        collections: collections.map((c) => ({
+          _id: c._id,
+          code: c.code,
+          createdAt: c.createdAt,
+          amount: c.amount,
+          principalPortion: c.principalPortion,
+          interestPortion: c.interestPortion,
+          mode: c.mode,
+          status: c.status,
+          reversalOfId: c.reversalOfId,
+          receiptNumber: c.receiptNumber,
+          staffId: c.staffId,
+          remarks: c.remarks,
+        })),
+        receipts: receipts
+          .filter((r) => r.loanId === loan._id)
+          .map((r) => ({
+            _id: r._id,
+            collectionId: r.collectionId,
+            number: r.number,
+            amount: r.amount,
+            createdAt: r.createdAt,
+            outstandingAfter: r.outstandingAfter,
+          })),
+        requestedAmount: application?.amount,
+        // Loan purpose lives on the client's joining-form application.
+        purpose: client.loanRequest?.purpose
+          ? (loanPurposeLabel(client.loanRequest.purpose) ?? undefined)
+          : undefined,
+      });
+      loanViews.push(deriveLoanView(loan, schedule, now));
+      loanProducts.push(product ? { name: product.name } : null);
+    }
+
+    const statementFilter = filters
+      ? { fromMs: filters.fromMs, toMs: filters.toMs }
+      : {};
+    const combined =
+      statementLoans.length > 1
+        ? buildCombinedStatement(statementLoans, statementFilter, now)
+        : null;
+    const perLoan = statementLoans.map((l) =>
+      buildLoanStatement(l, statementFilter, now),
+    );
+
+    /* ------------------------- Joined display facts ----------------------- */
+    const [centers, groups, branch, profiles] = await Promise.all([
+      ctx.db.query("centers").collect(),
+      ctx.db.query("groups").collect(),
+      ctx.db.get(client.branchId),
+      ctx.db.query("profiles").collect(),
+    ]);
+    const profileById = new Map(profiles.map((p) => [p._id, p]));
+    const center = client.centerId
+      ? centers.find((c) => c._id === client.centerId)
+      : centers.find((c) => c.code === client.centerCode);
+    const group = client.groupCode
+      ? groups.find((g) => g.code === client.groupCode)
+      : undefined;
+    // Client photo — the applicant's own geo-tagged capture (never the
+    // co-applicant's), served from private storage via a signed URL.
+    const geoPhotos = await ctx.db
+      .query("clientGeoPhotos")
+      .withIndex("by_client", (q) => q.eq("clientId", client._id))
+      .collect();
+    const ownPhoto = geoPhotos
+      .filter((p) => !p.coApplicant)
+      .sort((a, b) => b.uploadedAt - a.uploadedAt)[0];
+    const photoUrl = ownPhoto
+      ? await ctx.storage.getUrl(ownPhoto.storageId)
+      : null;
+
+    // Identity numbers: masked for everyone; full values for SUPER_ADMIN.
+    const revealAllowed = me.role === "SUPER_ADMIN";
+    const aadhaar =
+      client.kycDocType === "AADHAAR" ||
+      client.kycDocuments?.includes("AADHAAR")
+        ? (client.kycDocRef ?? null)
+        : null;
+    const pan = client.panNumber ?? null;
+    const voter = client.voterId ?? null;
+
+    return {
+      generatedAt: now,
+      period:
+        filters != null
+          ? { fromKey: istDateKey(filters.fromMs), toKey: istDateKey(filters.toMs) }
+          : null,
+      revealAllowed,
+      client: {
+        _id: client._id,
+        code: client.code,
+        name: client.name,
+        mobileMasked: maskIdValue(client.mobile),
+        age: client.age,
+        gender: client.gender,
+        address: client.address ?? null,
+        village: client.village ?? null,
+        district: client.district ?? null,
+        state: client.state ?? null,
+        pin: client.pin ?? null,
+        maternalHomeAddress: client.maternalHomeAddress ?? null,
+        husbandName: client.husbandName ?? client.fatherName ?? null,
+        fatherName: client.applicantFatherName ?? null,
+        occupation: client.occupation ?? null,
+        monthlyIncome: client.monthlyIncome,
+        householdIncome: client.householdIncome,
+        kycStatus: client.kycStatus,
+        kycDocType: client.kycDocType ?? null,
+        aadhaarMasked: maskIdValue(aadhaar),
+        aadhaar: revealAllowed ? aadhaar : null,
+        panMasked: maskIdValue(pan),
+        pan: revealAllowed ? pan : null,
+        voterMasked: maskIdValue(voter),
+        voter: revealAllowed ? voter : null,
+        photoUrl,
+        center: center
+          ? { code: center.code, name: center.name }
+          : client.centerCode
+            ? { code: client.centerCode, name: null }
+            : null,
+        group: group ? { code: group.code, name: group.name } : null,
+        branch: branch ? { code: branch.code, name: branch.name } : null,
+        createdAt: client.createdAt,
+        registeredBy: profileById.get(client.createdBy)
+          ? {
+              name: profileById.get(client.createdBy)!.name,
+              role: profileById.get(client.createdBy)!.role,
+              profileId: client.createdBy,
+            }
+          : null,
+        assignedOfficer: profileById.get(client.assignedTo)
+          ? { name: profileById.get(client.assignedTo)!.name, profileId: client.assignedTo }
+          : null,
+      },
+      loans: statementLoans.map((l, i) => {
+        const rep = perLoan[i].repayment;
+        const sum = perLoan[i].summary;
+        const view = loanViews[i];
+        const principalPaid = round2Sum(
+          l.collections
+            .filter((c) => c.status === "NORMAL" && !c.reversalOfId)
+            .map((c) => c.principalPortion),
+        );
+        return {
+          _id: l._id,
+          loanId: l.loanId,
+          status: l.status,
+          displayStatus: view.displayStatus,
+          product: loanProducts[i],
+          requestedAmount: l.requestedAmount ?? null,
+          sanctionedAmount: l.principal,
+          charges: l.charges,
+          disbursedAmount: l.disbursedAt != null ? l.principal : null,
+          disbursedAt: l.disbursedAt ?? null,
+          approvedAt: l.approvedAt ?? null,
+          appliedAt: l.createdAt,
+          tenure: l.tenure,
+          frequency: l.frequency,
+          installment: l.installment,
+          interestRate: l.interestRate,
+          interestMethod: l.interestMethod,
+          purpose: l.purpose ?? null,
+          firstInstallmentDate: l.schedule[0]?.dueDate ?? null,
+          lastInstallmentDate: l.schedule[l.schedule.length - 1]?.dueDate ?? null,
+          totalPayable: round2Sum(l.schedule.map((r) => r.totalDue)),
+          totalPaid: sum.lifetimePaid,
+          outstandingPrincipal: round2Sum(
+            l.schedule.map((r) => r.principal),
+          ) - principalPaid,
+          outstanding: rep.outstanding,
+          nextDueDate: rep.nextDueDate,
+          overdueAmount: rep.totalOverdueAmount,
+        };
+      }),
+      selected: combined ?? {
+        loanId: perLoan[0]?.loanId ?? null,
+        ledger: perLoan[0]?.ledger ?? [],
+        summary: perLoan[0]?.summary ?? null,
+        repayment: perLoan[0]?.repayment ?? null,
+      },
+      combinedAvailable: combined != null,
+      staffNames: Object.fromEntries(
+        profiles.map((p) => [p._id, p.name]),
+      ),
+    };
+  },
+});
+
+/** Sum a list of numbers, rounded to paise. */
+function round2Sum(values: number[]): number {
+  return Math.round((values.reduce((s, n) => s + n, 0) + Number.EPSILON) * 100) / 100;
+}
