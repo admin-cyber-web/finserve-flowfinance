@@ -23,6 +23,7 @@
  * No DOM, no Convex imports — safe for browser, backend and `bun test`.
  */
 import { RECOVERY_LABELS, WALLET_TX_LABELS } from "./types";
+import { rowOutstanding } from "./schedule";
 
 export const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 export const DAY_MS = 86_400_000;
@@ -573,9 +574,9 @@ export function buildDateReport(p: DateReportParams): DateReportResult {
   const overdueByLoan = new Map<string, { amount: number; since: number }>();
   for (const s of p.schedules) {
     if (!scopedLoanIds.has(s.loanId)) continue;
-    if (s.paid >= s.totalDue || s.dueDate >= p.now) continue;
+    if (rowOutstanding(s) <= 0 || s.dueDate >= p.now) continue;
     const cur = overdueByLoan.get(s.loanId);
-    const amount = s.totalDue - s.paid;
+    const amount = rowOutstanding(s);
     if (cur) {
       cur.amount += amount;
       cur.since = Math.min(cur.since, s.dueDate);
@@ -619,7 +620,7 @@ export function buildDateReport(p: DateReportParams): DateReportResult {
     overdueInstalments: p.schedules.filter(
       (s) =>
         scopedLoanIds.has(s.loanId) &&
-        s.paid < s.totalDue &&
+        rowOutstanding(s) > 0 &&
         s.dueDate < p.now,
     ).length,
     overdueAmount: round2(

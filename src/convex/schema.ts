@@ -398,6 +398,16 @@ const schema = defineSchema(
       approvedBy: v.optional(v.id("profiles")),
       approvedAt: v.optional(v.number()),
       closeDate: v.optional(v.number()),
+      // SUPER_ADMIN closure lifecycle (surrender / settle / close / archive).
+      // `closeDate` is the closure moment; `closureKind` is REPAYMENT |
+      // SURRENDER | SETTLEMENT; `waivedAmount` is money written off by an
+      // approved settlement — never counted as cash received. Archived loans
+      // are hidden from ordinary loan screens but kept for audit.
+      closedBy: v.optional(v.id("profiles")),
+      closureKind: v.optional(v.string()),
+      closureReason: v.optional(v.string()),
+      waivedAmount: v.optional(v.number()),
+      archivedAt: v.optional(v.number()),
       nextDueDate: v.optional(v.number()),
       lastPaymentAt: v.optional(v.number()),
       overdueDays: v.number(),
@@ -417,6 +427,9 @@ const schema = defineSchema(
       interest: v.number(),
       totalDue: v.number(),
       paid: v.number(),
+      // Amounts written off by an approved settlement — reduces what is
+      // open WITHOUT ever being counted as money received.
+      waived: v.optional(v.number()),
       remaining: v.number(),
       status: v.string(), // PAID | PARTIAL | PENDING | OVERDUE
       updatedAt: v.number(),

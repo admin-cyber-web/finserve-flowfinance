@@ -15,8 +15,11 @@ import {
 } from "@/components/fs/primitives";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { LoanActions } from "@/components/fs/LoanActions";
 import { useProfile } from "@/hooks/use-profile";
 import { LOAN_STATUS_LABELS, RECOVERY_KINDS, RECOVERY_LABELS } from "@/lib/finance/types";
+import { round2 } from "@/lib/finance/money";
+import { rowOutstanding } from "@/lib/finance/schedule";
 import { cn } from "@/lib/utils";
 import { useMutation, useQuery } from "convex/react";
 import { FileText, HandCoins, IndianRupee, PhoneCall } from "lucide-react";
@@ -92,6 +95,13 @@ export default function LoanDetail() {
   };
 
   const paidRows = rows.filter((r) => r.paid >= r.totalDue).length;
+  const openOutstanding = round2(
+    rows.reduce((s, r) => s + rowOutstanding(r), 0),
+  );
+  const isClosureVisible =
+    loan.closureKind !== undefined ||
+    loan.closeDate !== undefined ||
+    ["SURRENDERED", "SETTLED", "CLOSED"].includes(loan.status);
 
   return (
     <div className="space-y-4 pb-10">
@@ -162,6 +172,56 @@ export default function LoanDetail() {
         </Button>
       </div>
 
+      {/* SUPER_ADMIN closure controls — enforced server-side as well. */}
+      <LoanActions
+        loan={loan}
+        outstanding={openOutstanding}
+        clientName={client?.name ?? undefined}
+      />
+
+      {/* Closure record — final amounts, waived dues and archive state. */}
+      {isClosureVisible && (
+        <section className="border-2 border-ink bg-sky/20 p-4 shadow-hard-sm">
+          <SectionTitle>Closure record</SectionTitle>
+          <KeyValue
+            k="Status"
+            v={LOAN_STATUS_LABELS[loan.status] ?? loan.status}
+          />
+          <KeyValue
+            k="Closure type"
+            v={
+              loan.closureKind === "SURRENDER"
+                ? "Surrendered before completion"
+                : loan.closureKind === "SETTLEMENT"
+                  ? "Closed by approved settlement"
+                  : loan.closureKind === "CANCELLED"
+                    ? "Cancelled before disbursement"
+                    : loan.closureKind === "REPAYMENT"
+                      ? "Fully repaid"
+                      : "—"
+            }
+          />
+          <KeyValue k="Closure date" v={formatDate(loan.closeDate)} />
+          <KeyValue
+            k="Final amount paid"
+            v={<Money value={loan.paidTotal} />}
+          />
+          <KeyValue
+            k="Amount waived (not cash)"
+            v={<Money value={loan.waivedAmount ?? 0} />}
+          />
+          <KeyValue
+            k="Remaining balance"
+            v={<Money value={loan.status === "SURRENDERED" ? openOutstanding : loan.outstanding} />}
+          />
+          <KeyValue k="Reason" v={loan.closureReason ?? "—"} />
+          <KeyValue
+            k="Archived"
+            v={loan.archivedAt ? formatDate(loan.archivedAt) : "Not archived"}
+          />
+        </section>
+      )}
+
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <div className="border-2 border-ink bg-white p-2.5 shadow-hard-sm">
           <div className="text-[10px] font-black uppercase text-muted-foreground">Rate</div>
@@ -222,13 +282,14 @@ export default function LoanDetail() {
                 </thead>
                 <tbody>
                   {rows.map((r) => {
-                    const overdue = r.paid < r.totalDue && r.dueDate < Date.now();
+                    const open = rowOutstanding(r) > 0;
+                    const overdue = open && r.dueDate < Date.now();
                     return (
                       <tr
                         key={r._id}
                         className={cn(
                           "border-b border-ink/15 last:border-0",
-                          overdue && r.paid < r.totalDue && "bg-blush/60",
+                          overdue && "bg-blush/60",
                         )}
                       >
                         <td className="px-2 py-1.5 font-mono font-black">{r.index}</td>
@@ -244,6 +305,16 @@ export default function LoanDetail() {
                         </td>
                         <td className="px-2 py-1.5 text-right font-mono tabular-nums">
                           ₹{r.paid.toLocaleString("en-IN")}
+                          {(r.waived ?? 0) > 0 && (
+                            <span className="block text-[10px] font-black uppercase text-destructive">
+                              waived ₹{(r.waived ?? 0).toLocaleString("en-IN")}
+                            </span>
+                          )}
+                          {open && (
+                            <span className="block text-[10px] font-semibold text-muted-foreground">
+                              bal ₹{rowOutstanding(r).toLocaleString("en-IN")}
+                            </span>
+                          )}
                         </td>
                         <td className="px-2 py-1.5">
                           <StatusChip status={r.status} />

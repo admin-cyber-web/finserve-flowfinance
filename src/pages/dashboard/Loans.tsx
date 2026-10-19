@@ -8,24 +8,45 @@ import {
   formatDate,
 } from "@/components/fs/primitives";
 import { Button } from "@/components/ui/button";
+import { LoanActions } from "@/components/fs/LoanActions";
 import { useProfile } from "@/hooks/use-profile";
 import { LOAN_STATUS_LABELS } from "@/lib/finance/types";
 import { cn } from "@/lib/utils";
 import { useQuery } from "convex/react";
-import { HandCoins, Plus, Search } from "lucide-react";
+import { Archive, HandCoins, Plus, Search } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router";
 
-const TABS = ["ALL", "ACTIVE", "OVERDUE", "APPROVED", "DISBURSED", "CLOSED"] as const;
+const TABS = [
+  "ALL",
+  "ACTIVE",
+  "OVERDUE",
+  "APPROVED",
+  "DISBURSED",
+  "CLOSED",
+  "SURRENDERED",
+  "SETTLED",
+] as const;
 
 export default function Loans() {
   const navigate = useNavigate();
-  const { can } = useProfile();
+  const { can, profile } = useProfile();
   const [tab, setTab] = useState<(typeof TABS)[number]>("ALL");
   const [q, setQ] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
+
+  // Archived loans are an authorized audit view — only offered to the roles
+  // the backend accepts them for.
+  const senior =
+    profile?.role === "SUPER_ADMIN" || profile?.role === "ACCOUNTANT";
 
   const loans = useQuery(api.loans.list, {
-    status: tab === "ALL" ? undefined : tab,
+    status: showArchived
+      ? "ARCHIVED"
+      : tab === "ALL"
+        ? undefined
+        : tab,
+    includeArchived: showArchived ? true : undefined,
     search: q.trim() || undefined,
     limit: 200,
   });
@@ -58,15 +79,33 @@ export default function Loans() {
         {TABS.map((t) => (
           <button
             key={t}
-            onClick={() => setTab(t)}
+            onClick={() => {
+              setTab(t);
+              setShowArchived(false);
+            }}
             className={cn(
               "shrink-0 border-2 border-ink px-2.5 py-1.5 text-[11px] font-black uppercase",
-              tab === t ? "bg-navy text-paper shadow-hard-sm" : "bg-white",
+              !showArchived && tab === t
+                ? "bg-navy text-paper shadow-hard-sm"
+                : "bg-white",
             )}
           >
             {t}
           </button>
         ))}
+        {senior && (
+          <button
+            onClick={() => setShowArchived((v) => !v)}
+            className={cn(
+              "flex shrink-0 items-center gap-1 border-2 border-ink px-2.5 py-1.5 text-[11px] font-black uppercase",
+              showArchived
+                ? "bg-navy text-paper shadow-hard-sm"
+                : "bg-white",
+            )}
+          >
+            <Archive className="size-3" /> Archived
+          </button>
+        )}
       </div>
 
       {loans === undefined ? (
@@ -80,10 +119,15 @@ export default function Loans() {
       ) : (
         <div className="flex flex-col gap-2">
           {loans.map(({ loan, view, client, nextDue }) => (
-            <button
+            <div
               key={loan._id}
+              role="link"
+              tabIndex={0}
               onClick={() => navigate(`/dashboard/loans/${loan._id}`)}
-              className="w-full border-2 border-ink bg-card p-3 text-left shadow-hard-sm transition-transform active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") navigate(`/dashboard/loans/${loan._id}`);
+              }}
+              className="w-full cursor-pointer border-2 border-ink bg-card p-3 text-left shadow-hard-sm transition-transform active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
@@ -123,7 +167,22 @@ export default function Loans() {
                   {view.overdueDays}d overdue · {view.overdueAmount.toLocaleString("en-IN")} due
                 </div>
               )}
-            </button>
+              {loan.archivedAt && (
+                <div className="mt-1.5 border-2 border-ink bg-paper px-2 py-1 text-[10px] font-black uppercase text-muted-foreground">
+                  Archived {formatDate(loan.archivedAt)} · records preserved
+                </div>
+              )}
+              {profile?.role === "SUPER_ADMIN" && (
+                <div className="mt-2 border-t border-ink/15 pt-2">
+                  <LoanActions
+                    loan={loan}
+                    outstanding={loan.outstanding}
+                    clientName={client?.name ?? undefined}
+                    compact
+                  />
+                </div>
+              )}
+            </div>
           ))}
         </div>
       )}

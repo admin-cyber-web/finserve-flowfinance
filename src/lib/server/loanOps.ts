@@ -9,7 +9,7 @@
 import type { Doc, Id } from "../../convex/_generated/dataModel";
 import { collectionEntry, disbursementEntry } from "../finance/journal";
 import { round2 } from "../finance/money";
-import { generateSchedule, type ScheduleRow } from "../finance/schedule";
+import { generateSchedule, rowOutstanding, type ScheduleRow } from "../finance/schedule";
 import type { Frequency, InterestMethod, PayMode } from "../finance/types";
 import { evaluateEligibility } from "../finance/eligibility";
 import {
@@ -61,6 +61,14 @@ export function baseScheduleRows(
   return result.rows;
 }
 
+/** Statuses that end the ordinary collection/disbursement lifecycle. */
+export const TERMINAL_LOAN_STATUSES = [
+  "CLOSED",
+  "SETTLED",
+  "SURRENDERED",
+  "WRITTEN_OFF",
+];
+
 export interface LoanView {
   displayStatus: string;
   overdueDays: number;
@@ -76,10 +84,10 @@ export function deriveLoanView(
   rows: Doc<"loanSchedules">[],
   now: number,
 ): LoanView {
-  const openRows = rows.filter((r) => r.paid < r.totalDue);
+  const openRows = rows.filter((r) => rowOutstanding(r) > 0);
   const overdueRows = openRows.filter((r) => r.dueDate < now);
   const overdueAmount = round2(
-    overdueRows.reduce((s, r) => s + (r.totalDue - r.paid), 0),
+    overdueRows.reduce((s, r) => s + rowOutstanding(r), 0),
   );
   const overdueDays = overdueRows.length
     ? Math.floor((now - Math.min(...overdueRows.map((r) => r.dueDate))) / 86_400_000)
@@ -88,7 +96,7 @@ export function deriveLoanView(
   const dueToday = round2(
     openRows
       .filter((r) => r.dueDate >= dueTodayStart && r.dueDate < dueTodayStart + 86_400_000)
-      .reduce((s, r) => s + (r.totalDue - r.paid), 0),
+      .reduce((s, r) => s + rowOutstanding(r), 0),
   );
 
   let displayStatus = loan.status;
@@ -98,6 +106,11 @@ export function deriveLoanView(
     else displayStatus = "ACTIVE";
   }
 
+  // A surrendered / settled / closed loan has left the recovery lifecycle:
+  // its schedule may still show open rows (surrendered loans keep the debt
+  // on record), but it must not appear as an overdue collection target.
+  const terminal = TERMINAL_LOAN_STATUSES.includes(loan.status);
+
   const progressPct =
     loan.totalPayable > 0
       ? Math.min(100, round2((loan.paidTotal / loan.totalPayable) * 100))
@@ -105,12 +118,12 @@ export function deriveLoanView(
 
   return {
     displayStatus,
-    overdueDays,
-    overdueAmount,
+    overdueDays: terminal ? 0 : overdueDays,
+    overdueAmount: terminal ? 0 : overdueAmount,
     nextDueDate: openRows.length
       ? Math.min(...openRows.map((r) => r.dueDate))
       : null,
-    dueToday,
+    dueToday: terminal ? 0 : dueToday,
     progressPct,
   };
 }
@@ -135,7 +148,7 @@ export function allocatePayment(
 
   for (const row of [...rows].sort((a, b) => a.index - b.index)) {
     if (left <= 0) break;
-    const due = round2(row.totalDue - row.paid);
+    const due = rowOutstanding(row);
     if (due <= 0) continue;
     const take = round2(Math.min(left, due));
     const interestLeft = round2(row.interest - Math.min(row.paid, row.interest));
@@ -488,15 +501,16 @@ export async function recordCollection(
     .withIndex("by_loan", (q) => q.eq("loanId", loan._id))
     .collect();
   const outstanding = round2(
-    allRows.reduce((s, r) => s + Math.max(0, r.totalDue - r.paid), 0),
+    allRows.reduce((s, r) => s + rowOutstanding(r), 0),
   );
   const paidTotal = round2(allRows.reduce((s, r) => s + r.paid, 0));
   const openRows = allRows
-    .filter((r) => r.paid < r.totalDue)
+    .filter((r) => rowOutstanding(r) > 0)
     .sort((a, b) => a.index - b.index);
 
   const closed = outstanding <= 0;
-  const overdue = !closed && allRows.some((r) => r.paid < r.totalDue && r.dueDate < nowMs);
+  const overdue =
+    !closed && allRows.some((r) => rowOutstanding(r) > 0 && r.dueDate < nowMs);
 
   await ctx.db.patch(loan._id, {
     outstanding,
@@ -591,6 +605,11 @@ export async function reverseCollection(
 
   const loan = await ctx.db.get(original.loanId);
   if (!loan) throw new AppError("Loan not found.");
+  if (["CLOSED", "SETTLED", "SURRENDERED", "WRITTEN_OFF"].includes(loan.status)) {
+    throw new AppError(
+      `Loan ${loan.loanId} is ${loan.status.toLowerCase()} — a resolved loan cannot be reopened by reversing a payment.`,
+    );
+  }
 
   // 1. Compensating collection row (original stays intact).
   const reversalCode = await makeCode(ctx, "collection", "PY-", 6);
@@ -647,7 +666,7 @@ export async function reverseCollection(
     left = round2(left - subtract);
     await ctx.db.patch(row._id, {
       paid: newPaid,
-      remaining: round2(row.totalDue - newPaid),
+      remaining: round2(row.totalDue - newPaid - (row.waived ?? 0)),
       status: newPaid <= 0 ? "PENDING" : nowMs > row.dueDate ? "OVERDUE" : "PARTIAL",
       updatedAt: nowMs,
     });
@@ -690,7 +709,7 @@ export async function reverseCollection(
     .withIndex("by_loan", (q) => q.eq("loanId", original.loanId))
     .collect();
   const outstanding = round2(
-    freshRows.reduce((s, r) => s + Math.max(0, r.totalDue - r.paid), 0),
+    freshRows.reduce((s, r) => s + rowOutstanding(r), 0),
   );
   const paidTotal = round2(freshRows.reduce((s, r) => s + r.paid, 0));
   await ctx.db.patch(loan._id, {
@@ -720,6 +739,387 @@ export async function reverseCollection(
   });
 
   return { reversalId, receiptNumber: original.receiptNumber ?? reversalCode };
+}
+
+/* -------------------- SUPER_ADMIN closure operations --------------------- */
+
+/** Statuses a disbursed loan can still operate under. */
+const OPERABLE_LOAN_STATUSES = ["DISBURSED", "ACTIVE", "OVERDUE"];
+
+async function scheduleRowsSorted(ctx: Mtx, loanId: Id<"loans">) {
+  return (
+    await ctx.db
+      .query("loanSchedules")
+      .withIndex("by_loan", (q) => q.eq("loanId", loanId))
+      .collect()
+  ).sort((a, b) => a.index - b.index);
+}
+
+/** Open balance of a loan, derived from its schedule — never a stale field. */
+export async function loanOpenBalance(
+  ctx: Mtx,
+  loanId: Id<"loans">,
+): Promise<number> {
+  const rows = await scheduleRowsSorted(ctx, loanId);
+  return round2(rows.reduce((s, r) => s + rowOutstanding(r), 0));
+}
+
+export interface LoanOpArgs {
+  loanId: Id<"loans">;
+  actor: Doc<"profiles">;
+  reason?: string;
+  device?: string;
+  now?: number;
+}
+
+/**
+ * SUPER_ADMIN: terminate a loan before its normal completion.
+ *
+ * Dues are NEVER erased — the schedule rows, payments and outstanding
+ * balance stay on the record for recovery and audit — but the loan leaves
+ * the ordinary collection lifecycle (collections and disbursement are
+ * refused on a surrendered loan) and drops out of overdue reporting.
+ */
+export async function surrenderLoan(
+  ctx: Mtx,
+  args: LoanOpArgs & { reason: string },
+) {
+  const loan = await ctx.db.get(args.loanId);
+  if (!loan) throw new AppError("Loan not found.");
+  if (!OPERABLE_LOAN_STATUSES.includes(loan.status)) {
+    throw new AppError(
+      `Loan ${loan.loanId} is ${loan.status.toLowerCase()} — only a disbursed loan can be surrendered.`,
+    );
+  }
+  const outstanding = await loanOpenBalance(ctx, loan._id);
+
+  await ctx.db.patch(loan._id, {
+    status: "SURRENDERED",
+    closureKind: "SURRENDER",
+    closureReason: args.reason,
+    closedBy: args.actor._id,
+    nextDueDate: undefined,
+    overdueDays: 0,
+  });
+  await logAudit(ctx, {
+    actorId: args.actor._id,
+    actorName: args.actor.name,
+    role: args.actor.role,
+    action: "LOAN_SURRENDERED",
+    entity: "loans",
+    entityId: loan.loanId,
+    before: { status: loan.status, outstanding: loan.outstanding },
+    after: { status: "SURRENDERED", outstanding, reason: args.reason },
+    referenceId: loan.loanId,
+    branchId: loan.branchId,
+    device: args.device,
+  });
+  await notify(ctx, loan.staffId, {
+    title: "Loan surrendered",
+    body: `${loan.loanId} was surrendered by administration. Outstanding ₹${outstanding.toLocaleString("en-IN")} stays on record.`,
+    kind: "LOAN",
+  });
+  return {
+    ok: true as const,
+    loanId: loan.loanId,
+    status: "SURRENDERED" as const,
+    outstanding,
+  };
+}
+
+/**
+ * SUPER_ADMIN: settle a loan for an agreed amount.
+ *
+ * The actual payment is recorded through the ONE collection path (receipt,
+ * allocation, wallet and journal all stay consistent); the waived remainder
+ * closes the open rows WITHOUT ever being counted as cash received.
+ */
+export async function settleLoan(
+  ctx: Mtx,
+  args: LoanOpArgs & { settlementAmount: number; mode: string; reason: string },
+) {
+  const nowMs = args.now ?? Date.now();
+  const loan = await ctx.db.get(args.loanId);
+  if (!loan) throw new AppError("Loan not found.");
+  if (!OPERABLE_LOAN_STATUSES.includes(loan.status)) {
+    throw new AppError(
+      `Loan ${loan.loanId} is ${loan.status.toLowerCase()} — only a disbursed loan can be settled.`,
+    );
+  }
+  const outstanding = await loanOpenBalance(ctx, loan._id);
+  if (outstanding <= 0) {
+    throw new AppError("Nothing is outstanding on this loan — use Close instead of a settlement.");
+  }
+  const amount = round2(args.settlementAmount);
+  if (!Number.isFinite(amount) || amount < 0) {
+    throw new AppError("Settlement amount must be zero or more.");
+  }
+  if (amount > outstanding) {
+    throw new AppError(
+      `Settlement ₹${amount.toLocaleString("en-IN")} cannot exceed the outstanding ₹${outstanding.toLocaleString("en-IN")}.`,
+    );
+  }
+  const mode: PayMode =
+    args.mode === "UPI" || args.mode === "BANK" ? args.mode : "CASH";
+
+  // 1. The real money in — same ledger path as any collection.
+  let receiptNumber: string | null = null;
+  if (amount > 0) {
+    const paid = await recordCollection(ctx, {
+      loanId: loan._id,
+      actor: args.actor,
+      amount,
+      mode,
+      remarks: `Settlement of ${loan.loanId}: ${args.reason}`,
+      now: nowMs,
+    });
+    receiptNumber = paid.receiptNumber;
+  }
+
+  // 2. Waive the remainder on the open rows — visible, never "paid".
+  const rows = await scheduleRowsSorted(ctx, loan._id);
+  let waivedTotal = 0;
+  for (const row of rows.filter((r) => rowOutstanding(r) > 0)) {
+    const waive = rowOutstanding(row);
+    waivedTotal = round2(waivedTotal + waive);
+    const newWaived = round2((row.waived ?? 0) + waive);
+    await ctx.db.patch(row._id, {
+      waived: newWaived,
+      remaining: round2(row.totalDue - row.paid - newWaived),
+      status: "WAIVED",
+      updatedAt: nowMs,
+    });
+  }
+
+  const freshRows = await scheduleRowsSorted(ctx, loan._id);
+  const paidTotal = round2(freshRows.reduce((s, r) => s + r.paid, 0));
+  await ctx.db.patch(loan._id, {
+    status: "SETTLED",
+    outstanding: 0,
+    paidTotal,
+    closeDate: nowMs,
+    closedBy: args.actor._id,
+    closureKind: "SETTLEMENT",
+    closureReason: args.reason,
+    waivedAmount: round2(waivedTotal),
+    nextDueDate: undefined,
+    overdueDays: 0,
+  });
+  await logAudit(ctx, {
+    actorId: args.actor._id,
+    actorName: args.actor.name,
+    role: args.actor.role,
+    action: "LOAN_SETTLED",
+    entity: "loans",
+    entityId: loan.loanId,
+    before: { status: loan.status, outstanding },
+    after: {
+      status: "SETTLED",
+      settlementPaid: amount,
+      waived: waivedTotal,
+      receiptNumber,
+      reason: args.reason,
+    },
+    referenceId: loan.loanId,
+    branchId: loan.branchId,
+    device: args.device,
+  });
+  await notify(ctx, loan.staffId, {
+    title: "Loan settled",
+    body: `${loan.loanId} settled: ₹${amount.toLocaleString("en-IN")} received${waivedTotal > 0 ? `, ₹${waivedTotal.toLocaleString("en-IN")} waived` : ""}.`,
+    kind: "LOAN",
+  });
+  return {
+    ok: true as const,
+    loanId: loan.loanId,
+    status: "SETTLED" as const,
+    settlementPaid: amount,
+    waivedAmount: round2(waivedTotal),
+    receiptNumber,
+    outstandingAfter: 0,
+  };
+}
+
+/**
+ * SUPER_ADMIN: close a loan whose dues are fully cleared. Never marks a loan
+ * repaid by fiat — the open balance must actually be zero (payments and/or
+ * an already-recorded settlement waiver).
+ */
+export async function closeLoan(ctx: Mtx, args: LoanOpArgs) {
+  const nowMs = args.now ?? Date.now();
+  const loan = await ctx.db.get(args.loanId);
+  if (!loan) throw new AppError("Loan not found.");
+  if (loan.status === "CLOSED") {
+    throw new AppError("This loan is already closed.");
+  }
+  if (loan.status === "SETTLED") {
+    throw new AppError("This loan is already settled — a settled loan is financially resolved.");
+  }
+  if (!["APPROVED", "DISBURSED", "ACTIVE", "OVERDUE", "SURRENDERED"].includes(loan.status)) {
+    throw new AppError(
+      `Loan ${loan.loanId} is ${loan.status.toLowerCase()} — it cannot be closed.`,
+    );
+  }
+  const outstanding = await loanOpenBalance(ctx, loan._id);
+  if (outstanding > 0) {
+    throw new AppError(
+      `₹${outstanding.toLocaleString("en-IN")} is still outstanding — Close only clears fully repaid loans. Use Settle (with waiver) or Surrender to resolve the rest.`,
+    );
+  }
+  const reason = args.reason?.trim();
+  const closureKind =
+    loan.closureKind ?? (loan.status === "APPROVED" ? "CANCELLED" : "REPAYMENT");
+  await ctx.db.patch(loan._id, {
+    status: "CLOSED",
+    closeDate: nowMs,
+    closedBy: args.actor._id,
+    closureKind,
+    ...(reason ? { closureReason: reason } : {}),
+    outstanding: 0,
+    nextDueDate: undefined,
+    overdueDays: 0,
+  });
+  await logAudit(ctx, {
+    actorId: args.actor._id,
+    actorName: args.actor.name,
+    role: args.actor.role,
+    action: "LOAN_CLOSED",
+    entity: "loans",
+    entityId: loan.loanId,
+    before: { status: loan.status, outstanding: loan.outstanding },
+    after: { status: "CLOSED", closureKind, reason: reason ?? "" },
+    referenceId: loan.loanId,
+    branchId: loan.branchId,
+    device: args.device,
+  });
+  return {
+    ok: true as const,
+    loanId: loan.loanId,
+    status: "CLOSED" as const,
+    closeDate: nowMs,
+  };
+}
+
+/**
+ * SUPER_ADMIN: archive a closed/settled loan — the safe removal. Archived
+ * loans vanish from the ordinary loan screens while every financial record
+ * and the audit trail stay intact and reachable by direct link.
+ */
+export async function archiveLoan(ctx: Mtx, args: LoanOpArgs) {
+  const nowMs = args.now ?? Date.now();
+  const loan = await ctx.db.get(args.loanId);
+  if (!loan) throw new AppError("Loan not found.");
+  if (!["CLOSED", "SETTLED"].includes(loan.status)) {
+    throw new AppError("Only a closed or settled loan can be archived.");
+  }
+  if (loan.archivedAt) throw new AppError("This loan is already archived.");
+  const outstanding = await loanOpenBalance(ctx, loan._id);
+  if (outstanding > 0) {
+    throw new AppError(
+      `Loan still has ₹${outstanding.toLocaleString("en-IN")} open — resolve it before archiving.`,
+    );
+  }
+  await ctx.db.patch(loan._id, { archivedAt: nowMs });
+  await logAudit(ctx, {
+    actorId: args.actor._id,
+    actorName: args.actor.name,
+    role: args.actor.role,
+    action: "LOAN_ARCHIVED",
+    entity: "loans",
+    entityId: loan.loanId,
+    before: { archived: false },
+    after: { archived: true, reason: args.reason?.trim() ?? "" },
+    referenceId: loan.loanId,
+    branchId: loan.branchId,
+    device: args.device,
+  });
+  return { ok: true as const, loanId: loan.loanId, archivedAt: nowMs };
+}
+
+/**
+ * SUPER_ADMIN: permanently delete a loan ONLY when it is closed/settled and
+ * nothing in the immutable financial record references it (no collections,
+ * receipts, journal entries or wallet transactions). Otherwise the mutation
+ * refuses with an explanation and points at the archive workflow — financial
+ * history is never destroyed to make a row disappear.
+ */
+export async function deleteLoanRecord(
+  ctx: Mtx,
+  args: LoanOpArgs & { reason: string },
+) {
+  const loan = await ctx.db.get(args.loanId);
+  if (!loan) throw new AppError("Loan not found.");
+  if (!["CLOSED", "SETTLED"].includes(loan.status)) {
+    throw new AppError(
+      `Loan ${loan.loanId} is ${loan.status.toLowerCase()} — only a closed or settled loan can be deleted.`,
+    );
+  }
+  const outstanding = await loanOpenBalance(ctx, loan._id);
+  if (outstanding > 0) {
+    throw new AppError("Loan is financially unresolved — it cannot be deleted.");
+  }
+
+  const [collections, receipts, journals, walletTxns] = await Promise.all([
+    ctx.db
+      .query("collections")
+      .withIndex("by_loan", (q) => q.eq("loanId", loan._id))
+      .collect(),
+    (await ctx.db.query("receipts").collect()).filter(
+      (r) => r.loanId === loan._id,
+    ),
+    (await ctx.db.query("journalEntries").collect()).filter(
+      (j) => j.refId === loan.loanId,
+    ),
+    ctx.db
+      .query("walletTransactions")
+      .withIndex("by_ref", (q) => q.eq("referenceId", loan.loanId))
+      .collect(),
+  ]);
+  const blockers: string[] = [];
+  if (collections.length) blockers.push(`${collections.length} collection payment(s)`);
+  if (receipts.length) blockers.push(`${receipts.length} receipt(s)`);
+  if (journals.length) blockers.push(`${journals.length} journal entr${journals.length === 1 ? "y" : "ies"}`);
+  if (walletTxns.length) blockers.push(`${walletTxns.length} wallet transaction(s)`);
+  if (blockers.length) {
+    throw new AppError(
+      `Cannot permanently delete ${loan.loanId}: ${blockers.join(", ")} reference it and the financial ledger is immutable. Archive the loan instead — it disappears from active screens while the audit trail and financial records stay intact.`,
+    );
+  }
+
+  // No money ever moved for this loan: drop the schedule projections, unlink
+  // the application, then the loan row itself. Nothing else is touched.
+  const rows = await scheduleRowsSorted(ctx, loan._id);
+  for (const r of rows) await ctx.db.delete(r._id);
+  if (loan.applicationId) {
+    const app = await ctx.db.get(loan.applicationId);
+    if (app && app.loanId === loan._id) {
+      await ctx.db.patch(app._id, { loanId: undefined });
+    }
+  }
+  await logAudit(ctx, {
+    actorId: args.actor._id,
+    actorName: args.actor.name,
+    role: args.actor.role,
+    action: "LOAN_DELETED",
+    entity: "loans",
+    entityId: loan.loanId,
+    before: {
+      status: loan.status,
+      principal: loan.principal,
+      clientId: loan.clientId,
+    },
+    after: { deleted: true, reason: args.reason },
+    referenceId: loan.loanId,
+    branchId: loan.branchId,
+    device: args.device,
+  });
+  await ctx.db.delete(loan._id);
+  return {
+    ok: true as const,
+    loanId: loan.loanId,
+    deleted: true as const,
+    scheduleRowsRemoved: rows.length,
+  };
 }
 
 /* ---------------------------- Application flow --------------------------- */

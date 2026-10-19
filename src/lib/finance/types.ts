@@ -55,6 +55,8 @@ export const LOAN_STATUSES = [
   "DISBURSED",
   "ACTIVE",
   "OVERDUE",
+  "SURRENDERED",
+  "SETTLED",
   "CLOSED",
   "WRITTEN_OFF",
 ] as const;
@@ -65,6 +67,7 @@ export const SCHEDULE_STATUSES = [
   "PARTIAL",
   "PENDING",
   "OVERDUE",
+  "WAIVED",
 ] as const;
 export type ScheduleStatus = (typeof SCHEDULE_STATUSES)[number];
 
@@ -228,6 +231,9 @@ export const STATUS_TONES: Record<string, Tone> = {
   DEACTIVATED: "bad",
   SUSPENDED: "bad",
   WRITTEN_OFF: "bad",
+  SURRENDERED: "warn",
+  SETTLED: "ok",
+  WAIVED: "info",
   DRAFT: "idle",
 };
 
@@ -240,6 +246,8 @@ export const LOAN_STATUS_LABELS: Record<string, string> = {
   DISBURSED: "Disbursed",
   ACTIVE: "Active",
   OVERDUE: "Overdue",
+  SURRENDERED: "Surrendered",
+  SETTLED: "Settled",
   CLOSED: "Closed",
   WRITTEN_OFF: "Written off",
 };

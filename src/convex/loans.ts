@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { query, mutation } from "./_generated/server";
+import { query, mutation, type MutationCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
 import {
   AppError,
@@ -9,15 +9,27 @@ import {
   requireProfile,
 } from "../lib/server/convexHelpers";
 import {
+  archiveLoan,
   baseScheduleRows,
+  closeLoan,
+  deleteLoanRecord,
   deriveLoanView,
   disburseLoan,
   eligibilityFor,
+  settleLoan,
+  surrenderLoan,
   type LoanView,
 } from "../lib/server/loanOps";
 import { round2, completedMonthsBetween } from "../lib/finance/money";
+import { rowOutstanding } from "../lib/finance/schedule";
 import type { Frequency, InterestMethod } from "../lib/finance/types";
-import { money, requiredString, oneOf } from "../lib/finance/validate";
+import {
+  PermissionError,
+  ValidationError,
+  money,
+  requiredString,
+  oneOf,
+} from "../lib/finance/validate";
 import { RECOVERY_KINDS } from "../lib/finance/types";
 
 const MONTH_FACTOR: Record<string, number> = {
@@ -71,6 +83,7 @@ export const list = query({
     branchId: v.optional(v.id("branches")),
     search: v.optional(v.string()),
     limit: v.optional(v.number()),
+    includeArchived: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const me = await requireProfile(ctx, { allowInactive: true });
@@ -108,13 +121,28 @@ export const list = query({
         client: clientById.get(loan.clientId) ?? null,
         staff: profileById.get(loan.staffId) ?? null,
         product: productById.get(loan.productId) ?? null,
-        nextDue: rows.find((r) => r.paid < r.totalDue) ?? null,
+        nextDue: rows.find((r) => rowOutstanding(r) > 0) ?? null,
       };
     });
 
+    // Archived (closed/settled, removed from ordinary screens) loans are
+    // hidden by default; the authorized audit view re-includes them.
+    const canSeeArchived =
+      args.includeArchived === true &&
+      (me.role === "SUPER_ADMIN" || me.role === "ACCOUNTANT");
+    if (!canSeeArchived) {
+      enriched = enriched.filter((e) => !e.loan.archivedAt);
+    }
+
     if (args.status) {
       const wanted = args.status.toUpperCase();
-      enriched = enriched.filter((e) => e.view.displayStatus === wanted);
+      if (wanted === "ARCHIVED") {
+        enriched = canSeeArchived
+          ? enriched.filter((e) => !!e.loan.archivedAt)
+          : [];
+      } else {
+        enriched = enriched.filter((e) => e.view.displayStatus === wanted);
+      }
     }
     const q = (args.search ?? "").trim().toLowerCase();
     if (q) {
@@ -689,6 +717,141 @@ export const addRecovery = mutation({
       branchId: loan.branchId,
     });
     return { ok: true, id };
+  },
+});
+
+/* ------------------ SUPER_ADMIN closure operations ---------------------- */
+
+/**
+ * Authorization for every sensitive closure operation: the real authenticated
+ * profile's role is checked INSIDE the backend mutation — hiding a button in
+ * the UI is never the control.
+ */
+async function requireSuperAdmin(ctx: MutationCtx): Promise<Doc<"profiles">> {
+  const me = await requireProfile(ctx);
+  if (me.role !== "SUPER_ADMIN") {
+    throw new PermissionError(
+      "Only a SUPER_ADMIN can perform this operation.",
+    );
+  }
+  if (me.status !== "ACTIVE") {
+    throw new PermissionError(
+      `Your account is ${me.status.toLowerCase()} — this operation is blocked.`,
+    );
+  }
+  return me;
+}
+
+/** Mandatory, meaningful reason for surrender / settlement / deletion. */
+function closureReason(value: unknown): string {
+  const reason = requiredString(value, "reason", 500);
+  if (reason.length < 5) {
+    throw new ValidationError(
+      "Invalid reason: give a reason of at least 5 characters.",
+    );
+  }
+  return reason;
+}
+
+/** SUPER_ADMIN: terminate a loan before its normal completion. */
+export const surrender = mutation({
+  args: {
+    loanId: v.id("loans"),
+    reason: v.string(),
+    device: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const me = await requireSuperAdmin(ctx);
+    return await surrenderLoan(ctx, {
+      loanId: args.loanId,
+      actor: me,
+      reason: closureReason(args.reason),
+      device: args.device,
+    });
+  },
+});
+
+/** SUPER_ADMIN: settle a loan — payment vs waiver recorded separately. */
+export const settle = mutation({
+  args: {
+    loanId: v.id("loans"),
+    settlementAmount: v.number(),
+    mode: v.string(),
+    reason: v.string(),
+    device: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const me = await requireSuperAdmin(ctx);
+    const amount = money(args.settlementAmount, "settlementAmount", {
+      allowZero: true,
+    });
+    const mode = oneOf(args.mode, ["CASH", "UPI", "BANK"], "mode");
+    return await settleLoan(ctx, {
+      loanId: args.loanId,
+      actor: me,
+      settlementAmount: amount,
+      mode,
+      reason: closureReason(args.reason),
+      device: args.device,
+    });
+  },
+});
+
+/** SUPER_ADMIN: close a loan whose dues are genuinely cleared. */
+export const close = mutation({
+  args: {
+    loanId: v.id("loans"),
+    reason: v.optional(v.string()),
+    device: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const me = await requireSuperAdmin(ctx);
+    return await closeLoan(ctx, {
+      loanId: args.loanId,
+      actor: me,
+      reason: args.reason?.trim() ? closureReason(args.reason) : undefined,
+      device: args.device,
+    });
+  },
+});
+
+/** SUPER_ADMIN: archive a closed/settled loan (safe removal). */
+export const archive = mutation({
+  args: {
+    loanId: v.id("loans"),
+    reason: v.optional(v.string()),
+    device: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const me = await requireSuperAdmin(ctx);
+    return await archiveLoan(ctx, {
+      loanId: args.loanId,
+      actor: me,
+      reason: args.reason?.trim() ? closureReason(args.reason) : undefined,
+      device: args.device,
+    });
+  },
+});
+
+/**
+ * SUPER_ADMIN: permanently delete a closed/settled loan ONLY when no
+ * financial record references it; otherwise the mutation refuses and points
+ * at the archive workflow.
+ */
+export const deleteClosed = mutation({
+  args: {
+    loanId: v.id("loans"),
+    reason: v.string(),
+    device: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const me = await requireSuperAdmin(ctx);
+    return await deleteLoanRecord(ctx, {
+      loanId: args.loanId,
+      actor: me,
+      reason: closureReason(args.reason),
+      device: args.device,
+    });
   },
 });
 

@@ -11,6 +11,7 @@ import { recordCollection, reverseCollection } from "../lib/server/loanOps";
 import { money, oneOf, optionalString, requiredString } from "../lib/finance/validate";
 import { PAY_MODES } from "../lib/finance/types";
 import { matchCollectionSearch, MatchCollectionSearchInput, overdueDays, round2 } from "../lib/finance/excelReports";
+import { rowOutstanding } from "../lib/finance/schedule";
 
 /**
  * Today's collection board for a field staff member (or branch-wide for BM).
@@ -40,7 +41,7 @@ export const today = query({
     loans = loans.filter((l) => ["ACTIVE", "OVERDUE", "DISBURSED"].includes(l.status));
 
     const rows = await ctx.db.query("loanSchedules").collect();
-    const openRows = rows.filter((r) => r.paid < r.totalDue);
+    const openRows = rows.filter((r) => rowOutstanding(r) > 0);
     const loansById = new Map(loans.map((l) => [l._id, l]));
     const scopedRows = openRows.filter((r) => loansById.has(r.loanId));
 
@@ -67,7 +68,7 @@ export const today = query({
         overdueDays: 0,
         nextDue: null,
       };
-      const remaining = Math.max(0, row.totalDue - row.paid);
+      const remaining = rowOutstanding(row);
       const key = istDateKey(row.dueDate);
       if (key === todayKey || key === yesterdayKey) entry.dueToday += remaining;
       if (row.dueDate < now) {
@@ -275,8 +276,8 @@ export const receipt = query({
         .collect()
     ).sort((a, b) => a.index - b.index);
     const overdueAmount = rows
-      .filter((r) => r.paid < r.totalDue && r.dueDate < Date.now())
-      .reduce((s, r) => s + (r.totalDue - r.paid), 0);
+      .filter((r) => rowOutstanding(r) > 0 && r.dueDate < Date.now())
+      .reduce((s, r) => s + rowOutstanding(r), 0);
 
     return {
       receipt: receiptDoc,
@@ -285,7 +286,7 @@ export const receipt = query({
       loan,
       staff,
       branch,
-      nextDue: rows.find((r) => r.paid < r.totalDue) ?? null,
+      nextDue: rows.find((r) => rowOutstanding(r) > 0) ?? null,
       overdueAmount: Math.round(overdueAmount * 100) / 100,
     };
   },
@@ -394,7 +395,7 @@ export const dueList = query({
       let arrear = 0;
       let totalDue = 0;
       for (const s of schedulesByLoan.get(loan._id) ?? []) {
-        const rem = Math.max(0, round2(s.totalDue - s.paid));
+        const rem = rowOutstanding(s);
         if (rem <= 0) continue;
         if (s.dueDate <= now) totalDue += rem;
         if (overdueDays(s.dueDate, now) >= 1) arrear += rem;

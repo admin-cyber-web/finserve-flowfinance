@@ -12,6 +12,7 @@ import {
 } from "@/components/fs/primitives";
 import { Button } from "@/components/ui/button";
 import { useQuery } from "convex/react";
+import { rowOutstanding } from "@/lib/finance/schedule";
 import { ArrowLeft, Printer } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -122,14 +123,14 @@ export default function ReportClient({
   const chargesTotal = loans.reduce((s, l) => s + l.loan.charges, 0);
   const openRows = loans
     .flatMap((l) => l.rows)
-    .filter((r) => r.paid < r.totalDue);
+    .filter((r) => rowOutstanding(r) > 0);
   const overdueRows = openRows.filter((r) => r.dueDate < now);
   const nextOpen =
     [...openRows].filter((r) => r.dueDate >= now).sort((a, b) => a.dueDate - b.dueDate)[0] ??
     null;
   const scheduledPrincipalRemaining = openRows.reduce((s, r) => s + r.principal, 0);
   const scheduledInterestRemaining = openRows.reduce((s, r) => s + r.interest, 0);
-  const overdueAmount = overdueRows.reduce((s, r) => s + (r.totalDue - r.paid), 0);
+  const overdueAmount = overdueRows.reduce((s, r) => s + rowOutstanding(r), 0);
   const round = (n: number) => Math.round(n * 100) / 100;
 
   const coDocs = documents.filter((d) => d.coApplicant);
@@ -366,7 +367,7 @@ export default function ReportClient({
                                 <TD mono>{r.index}</TD>
                                 <TD mono>
                                   {formatDate(r.dueDate)}
-                                  {r.paid < r.totalDue && r.dueDate < now && (
+                                  {rowOutstanding(r) > 0 && r.dueDate < now && (
                                     <span className="ml-1 text-destructive">⚠</span>
                                   )}
                                 </TD>
@@ -374,7 +375,7 @@ export default function ReportClient({
                                 <TD mono>{r.interest.toLocaleString("en-IN")}</TD>
                                 <TD mono>{r.totalDue.toLocaleString("en-IN")}</TD>
                                 <TD mono>{r.paid.toLocaleString("en-IN")}</TD>
-                                <TD mono>{(r.totalDue - r.paid).toLocaleString("en-IN")}</TD>
+                                <TD mono>{rowOutstanding(r).toLocaleString("en-IN")}</TD>
                                 <TD>
                                   <StatusChip status={r.status} label={r.status} />
                                 </TD>
@@ -519,7 +520,7 @@ export default function ReportClient({
         />
         <KeyValue
           k="Next instalment amount"
-          v={nextOpen ? <Money value={round(nextOpen.totalDue - nextOpen.paid)} /> : "—"}
+          v={nextOpen ? <Money value={round(rowOutstanding(nextOpen))} /> : "—"}
         />
         <KeyValue
           k="Total overdue amount"

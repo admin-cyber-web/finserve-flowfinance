@@ -163,6 +163,21 @@ export function generateSchedule(input: ScheduleInput): ScheduleResult {
   };
 }
 
+/**
+ * What is still OPEN on one installment: due minus cash received minus any
+ * amount waived by an approved settlement. This is the single definition of
+ * "remaining on a row" used by collections, reports, views and the
+ * statement engine — a waived rupee closes the row but is never counted as
+ * money received.
+ */
+export function rowOutstanding(row: {
+  totalDue: number;
+  paid: number;
+  waived?: number;
+}): number {
+  return round2(Math.max(0, row.totalDue - row.paid - (row.waived ?? 0)));
+}
+
 /** Re-derive PAID / PARTIAL / PENDING / OVERDUE for a row. */
 export function scheduleRowStatus(
   row: { totalDue: number; paid: number; dueDate: number },

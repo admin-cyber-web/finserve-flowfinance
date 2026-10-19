@@ -309,4 +309,56 @@ describe("Overdue Report buckets", () => {
     );
     expect(rows).toHaveLength(0);
   });
+
+  test("settlement waivers produce no arrears — waived is not open money", () => {
+    const rows = buildOverdueRows(
+      [
+        // Fully waived by an approved settlement: nothing was ever paid,
+        // but nothing is open either — it must not enter the arrears book.
+        sched({ loanPk: "L1", loanId: "LN-1", dueDate: OCT_1_START - DAY, totalDue: 2000, paid: 0, waived: 2000 }),
+        // Partially waived: only the uncovered remainder counts as arrears.
+        sched({ loanPk: "L2", loanId: "LN-2", dueDate: OCT_1_START - DAY, totalDue: 3000, paid: 1000, waived: 500 }),
+      ],
+      bounds,
+    );
+    expect(rows.map((r) => r.loanId)).toEqual(["LN-2"]);
+    expect(rows[0].bkt1 + rows[0].bkt2 + rows[0].bkt3).toBe(1500); // 3000 − 1000 − 500
+  });
+});
+
+describe("Due Date report — waived dues", () => {
+  test("a fully waived installment reports with zero due and zero arrears", () => {
+    const rows = buildDueDateRows(
+      [
+        sched({
+          loanPk: "L1",
+          dueDate: OCT_1_START + 2 * DAY, // inside the From–To window
+          totalDue: 2000,
+          paid: 0,
+          waived: 2000,
+        }),
+      ],
+      bounds,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].arrear).toBe(0);
+    expect(rows[0].totalDueAmount).toBe(0);
+  });
+
+  test("a partially waived installment counts only the uncovered remainder", () => {
+    const rows = buildDueDateRows(
+      [
+        sched({
+          loanPk: "L1",
+          dueDate: OCT_1_START + 2 * DAY, // inside the From–To window
+          totalDue: 3000,
+          paid: 1000,
+          waived: 500,
+        }),
+      ],
+      bounds,
+    );
+    expect(rows[0].arrear).toBe(1500);
+    expect(rows[0].totalDueAmount).toBe(1500);
+  });
 });

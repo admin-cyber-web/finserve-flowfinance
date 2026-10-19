@@ -15,6 +15,7 @@
  */
 
 import { DAY_MS, IST_OFFSET_MS } from "./dateReport";
+import { rowOutstanding } from "./schedule";
 
 export interface DateBounds {
   from: number; // start of the From date (IST), inclusive
@@ -47,6 +48,8 @@ export interface ScheduleFacts extends LoanFacts {
   dueDate: number;
   totalDue: number;
   paid: number;
+  /** Settlement waiver on the row — reduces arrears without being cash. */
+  waived?: number;
 }
 
 /** The ten columns every one of the four reports starts with. */
@@ -117,9 +120,9 @@ export function mobMonths(disbursedAt: number | undefined, refMs: number): numbe
   return Math.max(0, months);
 }
 
-/** Unpaid remainder of one installment — never negative. */
-function remainder(row: { totalDue: number; paid: number }): number {
-  return round2(Math.max(0, row.totalDue - row.paid));
+/** Unpaid remainder of one installment — never negative, waived-aware. */
+function remainder(row: { totalDue: number; paid: number; waived?: number }): number {
+  return rowOutstanding(row);
 }
 
 /**

@@ -4,6 +4,7 @@ import {
   buildCombinedStatement,
   buildLoanStatement,
   resolveClientMatches,
+  LEDGER_TYPE_LABELS,
   type StatementLoan,
 } from "../src/lib/finance/statement";
 
@@ -383,5 +384,110 @@ describe("buildCombinedStatement", () => {
     const s = buildLoanStatement(loanFixture(), {}, NOW);
     expect(c.summary.closingOutstanding).toBe(s.summary.closingOutstanding);
     expect(c.ledger.length).toBe(s.ledger.length);
+  });
+});
+
+/* ------------------------- Settlement waivers ---------------------------- */
+
+describe("buildLoanStatement — approved settlement waiver", () => {
+  /**
+   * Settled loan: 24,000 collected over its life (10,000 of it at the
+   * settlement), 2,000 waived by the approved settlement. Receivable 26,000.
+   */
+  const settledFixture = (): StatementLoan =>
+    loanFixture({
+      status: "SETTLED",
+      outstanding: 0,
+      paidTotal: 24000,
+      closeDate: NOW,
+      waivedAmount: 2000,
+      schedule: [
+        row({ index: 1, dueDate: OCT_1 - 5 * DAY, totalDue: 7500, paid: 7500, principal: 6000, interest: 1500 }),
+        row({ index: 2, dueDate: OCT_1 + 5 * DAY, totalDue: 6500, paid: 6500 }),
+        row({ index: 3, dueDate: OCT_1 + 25 * DAY, totalDue: 6000, paid: 6000 }),
+        {
+          ...row({ index: 4, dueDate: OCT_1 + 45 * DAY, totalDue: 6000, paid: 4000 }),
+          waived: 2000,
+        },
+      ],
+      collections: [
+        pay({ _id: "p1", createdAt: OCT_1 - 4 * DAY, amount: 7500 }),
+        pay({ _id: "p2", createdAt: OCT_1 + 6 * DAY, amount: 6500, principalPortion: 5000, interestPortion: 1500 }),
+        // The actual settlement payment (real money, receipted).
+        pay({ _id: "p3", createdAt: NOW, amount: 10000 }),
+      ],
+    });
+
+  test("a waived rupee closes the row but is never counted as cash", () => {
+    const s = buildLoanStatement(settledFixture(), {}, NOW);
+    // Money received stays 24,000 — the 2,000 waiver never enters totals.
+    expect(s.summary.totalPaid).toBe(24000);
+    expect(s.repayment.totalPaidToDate).toBe(24000);
+    expect(s.summary.waivedAmount).toBe(2000);
+    // …and the balance still reconciles to zero: 26,000 − 24,000 − 2,000.
+    expect(s.summary.closingOutstanding).toBe(0);
+    expect(s.repayment.outstanding).toBe(0);
+  });
+
+  test("the waiver appears as its own non-counted ledger row", () => {
+    const s = buildLoanStatement(settledFixture(), {}, NOW);
+    const waivers = s.ledger.filter((r) => r.type === "WAIVER");
+    expect(waivers).toHaveLength(1);
+    expect(waivers[0].due).toBe(2000);
+    expect(waivers[0].counted).toBe(false); // never money received
+    expect(waivers[0].balanceAfter).toBe(0);
+    expect(LEDGER_TYPE_LABELS.WAIVER).toBeTruthy(); // renders in the UI
+    for (const r of s.ledger.filter((x) => x.type === "PAYMENT")) {
+      expect(r.counted).toBe(true);
+    }
+    // The last row of the ledger always equals the stored outstanding (0).
+    expect(s.ledger[s.ledger.length - 1].balanceAfter).toBe(0);
+  });
+
+  test("the waived installment is marked WAIVED, not PAID, and has no open dues", () => {
+    const s = buildLoanStatement(settledFixture(), {}, NOW);
+    const dueRow = s.ledger.find(
+      (r) => r.type === "INSTALLMENT_DUE" && r.reference === "Inst 4/4",
+    );
+    expect(dueRow?.status).toBe("WAIVED");
+    expect(s.repayment.upcoming).toHaveLength(0); // "No upcoming dues"
+    expect(s.repayment.totalOverdueAmount).toBe(0);
+  });
+
+  test("a period after the settlement opens at zero — the waiver rolls in", () => {
+    const s = buildLoanStatement(
+      settledFixture(),
+      { fromMs: NOW + DAY, toMs: NOW + 5 * DAY },
+      NOW + 2 * DAY,
+    );
+    expect(s.summary.openingBalance).toBe(0);
+    expect(s.summary.closingOutstanding).toBe(0);
+    expect(s.summary.waivedAmount).toBe(0); // the waiver itself is outside the period
+  });
+});
+
+describe("buildLoanStatement — surrendered loan keeps the debt on record", () => {
+  test("nothing is waived or erased: outstanding, next due and open rows survive", () => {
+    const l = loanFixture({
+      status: "SURRENDERED",
+      closeDate: NOW,
+      outstanding: 12000,
+      // Rows 3 and 4 were never paid — the debt stays visible.
+      schedule: [
+        row({ index: 1, dueDate: OCT_1 - 5 * DAY, totalDue: 7500, paid: 7500, principal: 6000, interest: 1500 }),
+        row({ index: 2, dueDate: OCT_1 + 5 * DAY, totalDue: 6500, paid: 6500 }),
+        row({ index: 3, dueDate: OCT_1 - 3 * DAY, totalDue: 6000, paid: 0 }),
+        row({ index: 4, dueDate: OCT_1 + 45 * DAY, totalDue: 6000, paid: 0 }),
+      ],
+    });
+    const s = buildLoanStatement(l, {}, NOW);
+    expect(s.repayment.outstanding).toBe(12000);
+    expect(s.summary.waivedAmount).toBe(0);
+    // No waiver row appears — a surrender writes nothing off.
+    expect(s.ledger.filter((r) => r.type === "WAIVER")).toHaveLength(0);
+    // The overdue installment stays in the arrears for recovery.
+    expect(s.repayment.totalOverdueAmount).toBe(6000);
+    expect(s.repayment.upcoming).toHaveLength(2);
+    expect(s.repayment.installmentsRemaining).toBe(2);
   });
 });

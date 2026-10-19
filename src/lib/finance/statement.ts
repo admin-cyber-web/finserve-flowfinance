@@ -11,11 +11,13 @@
  *     `collections` and `receipts` ledgers. Missing data renders as `null`
  *     and the UI prints "Not Available" — never a guess.
  *   • Outstanding uses the SAME definition as the rest of the app
- *     (`loanOps.disburseLoan` / `recordCollection`):
- *         outstanding = Σ max(0, totalDue − paid)   over the schedule
+ *     (`loanOps.disburseLoan` / `recordCollection` / `schedule.rowOutstanding`):
+ *         outstanding = Σ max(0, totalDue − paid − waived)  over the schedule
  *     The full receivable (Σ totalDue, charges financed into the first
- *     installment) is booked at disbursement and every counted payment
- *     reduces it one-for-one.
+ *     installment) is booked at disbursement; every counted payment reduces
+ *     it one-for-one, and an approved settlement's waived amount reduces it
+ *     WITHOUT ever being counted as money received (it appears in the ledger
+ *     as its own transparent "Waiver" row, never as a payment).
  *   • Counted payments are `status === "NORMAL"` collections only — the same
  *     rule the Collection Report uses. A reversed original (status REVERSED)
  *     and its compensating REVERSAL entry net to zero: the original has
@@ -30,6 +32,7 @@
 
 import { DAY_MS, IST_OFFSET_MS } from "./dateReport";
 import { overdueDays, round2 } from "./excelReports";
+import { rowOutstanding } from "./schedule";
 import { LOAN_PURPOSE_LABELS, type LoanPurpose } from "./types";
 
 /* ------------------------------- Inputs ---------------------------------- */
@@ -42,6 +45,8 @@ export interface StatementScheduleRow {
   interest: number;
   totalDue: number;
   paid: number;
+  /** Amounts written off by an approved settlement — never cash. */
+  waived?: number;
 }
 
 export interface StatementCollection {
@@ -89,6 +94,10 @@ export interface StatementLoan {
   paidTotal: number;
   disbursedAt?: number;
   approvedAt?: number;
+  /** Closure moment of a surrendered / settled / closed loan. */
+  closeDate?: number;
+  /** Total written off by an approved settlement — memo, not cash. */
+  waivedAmount?: number;
   createdAt: number; // application date
   schedule: StatementScheduleRow[];
   collections: StatementCollection[];
@@ -158,7 +167,8 @@ export type LedgerType =
   | "DISBURSEMENT"
   | "INSTALLMENT_DUE"
   | "PAYMENT"
-  | "REVERSAL";
+  | "REVERSAL"
+  | "WAIVER";
 
 export interface StatementLedgerRow {
   /** React key + de-dup guard — one per stored event. */
@@ -215,7 +225,9 @@ export interface LoanStatementSummary {
   totalPaid: number;
   /** Reversed payments inside the period (memo — already excluded). */
   adjustments: number;
-  /** opening + disbursementInPeriod − totalPaid — reconciles exactly. */
+  /** Amounts waived inside the period (approved settlement — not cash). */
+  waivedAmount: number;
+  /** opening + disbursementInPeriod − totalPaid − waivedAmount. */
   closingOutstanding: number;
   /** Lifetime figures, independent of the period filter. */
   lifetimePaid: number;
@@ -298,6 +310,17 @@ export function buildLoanStatement(
   }
 
   for (const s of loan.schedule) {
+    const settled = rowOutstanding(s) <= 0;
+    const waivedOpen = (s.waived ?? 0) > 0 && s.paid + (s.waived ?? 0) < s.totalDue;
+    const rowStatus = settled
+      ? (s.waived ?? 0) > 0 && s.paid < s.totalDue
+        ? "WAIVED"
+        : "PAID"
+      : s.paid > 0
+        ? "PARTIAL"
+        : waivedOpen
+          ? "PARTIAL"
+          : "OPEN";
     full.push({
       id: `due-${loan._id}-${s._id}`,
       date: s.dueDate,
@@ -310,10 +333,35 @@ export function buildLoanStatement(
       balanceAfter: 0,
       mode: null,
       staffId: null,
-      status: s.paid >= s.totalDue ? "PAID" : s.paid > 0 ? "PARTIAL" : "OPEN",
+      status: rowStatus,
       counted: false,
       remarks: null,
       sortKey: s.dueDate,
+    });
+  }
+
+  // Approved settlement waiver — its own ledger row: visible, reconciling,
+  // and NEVER counted as money received.
+  const totalWaived = round2(
+    loan.schedule.reduce((s, r) => s + (r.waived ?? 0), 0),
+  );
+  if (totalWaived > 0) {
+    full.push({
+      id: `waive-${loan._id}`,
+      date: loan.closeDate ?? loan.schedule[loan.schedule.length - 1]?.dueDate ?? loan.createdAt,
+      type: "WAIVER",
+      reference: loan.loanId,
+      due: totalWaived,
+      paid: null,
+      principalPart: null,
+      interestPart: null,
+      balanceAfter: 0,
+      mode: null,
+      staffId: null,
+      status: "WAIVED",
+      counted: false,
+      remarks: "Dues waived by approved settlement — not a payment",
+      sortKey: loan.closeDate ?? loan.createdAt,
     });
   }
 
@@ -353,6 +401,7 @@ export function buildLoanStatement(
     INSTALLMENT_DUE: 1,
     PAYMENT: 2,
     REVERSAL: 3,
+    WAIVER: 4,
   };
   full.sort(
     (a, b) =>
@@ -365,6 +414,8 @@ export function buildLoanStatement(
     if (r.type === "DISBURSEMENT") balance = receivable;
     else if (r.type === "PAYMENT" && r.counted) {
       balance = round2(balance - (r.paid ?? 0));
+    } else if (r.type === "WAIVER") {
+      balance = round2(balance - (r.due ?? 0));
     }
     r.balanceAfter = balance;
   }
@@ -376,8 +427,21 @@ export function buildLoanStatement(
       .filter((c) => filters.fromMs != null && c.createdAt < filters.fromMs)
       .reduce((s, c) => s + c.amount, 0),
   );
+  // Waivers happen once, at closure — treat them the same way as payments
+  // when rolling the balance into/out of the selected period.
+  const waivedBefore =
+    filters.fromMs != null && loan.closeDate != null && loan.closeDate < filters.fromMs
+      ? totalWaived
+      : 0;
+  const waivedInPeriod =
+    totalWaived - waivedBefore > 0 &&
+    (loan.closeDate == null || filters.toMs == null || loan.closeDate <= filters.toMs)
+      ? round2(totalWaived - waivedBefore)
+      : 0;
   const openingBalance =
-    filters.fromMs != null ? round2(Math.max(0, receivable - paidBefore)) : 0;
+    filters.fromMs != null
+      ? round2(Math.max(0, receivable - paidBefore - waivedBefore))
+      : 0;
   const disbursementInPeriod =
     loan.disbursedAt != null && inBounds(loan.disbursedAt, filters) ? receivable : 0;
   const totalPaid = round2(
@@ -396,17 +460,17 @@ export function buildLoanStatement(
     loan.collections.filter((c) => c.status === "REVERSAL").reduce((s, c) => s + c.amount, 0),
   );
   const closingOutstanding = round2(
-    openingBalance + disbursementInPeriod - totalPaid,
+    openingBalance + disbursementInPeriod - totalPaid - waivedInPeriod,
   );
 
   /* --------------------------- Repayment status -------------------------- */
   const openRows = loan.schedule
-    .filter((r) => r.paid < r.totalDue)
+    .filter((r) => rowOutstanding(r) > 0)
     .sort((a, b) => a.index - b.index);
   const next = openRows[0] ?? null;
   const overdueRows = openRows.filter((r) => r.dueDate < nowMs);
   const totalOverdueAmount = round2(
-    overdueRows.reduce((s, r) => s + (r.totalDue - r.paid), 0),
+    overdueRows.reduce((s, r) => s + rowOutstanding(r), 0),
   );
   const last = counted[counted.length - 1] ?? null;
 
@@ -420,13 +484,14 @@ export function buildLoanStatement(
       totalDues,
       totalPaid,
       adjustments,
+      waivedAmount: waivedInPeriod,
       closingOutstanding,
       lifetimePaid,
       lifetimeReversed,
     },
     repayment: {
       nextDueDate: next?.dueDate ?? null,
-      nextDueAmount: next ? round2(next.totalDue - next.paid) : null,
+      nextDueAmount: next ? rowOutstanding(next) : null,
       currentArrears: totalOverdueAmount,
       overdueDays: overdueRows.length
         ? Math.max(...overdueRows.map((r) => overdueDays(r.dueDate, nowMs)))
@@ -434,7 +499,7 @@ export function buildLoanStatement(
       totalOverdueAmount,
       totalPaidToDate: lifetimePaid,
       outstanding: round2(
-        loan.schedule.reduce((s, r) => s + Math.max(0, r.totalDue - r.paid), 0),
+        loan.schedule.reduce((s, r) => s + rowOutstanding(r), 0),
       ),
       lastPaymentDate: last?.createdAt ?? null,
       lastPaymentAmount: last ? round2(last.amount) : null,
@@ -447,7 +512,7 @@ export function buildLoanStatement(
         dueDate: r.dueDate,
         amount: r.totalDue,
         paid: r.paid,
-        remaining: round2(r.totalDue - r.paid),
+        remaining: rowOutstanding(r),
       })),
     },
   };
@@ -465,6 +530,7 @@ export interface CombinedStatementResult {
     totalDues: number;
     totalPaid: number;
     adjustments: number;
+    waivedAmount: number;
     closingOutstanding: number;
   };
   repayment: {
@@ -544,6 +610,7 @@ export function buildCombinedStatement(
       totalDues: sum(parts, (p) => p.summary.totalDues),
       totalPaid: sum(parts, (p) => p.summary.totalPaid),
       adjustments: sum(parts, (p) => p.summary.adjustments),
+      waivedAmount: sum(parts, (p) => p.summary.waivedAmount),
       closingOutstanding: sum(parts, (p) => p.summary.closingOutstanding),
     },
     repayment: {
@@ -569,6 +636,7 @@ export const LEDGER_TYPE_LABELS: Record<LedgerType, string> = {
   INSTALLMENT_DUE: "Installment due",
   PAYMENT: "Payment received",
   REVERSAL: "Reversal",
+  WAIVER: "Settlement waiver",
 };
 
 /** Human loan-purpose label from the stored application, or null. */

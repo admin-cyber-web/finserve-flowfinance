@@ -21,6 +21,7 @@ import {
   type StatementLoan,
 } from "../lib/finance/statement";
 import { deriveLoanView } from "../lib/server/loanOps";
+import { rowOutstanding } from "../lib/finance/schedule";
 
 /**
  * One reusable report engine behind every report in the Reports section.
@@ -507,11 +508,11 @@ export const overview = query({
     // that is due on or before now; "overdue" is the strictly past-due subset
     // using the app's existing `dueDate < now` rule.
     const scopeSchedules = schedules.filter((s) => scopeIds.has(s.loanId));
-    const open = scopeSchedules.filter((s) => s.paid < s.totalDue);
+    const open = scopeSchedules.filter((s) => rowOutstanding(s) > 0);
     const dueRows = open.filter((s) => s.dueDate <= now);
     const overdueRows = open.filter((s) => s.dueDate < now);
     const sum = (rows: typeof open) =>
-      Math.round(rows.reduce((s, r) => s + (r.totalDue - r.paid), 0) * 100) / 100;
+      Math.round(rows.reduce((s, r) => s + rowOutstanding(r), 0) * 100) / 100;
     const nextDue = open
       .filter((s) => s.dueDate >= now)
       .sort((a, b) => a.dueDate - b.dueDate)[0] ?? null;
@@ -529,7 +530,7 @@ export const overview = query({
       overdueInstalments: overdueRows.length,
       overdueAmount: sum(overdueRows),
       nextDueDate: nextDue?.dueDate ?? null,
-      nextDueAmount: nextDue ? Math.round((nextDue.totalDue - nextDue.paid) * 100) / 100 : null,
+      nextDueAmount: nextDue ? Math.round(rowOutstanding(nextDue) * 100) / 100 : null,
       activeLoanIds: activeIds.size,
     };
   },
@@ -815,13 +816,13 @@ export const upcoming = query({
       .filter(
         (s) =>
           scopedIds.has(s.loanId) &&
-          s.paid < s.totalDue &&
+          rowOutstanding(s) > 0 &&
           s.dueDate >= from &&
           s.dueDate <= to,
       )
       .sort((a, b) => a.dueDate - b.dueDate);
     const totalAmount = Math.round(
-      matching.reduce((s, r) => s + (r.totalDue - r.paid), 0) * 100,
+      matching.reduce((s, r) => s + rowOutstanding(r), 0) * 100,
     ) / 100;
     const weeklyCount = matching.filter(
       (r) => loanById.get(r.loanId)?.frequency === "WEEKLY",
@@ -834,7 +835,7 @@ export const upcoming = query({
         scheduleId: r._id,
         index: r.index,
         dueDate: r.dueDate,
-        amount: Math.round((r.totalDue - r.paid) * 100) / 100,
+        amount: Math.round(rowOutstanding(r) * 100) / 100,
         principal: r.principal,
         interest: r.interest,
         status: r.status,
@@ -894,9 +895,9 @@ export const overdue = query({
     for (const loan of loans) {
       if (!["ACTIVE", "OVERDUE"].includes(loan.status)) continue;
       const own = schedules.filter((s) => s.loanId === loan._id);
-      const overdueRows = own.filter((s) => s.paid < s.totalDue && s.dueDate < now);
+      const overdueRows = own.filter((s) => rowOutstanding(s) > 0 && s.dueDate < now);
       if (!overdueRows.length) continue;
-      const overdueAmount = overdueRows.reduce((s, r) => s + (r.totalDue - r.paid), 0);
+      const overdueAmount = overdueRows.reduce((s, r) => s + rowOutstanding(r), 0);
       const daysOverdue = Math.floor(
         (now - Math.min(...overdueRows.map((r) => r.dueDate))) / 86_400_000,
       );
@@ -1200,6 +1201,7 @@ export const rangeReports = query({
         dueDate: s.dueDate,
         totalDue: s.totalDue,
         paid: s.paid,
+        waived: s.waived,
       });
     }
 
@@ -1385,6 +1387,7 @@ export const statement = query({
             interest: r.interest,
             totalDue: r.totalDue,
             paid: r.paid,
+            waived: r.waived,
           })),
         collections: collections.map((c) => ({
           _id: c._id,

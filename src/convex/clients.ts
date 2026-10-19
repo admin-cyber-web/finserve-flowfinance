@@ -28,6 +28,7 @@ import {
   nomineeValue,
   referencesValue,
 } from "../lib/finance/validate";
+import { rowOutstanding } from "../lib/finance/schedule";
 import {
   KYC_STATUS,
   DOC_STATUS,
@@ -234,8 +235,8 @@ export const get = query({
     let overdueAmount = 0;
     for (const loan of active) {
       for (const row of schedules[loan.loanId] ?? []) {
-        if (row.paid < row.totalDue && row.dueDate < now) {
-          overdueAmount += row.totalDue - row.paid;
+        if (rowOutstanding(row) > 0 && row.dueDate < now) {
+          overdueAmount += rowOutstanding(row);
         }
       }
     }
