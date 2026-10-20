@@ -95,23 +95,50 @@ export const verify = internalMutation({
       } as any;
     }
 
-    // ── step 1: real handlers are wired & callable ────────────────────────
-    // `import()` is async inside a Convex mutation; load the module once the
-    // handler has started. The harness prefers live handler calls over a
-    // duplicate in-process reimplementation.
+    // ── step 1: load the real loan module once ───────────────────────────
+    // `import()` inside a Convex mutation runs against the ACTIVE deployment,
+    // so these names point at the registered handlers the harness exercises
+    // below. They are async, idempotent, single-transaction calls (the harness
+    // runs inside one big transaction).
+    //
+    // Notes on call shape:
+    //   - `collect` is an exported async function (`src/lib/server/loanOps.ts`),
+    //     NOT a Convex mutation. It is called directly with a real `ctx`-shaped
+    //     object and does its own auth/permission checks.
+    //   - `surrender`, `settle`, `close`, `archive` and `deleteClosed` are
+    //     registered Convex mutations. In TS source they are async functions
+    //     that receive `(ctx, args)` and already re-run auth (requireSuperAdmin)
+    //     inside the handler — so this harness can call them directly instead of
+    //     going through the client proxy.
+    //
+    // IMPORTANT: do NOT keep fallbacks / `.handler(...)` / `: any` casts here.
+    // They mask type mismatches between the harness and the CURRENT registered
+    // signatures and make failures invent-seeming. Type errors in this harness
+    // are first-class signals — fix them at the source.
     let loans: typeof import("./loans");
+    let collectOps: typeof import("../lib/server/loanOps").recordCollection;
     try {
       loans = await import("./loans");
+      collectOps = (await import("../lib/server/loanOps")).recordCollection;
     } catch (e) {
       chk("wire.loans.import", "ok", "failed");
-      return { ok: false, note: "Could not lazy-load ./loans.", checks };
+      return { ok: false, note: "Could not lazy-load ./loans or loanOps.", checks };
     }
-    chk("wire.loans.surrender.callable", "function", typeof loans.surrender);
-    chk("wire.loans.settle.callable", "function", typeof loans.settle);
-    chk("wire.loans.close.callable", "function", typeof loans.close);
-    chk("wire.loans.archive.callable", "function", typeof loans.archive);
-    chk("wire.loans.deleteClosed.callable", "function", typeof loans.deleteClosed);
-    chk("wire.loans.collect.callable", "function", typeof loans.collect);
+    chk("wire.loans.surrender", "function", typeof loans.surrender);
+    chk("wire.loans.settle", "function", typeof loans.settle);
+    chk("wire.loans.close", "function", typeof loans.close);
+    chk("wire.loans.archive", "function", typeof loans.archive);
+    chk("wire.loans.deleteClosed", "function", typeof loans.deleteClosed);
+    chk("wire.loanOps.recordCollection", "function", typeof collectOps);
+
+    // Convenience wrappers that call the handlers the same way the module exports
+    // them — `(ctx, args)` for mutations, full args for the collection helper.
+    const doSurrender = async (ctx: any, args: any) => loans.surrender(ctx, args);
+    const doSettle = async (ctx: any, args: any) => loans.settle(ctx, args);
+    const doClose = async (ctx: any, args: any) => loans.close(ctx, args);
+    const doArchive = async (ctx: any, args: any) => loans.archive(ctx, args);
+    const doDeleteClosed = async (ctx: any, args: any) => loans.deleteClosed(ctx, args);
+    const doCollect = async (ctx: any, args: any) => collectOps(ctx, args);
 
     // ── step 2: set up a self-contained fixture ──────────────────────────
     const branchA = (await ctx.db.query("branches").collect()).find(
