@@ -519,6 +519,9 @@ export async function recordCollection(
     nextDueDate: openRows[0]?.dueDate ?? null,
     status: closed ? "CLOSED" : overdue ? "OVERDUE" : "ACTIVE",
     closeDate: closed ? nowMs : loan.closeDate,
+    // A loan that closes itself through honest repayments is closed by
+    // repayment — the closure record (LoanDetail) says so.
+    ...(closed ? { closureKind: loan.closureKind ?? "REPAYMENT" } : {}),
     overdueDays: 0,
   });
 
@@ -944,14 +947,60 @@ export async function settleLoan(
  * SUPER_ADMIN: close a loan whose dues are fully cleared. Never marks a loan
  * repaid by fiat — the open balance must actually be zero (payments and/or
  * an already-recorded settlement waiver).
+ *
+ * Idempotent for an already-CLOSED loan: a fully repaid loan closes itself
+ * inside the collection path, so a later administrative Close records the
+ * closure metadata (kind / reason / who) instead of failing. The open balance
+ * is re-verified before the metadata is accepted.
  */
 export async function closeLoan(ctx: Mtx, args: LoanOpArgs) {
   const nowMs = args.now ?? Date.now();
   const loan = await ctx.db.get(args.loanId);
   if (!loan) throw new AppError("Loan not found.");
+  const reason = args.reason?.trim();
+
   if (loan.status === "CLOSED") {
-    throw new AppError("This loan is already closed.");
+    const openNow = await loanOpenBalance(ctx, loan._id);
+    if (openNow > 0) {
+      throw new AppError(
+        `Loan ${loan.loanId} is closed but ₹${openNow.toLocaleString("en-IN")} is still open on its schedule — resolve it with Settle or Surrender first.`,
+      );
+    }
+    const closureKind = loan.closureKind ?? "REPAYMENT";
+    await ctx.db.patch(loan._id, {
+      closureKind,
+      ...(reason ? { closureReason: reason } : {}),
+      closedBy: loan.closedBy ?? args.actor._id,
+      closeDate: loan.closeDate ?? nowMs,
+      outstanding: 0,
+      nextDueDate: undefined,
+      overdueDays: 0,
+    });
+    await logAudit(ctx, {
+      actorId: args.actor._id,
+      actorName: args.actor.name,
+      role: args.actor.role,
+      action: "LOAN_CLOSED",
+      entity: "loans",
+      entityId: loan.loanId,
+      before: { status: "CLOSED", closureKind: loan.closureKind },
+      after: {
+        status: "CLOSED",
+        closureKind,
+        reason: reason ?? loan.closureReason ?? "",
+      },
+      referenceId: loan.loanId,
+      branchId: loan.branchId,
+      device: args.device,
+    });
+    return {
+      ok: true as const,
+      loanId: loan.loanId,
+      status: "CLOSED" as const,
+      closeDate: loan.closeDate ?? nowMs,
+    };
   }
+
   if (loan.status === "SETTLED") {
     throw new AppError("This loan is already settled — a settled loan is financially resolved.");
   }
@@ -966,7 +1015,6 @@ export async function closeLoan(ctx: Mtx, args: LoanOpArgs) {
       `₹${outstanding.toLocaleString("en-IN")} is still outstanding — Close only clears fully repaid loans. Use Settle (with waiver) or Surrender to resolve the rest.`,
     );
   }
-  const reason = args.reason?.trim();
   const closureKind =
     loan.closureKind ?? (loan.status === "APPROVED" ? "CANCELLED" : "REPAYMENT");
   await ctx.db.patch(loan._id, {

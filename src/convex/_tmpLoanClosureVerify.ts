@@ -1,33 +1,50 @@
-import { internalMutation } from "./_generated/server";
-import type { Doc } from "./_generated/dataModel";
-import { baseScheduleRows, deriveLoanView } from "../lib/server/loanOps";
-import { AppError } from "../lib/server/convexHelpers";
+import { internalMutation, type MutationCtx, type QueryCtx } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
+import type {
+  FunctionVisibility,
+  RegisteredMutation,
+  RegisteredQuery,
+} from "convex/server";
+import * as loans from "./loans";
+import { collect as collectPayment, today as collectionsToday } from "./collections";
+import {
+  baseScheduleRows,
+  deriveLoanView,
+  loanOpenBalance,
+} from "../lib/server/loanOps";
+import { rowOutstanding } from "../lib/finance/schedule";
 
 /**
  * One-off, self-cleaning, transactional live-verification harness for the
- * SUPER_ADMIN loan closure mutations.
+ * SUPER_ADMIN loan closure feature (surrender / settle / close / archive /
+ * deleteClosed) plus the collection paths they interact with.
  *
  * Run with:
  *   bun convex run _tmpLoanClosureVerify:verify
  *
- * It:
- *   1. finds the seeded SUPER_ADMIN (SA-00001) and a few other roles,
- *   2. creates a self-contained fixture (branch, client, product, schedule
- *      rows that include an overdue row) so the loan can be surrendered /
- *      settled / closed / deleted without touching pre-existing loans,
- *   3. exercises the ACTUAL registered handlers (loans.surrender, loans.settle,
- *      loans.close, loans.archive, loans.deleteClosed) by direct handler calls
- *      with a stubbed auth identity (the same shape @convex-dev/auth derives
- *      the userId from — the identity path these handlers walk, INCLUDING the
- *      @convex-dev/auth server identity lookup),
- *   4. also exercises the authorization negatives — FIELD_STAFF, BRANCH_MANAGER,
- *      ACCOUNTANT, CLIENT — by direct handler calls with those identities, and
- *   5. tears everything down inside the same transaction.
+ * What it does, inside ONE Convex transaction (any failed assertion throws,
+ * the platform rolls everything back, and the fixture is never left behind):
  *
- * Because the harness runs inside a Convex mutation, the handler calls execute
- * in the same transaction context as real mutations. Any assertion failure
- * throws, the platform rolls the transaction back, and the fixture is never
- * visible in production.
+ *   1. finds the seeded SUPER_ADMIN and one profile per other role,
+ *   2. builds a self-contained fixture (branch, client, product, six loans
+ *      with schedules that include overdue rows),
+ *   3. exercises the ACTUAL registered handlers (loans.surrender / settle /
+ *      close / archive / deleteClosed, collections.collect, collections.today
+ *      and loans.list) via direct handler calls with stubbed auth identities
+ *      — the same identity path @convex-dev/auth derives userId from, and the
+ *      same authorization code (requireSuperAdmin / requirePermission) a real
+ *      client call walks,
+ *   4. asserts the authorization negatives (FIELD_STAFF / BRANCH_MANAGER /
+ *      ACCOUNTANT / CLIENT are refused),
+ *   5. asserts every business rule of the closure workflows (dues are never
+ *      erased by surrender, settlement separates cash from waiver, close
+ *      never marks a loan repaid by fiat, delete refuses whenever the
+ *      immutable financial ledger references the loan, …),
+ *   6. verifies reports and boards drop resolved loans (collection board,
+ *      OVERDUE loan list, overdue view) and that the closure record
+ *      (closureKind / closureReason / closedBy) is populated, then
+ *   7. removes every fixture document — including the ledger rows its
+ *      collections created — inside the same transaction.
  *
  * BACKUP INSTRUCTIONS:
  *   - keep this file until the final report is delivered, then remove it.
@@ -36,140 +53,149 @@ import { AppError } from "../lib/server/convexHelpers";
  *     functions table under `_tmpLoanClosureVerify:verify`.
  */
 
-type Check = {
-  name: string;
-  expected: string;
-  actual: string;
-  pass: boolean;
-};
+/* --------------------------- calling registered functions ---------------- */
+
+/**
+ * Convex's registered-function TYPES (`RegisteredMutation` / `RegisteredQuery`)
+ * intentionally hide call signatures, but the runtime value IS a
+ * `(ctx, args) => Promise<...>` wrapper around the exact registered handler
+ * (`dontCallDirectly` in convex's registration_impl). This harness runs inside
+ * one transaction, so it invokes those real handlers through this single
+ * documented bridge — same code path, including `requireSuperAdmin` and the
+ * @convex-dev/auth identity lookup, that a client call walks. Only the RPC
+ * layer's args validation is skipped, which is why every call below passes
+ * fully-formed args.
+ */
+type HandlerOf<T> =
+  T extends RegisteredMutation<FunctionVisibility, infer A, infer R>
+    ? (ctx: MutationCtx, args: A) => R
+    : T extends RegisteredQuery<FunctionVisibility, infer A, infer R>
+      ? (ctx: QueryCtx, args: A) => R
+      : never;
+type ArgsOf<T> =
+  T extends RegisteredMutation<FunctionVisibility, infer A, unknown> ? A : never;
+
+function handler<T>(registered: T): HandlerOf<T> {
+  return registered as unknown as HandlerOf<T>;
+}
+
+const surrender = handler(loans.surrender);
+const settle = handler(loans.settle);
+const close = handler(loans.close);
+const archive = handler(loans.archive);
+const deleteClosed = handler(loans.deleteClosed);
+const collect = handler(collectPayment);
+const board = handler(collectionsToday);
+const loanList = handler(loans.list);
+
+// Compile-time sanity: the bridge really recovers the registered arg types
+// (indexing a wrongly-inferred `unknown` would not compile).
+const _bridgeArgs: ArgsOf<typeof loans.surrender>["reason"] = "bridge-ok";
+
+/* ------------------------------- check helpers ---------------------------- */
+
+type Check = { name: string; expected: string; actual: string; pass: boolean };
 
 let checks: Check[] = [];
+
 const chk = (name: string, expected: unknown, actual: unknown): void => {
   const e = JSON.stringify(expected ?? null);
   const a = JSON.stringify(actual ?? null);
   checks.push({ name, expected: e, actual: a, pass: e === a });
 };
-const note = (name: string, actual?: unknown): void => {
+
+/** Boolean assertion — on failure the actual slot shows the detail message. */
+const chkTrue = (name: string, cond: boolean, detail?: unknown): void => {
   checks.push({
     name,
-    expected: "ok" as any,
-    actual: JSON.stringify(actual ?? "ok"),
-    pass: true,
+    expected: "true",
+    actual: cond ? "true" : String(detail ?? "false"),
+    pass: cond,
   });
 };
+
+/** Returns the thrown error's message, or null when the call resolved. */
+async function expectThrow(fn: () => Promise<unknown>): Promise<string | null> {
+  try {
+    await fn();
+    return null;
+  } catch (e: any) {
+    return e?.message ?? String(e);
+  }
+}
+
+/* --------------------------------- harness -------------------------------- */
 
 export const verify = internalMutation({
   args: {},
   handler: async (ctx) => {
+    // Module-level accumulator: reset per run (Convex reuses the module
+    // instance across invocations within a worker).
+    checks = [];
     const suffix = String(Date.now()).slice(-6);
-    const DAY = 86400000;
+    const DAY = 86_400_000;
+    const now = Date.now();
+    // Disbursed 70 days ago so the schedule contains exactly one overdue row
+    // and one future row: row 1 due ~40d ago (paid on loan A), row 2 due ~10d
+    // ago, row 3 due ~20d ahead.
+    const disbursedOn = now - 70 * DAY;
 
-    // ── locate identities ────────────────────────────────────────────────
+    // ── step 1: identities ─────────────────────────────────────────────────
     const profiles = await ctx.db.query("profiles").collect();
     const byRole: Record<string, Doc<"profiles">> = {};
     for (const p of profiles) {
       if (!p.role || !p.status) continue;
       if (!byRole[p.role] || p.status === "ACTIVE") byRole[p.role] = p;
     }
-
     const sa = byRole["SUPER_ADMIN"];
     chk("id.SUPER_ADMIN.present", true, !!sa);
     if (!sa || !sa.userId) {
-      chk("id.SUPER_ADMIN.userId.present", true, false);
       return {
         ok: false,
-        note: "SA-00001 not present or missing userId — cannot impersonate SUPER_ADMIN.",
+        note: "No SUPER_ADMIN profile with a userId — cannot impersonate.",
         checks,
       };
     }
 
-    // ── impersonate helpers ───────────────────────────────────────────────
-    function asUser(userId: string | undefined) {
-      if (!userId) throw new Error("No userId to impersonate");
-      // This is the exact shape @convex-dev/auth's `getAuthUserId` derives the
-      // userId from: subject = `${userId}:${sessionId}`. Two segments are
-      // required for the subject split.
-      return {
-        ...ctx,
-        auth: { getUserIdentity: async () => ({ subject: `${userId}:fakeSession1` }) },
-      } as any;
+    /**
+     * Impersonate a user through the EXACT subject shape @convex-dev/auth
+     * derives ids from: `getAuthUserId` splits the subject on the library's
+     * TOKEN_SUB_CLAIM_DIVIDER ("|") and takes the first segment. The proxy
+     * keeps every ctx member (db, storage, …) reachable while swapping only
+     * `auth`.
+     */
+    function asUser(userId: Id<"users">): MutationCtx {
+      return new Proxy(ctx, {
+        get(target, prop) {
+          if (prop === "auth") {
+            return {
+              getUserIdentity: async () => ({ subject: `${userId}|verifySession` }),
+            };
+          }
+          const value = (target as any)[prop];
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
     }
+    const saCtx = asUser(sa.userId);
 
-    // ── step 1: load the real loan module once ───────────────────────────
-    // `import()` inside a Convex mutation runs against the ACTIVE deployment,
-    // so these names point at the registered handlers the harness exercises
-    // below. They are async, idempotent, single-transaction calls (the harness
-    // runs inside one big transaction).
-    //
-    // Notes on call shape:
-    //   - `collect` is an exported async function (`src/lib/server/loanOps.ts`),
-    //     NOT a Convex mutation. It is called directly with a real `ctx`-shaped
-    //     object and does its own auth/permission checks.
-    //   - `surrender`, `settle`, `close`, `archive` and `deleteClosed` are
-    //     registered Convex mutations. In TS source they are async functions
-    //     that receive `(ctx, args)` and already re-run auth (requireSuperAdmin)
-    //     inside the handler — so this harness can call them directly instead of
-    //     going through the client proxy.
-    //
-    // IMPORTANT: do NOT keep fallbacks / `.handler(...)` / `: any` casts here.
-    // They mask type mismatches between the harness and the CURRENT registered
-    // signatures and make failures invent-seeming. Type errors in this harness
-    // are first-class signals — fix them at the source.
-    let loans: typeof import("./loans");
-    let collectOps: typeof import("../lib/server/loanOps").recordCollection;
-    try {
-      loans = await import("./loans");
-      collectOps = (await import("../lib/server/loanOps")).recordCollection;
-    } catch (e) {
-      chk("wire.loans.import", "ok", "failed");
-      return { ok: false, note: "Could not lazy-load ./loans or loanOps.", checks };
-    }
-    chk("wire.loans.surrender", "function", typeof loans.surrender);
-    chk("wire.loans.settle", "function", typeof loans.settle);
-    chk("wire.loans.close", "function", typeof loans.close);
-    chk("wire.loans.archive", "function", typeof loans.archive);
-    chk("wire.loans.deleteClosed", "function", typeof loans.deleteClosed);
-    chk("wire.loanOps.recordCollection", "function", typeof collectOps);
-
-    // Convenience wrappers that call the handlers the same way the module exports
-    // them — `(ctx, args)` for mutations, full args for the collection helper.
-    const doSurrender = async (ctx: any, args: any) => loans.surrender(ctx, args);
-    const doSettle = async (ctx: any, args: any) => loans.settle(ctx, args);
-    const doClose = async (ctx: any, args: any) => loans.close(ctx, args);
-    const doArchive = async (ctx: any, args: any) => loans.archive(ctx, args);
-    const doDeleteClosed = async (ctx: any, args: any) => loans.deleteClosed(ctx, args);
-    const doCollect = async (ctx: any, args: any) => collectOps(ctx, args);
-
-    // ── step 2: set up a self-contained fixture ──────────────────────────
+    // ── step 2: self-contained fixture ─────────────────────────────────────
     const branchA = (await ctx.db.query("branches").collect()).find(
       (b) => b.status === "ACTIVE",
     );
-    if (!branchA) throw new Error("No ACTIVE branch — fixture cannot be placed.");
-    // Re-create an active branch only when no ACTIVE branch was seeded.
-    if (!branchA) {
-      const newBranchId = await ctx.db.insert("branches", {
-        code: `TMP-BRANCH-${suffix}`,
-        name: `Verify Branch ${suffix}`,
-        city: "Ballia",
-        state: "Uttar Pradesh",
-        status: "ACTIVE",
-        createdAt: Date.now(),
-      });
-      if (!branchA) throw new Error("Branch creation returned null");
-    }
     chk("fixture.branch.present", true, !!branchA);
+    if (!branchA) throw new Error("No ACTIVE branch — fixture cannot be placed.");
 
-    const now = Date.now();
     const fixtureClientId = await ctx.db.insert("clients", {
       code: `C-TMPCL-${suffix}`,
-      name: `Verify Loan ${suffix}`,
+      name: `Verify Closure ${suffix}`,
       mobile: "9999000011",
       village: "Verify Village",
       address: "Test Lane",
       district: "Ballia",
       state: "Uttar Pradesh",
       pin: "277001",
-      dob: now - DAY * 1800,
+      dob: now - 1800 * DAY,
       age: 30,
       gender: "MALE",
       occupation: "Shopkeeper",
@@ -181,10 +207,9 @@ export const verify = internalMutation({
       createdBy: sa._id,
       kycStatus: "PENDING",
       status: "ACTIVE",
-      searchText: `Verify Loan ${suffix}`,
+      searchText: `Verify Closure ${suffix}`,
       createdAt: now,
     });
-    chk("fixture.client.id.present", true, !!fixtureClientId);
 
     const productId = await ctx.db.insert("loanProducts", {
       code: `PRC-TMP-P-${suffix}`,
@@ -202,789 +227,710 @@ export const verify = internalMutation({
       status: "ACTIVE",
       createdAt: now,
     });
-    chk("fixture.product.id.present", true, !!productId);
 
-    // Three rows: one fully paid (row1 with financed charges), two open (row2
-    // is overdue, row3 is future).
+    // Three monthly rows with the approved charges financed into row 1:
+    // row 1 — oldest (overdue), row 2 — overdue, row 3 — future.
     const rows = baseScheduleRows({
       principal: 18000,
       interestRate: 18,
       interestMethod: "FLAT",
       frequency: "MONTHLY",
       tenure: 3,
-      disbursedOn: now - DAY * 20,
+      disbursedOn,
       charges: 600,
     });
     chk("fixture.rows.count", 3, rows.length);
-    chk("fixture.rows[0].totalDue", rows[0].totalDue, rows[0].totalDue);
+    const totalOf = (r: typeof rows) => Math.round(r.reduce((s, x) => s + x.totalDue, 0) * 100) / 100;
+    const Σ = totalOf(rows); // total payable across the schedule
+    const row1Due = rows[0].dueDate;
+    const row2Due = rows[1].dueDate;
+    chkTrue(
+      "fixture.rows.overdueShape",
+      row2Due < now && rows[2].dueDate > now && row1Due < now,
+      `row1=${row1Due} row2=${row2Due} row3=${rows[2].dueDate} now=${now}`,
+    );
 
-    const fixtureLoanId = await ctx.db.insert("loans", {
-      loanId: `LN-VER-${suffix}`,
-      clientId: fixtureClientId,
-      productId,
-      staffId: sa._id,
-      branchId: branchA._id,
-      principal: rows.reduce((s, r) => s + r.principal, 0),
-      interestTotal: rows.reduce((s, r) => s + r.interest, 0),
-      charges: rows[0].totalDue - rows[0].principal,
-      totalPayable: rows.reduce((s, r) => s + r.totalDue, 0),
-      installment: rows[0].totalDue,
-      frequency: "MONTHLY",
-      tenure: 3,
-      interestRate: 18,
-      interestMethod: "FLAT",
-      status: "DISBURSED",
-      outstanding: rows.reduce((s, r) => s + r.totalDue, 0),
-      paidTotal: 0,
-      disbursedAt: now - DAY * 20,
-      disbursedBy: sa._id,
-      approvedAt: now - DAY * 20,
-      approvedBy: sa._id,
-      nextDueDate: rows[0].dueDate,
-      lastPaymentAt: undefined,
-      overdueDays: 0,
-      createdAt: now - DAY * 30,
-    });
-    chk("fixture.loan.id.present", true, !!fixtureLoanId);
-    chk("fixture.loan.status", "DISBURSED", (await ctx.db.get(fixtureLoanId))?.status);
-
-    // Schedule the three rows.
-    for (let i = 0; i < rows.length; i++) {
-      const r = rows[i];
-      await ctx.db.insert("loanSchedules", {
-        loanId: fixtureLoanId,
-        index: i + 1,
-        dueDate: r.dueDate,
-        principal: 0,
-        interest: r.interest,
-        totalDue: r.totalDue,
-        paid: i === 0 ? r.totalDue : 0, // row1 fully paid
-        remaining: i === 0 ? 0 : r.totalDue,
-        status: "PENDING",
-        updatedAt: now,
+    /** Insert a loan + schedule with internally consistent stored aggregates. */
+    async function insertLoan(
+      kind: string,
+      opts: { status: string; paidIndexes: number[] },
+    ): Promise<Id<"loans">> {
+      const paidTotal = totalOf(rows.filter((r) => opts.paidIndexes.includes(r.index)));
+      const outstanding = Math.round((Σ - paidTotal) * 100) / 100;
+      const id = await ctx.db.insert("loans", {
+        loanId: `LN-VER-${kind}-${suffix}`,
+        clientId: fixtureClientId,
+        productId,
+        staffId: sa._id,
+        branchId: branchA!._id,
+        principal: Math.round(rows.reduce((s, r) => s + r.principal, 0) * 100) / 100,
+        interestTotal: Math.round(rows.reduce((s, r) => s + r.interest, 0) * 100) / 100,
+        charges: Math.round((rows[0].totalDue - rows[0].principal) * 100) / 100,
+        totalPayable: Σ,
+        installment: rows[0].totalDue,
+        frequency: "MONTHLY",
+        tenure: 3,
+        interestRate: 18,
+        interestMethod: "FLAT",
+        status: opts.status,
+        outstanding,
+        paidTotal,
+        disbursedAt: disbursedOn,
+        disbursedBy: sa._id,
+        approvedAt: disbursedOn,
+        approvedBy: sa._id,
+        nextDueDate: rows[0].dueDate,
+        overdueDays: 0,
+        createdAt: now - 80 * DAY,
       });
-    }
-    const loanRows = (await ctx.db
-      .query("loanSchedules")
-      .withIndex("by_loan", (q) => q.eq("loanId", fixtureLoanId))
-      .collect()) as Doc<"loanSchedules">[];
-    chk("fixture.loanRows.count", 3, loanRows.length);
-    chk("fixture.loanRows[0].paid", rows[0].totalDue, loanRows[0]?.paid);
-    chk("fixture.loanRows[1].paid", 0, loanRows[1]?.paid);
-    chk("fixture.loanRows[2].paid", 0, loanRows[2]?.paid);
-
-    // Derive view: should be ACTIVE with ~24800 outstanding (row1 paid, rows2+3 open).
-    const loanDoc = await ctx.db.get(fixtureLoanId) as any;
-    const view = deriveLoanView(loanDoc, loanRows as any, now);
-    chk("fixture.loan.view.displayStatus", "ACTIVE", view.displayStatus);
-    chk("fixture.loan.view.outstanding", rows[1].totalDue + rows[2].totalDue, (view as any).outstanding);
-    chk("fixture.loan.view.overdueAmount", rows[1].totalDue, (view as any).overdueAmount);
-    chk("fixture.loan.view.nextDueDate", rows[1].dueDate, (view as any).nextDueDate);
-
-    // Outstanding should be what the engine says, not a stale field.
-    chk("fixture.loan.staleFieldGuarded", (view as any).outstanding, loanDoc.outstanding);
-    // (loanDoc.outstanding was set to rows.reduce sum; view should agree now).
-
-    // ── step 3: authorization negatives (real handlers) ──────────────────
-    const denyAs = (handlerTarget: any, argsJson: any, who: string) => {
-      const p = byRole[who];
-      if (!p?.userId)
-        throw new Error(`No active ${who} profile with userId to impersonate`);
-      try {
-        return handlerTarget(asUser(p.userId), argsJson);
-      } catch (e: any) {
-        const msg = e.message || String(e);
-        if (
-          msg.startsWith("Not signed in") ||
-          msg.includes("Only a SUPER_ADMIN") ||
-          msg.includes("outside your access")
-        )
-          return { denied: true, message: msg };
-        throw e;
+      for (const r of rows) {
+        const paid = opts.paidIndexes.includes(r.index) ? r.totalDue : 0;
+        await ctx.db.insert("loanSchedules", {
+          loanId: id,
+          index: r.index,
+          dueDate: r.dueDate,
+          principal: r.principal,
+          interest: r.interest,
+          totalDue: r.totalDue,
+          paid,
+          remaining: Math.round((r.totalDue - paid) * 100) / 100,
+          status:
+            paid >= r.totalDue ? "PAID" : r.dueDate < now ? "OVERDUE" : "PENDING",
+          updatedAt: now,
+        });
       }
-    };
+      return id;
+    }
 
-    // FIELD_STAFF should be unable to surrender a loan they do not own's branch.
-    const fsAttempt = denyAs(
-      loans.surrender,
-      { loanId: fixtureLoanId, reason: "helper check fs cannot surrender", device: "verify" },
-      "FIELD_STAFF",
-    );
-    chk("auth.FIELD_STAFF.surrender.denied", String(fsAttempt?.denied), fsAttempt?.message ?? "ok");
+    // A — normal loan with its first installment already paid (one overdue
+    //     row open). B — untouched. C — untouched (will repay fully).
+    // D — fully repaid rows, no money ever moved through the ledger.
+    // E — untouched (stays unpaid). F — untouched (will settle with waiver).
+    const loanA = await insertLoan("A", { status: "DISBURSED", paidIndexes: [1] });
+    const loanB = await insertLoan("B", { status: "DISBURSED", paidIndexes: [] });
+    const loanC = await insertLoan("C", { status: "DISBURSED", paidIndexes: [] });
+    const loanD = await insertLoan("D", { status: "ACTIVE", paidIndexes: [1, 2, 3] });
+    const loanE = await insertLoan("E", { status: "DISBURSED", paidIndexes: [] });
+    const loanF = await insertLoan("F", { status: "DISBURSED", paidIndexes: [] });
+    chk("fixture.loanA.openBalance", rows[1].totalDue + rows[2].totalDue, await loanOpenBalance(ctx, loanA));
+    chk("fixture.loanD.openBalance", 0, await loanOpenBalance(ctx, loanD));
 
-    const bmAttempt = denyAs(
-      loans.surrender,
-      { loanId: fixtureLoanId, reason: "helper check bm cannot surrender", device: "verify" },
-      "BRANCH_MANAGER",
-    );
-    chk("auth.BRANCH_MANAGER.surrender.denied", String(bmAttempt?.denied), bmAttempt?.message ?? "ok");
+    const loanADoc = (await ctx.db.get(loanA))!;
+    const loanARows = (
+      await ctx.db
+        .query("loanSchedules")
+        .withIndex("by_loan", (q) => q.eq("loanId", loanA))
+        .collect()
+    ).sort((a, b) => a.index - b.index);
+    const viewA = deriveLoanView(loanADoc, loanARows as Doc<"loanSchedules">[], now);
+    chk("fixture.loanA.view.displayStatus", "OVERDUE", viewA.displayStatus);
+    chk("fixture.loanA.view.overdueAmount", rows[1].totalDue, viewA.overdueAmount);
+    chk("fixture.loanA.view.nextDueDate", rows[1].dueDate, viewA.nextDueDate);
+    // Stored outstanding agrees with the schedule-derived open balance.
+    chk("fixture.loanA.outstandingConsistent", loanADoc.outstanding, await loanOpenBalance(ctx, loanA));
 
-    const acctAttempt = denyAs(
-      loans.surrender,
-      { loanId: fixtureLoanId, reason: "helper check accountant cannot surrender", device: "verify" },
-      "ACCOUNTANT",
-    );
-    chk("auth.ACCOUNTANT.surrender.denied", String(acctAttempt?.denied), acctAttempt?.message ?? "ok");
+    // ── step 3: authorization negatives (real registered handlers) ─────────
+    // The harness is self-contained: when the deployment has no profile for a
+    // role, it creates a throwaway ACTIVE user + profile for that role and
+    // removes both again during cleanup. The denial is only trusted when it
+    // came from requireSuperAdmin's role check, so an ACTIVE profile is
+    // guaranteed before the call.
+    const throwawayProfileIds: Id<"profiles">[] = [];
+    const throwawayUserIds: Id<"users">[] = [];
 
-    const clientAttempt = denyAs(
-      loans.surrender,
-      { loanId: fixtureLoanId, reason: "helper check client cannot surrender", device: "verify" },
-      "CLIENT",
-    );
-    chk("auth.CLIENT.surrender.denied", String(clientAttempt?.denied), clientAttempt?.message ?? "ok");
+    async function ensureRoleIdentity(who: string): Promise<Doc<"profiles">> {
+      const existing = byRole[who];
+      if (existing?.userId && existing.status === "ACTIVE") return existing;
+      const userId = await ctx.db.insert("users", {
+        name: `Verify ${who} ${suffix}`,
+        email: `verify-${who.toLowerCase()}-${suffix}@example.test`,
+      });
+      throwawayUserIds.push(userId);
+      const profileId = await ctx.db.insert("profiles", {
+        userId,
+        name: `Verify ${who} ${suffix}`,
+        staffId: `TMP-${who.slice(0, 2)}-${suffix}`,
+        role: who,
+        branchId: branchA!._id,
+        status: "ACTIVE",
+        ...(who === "CLIENT" ? { clientId: fixtureClientId } : {}),
+        createdBy: sa._id,
+        createdAt: now,
+      });
+      throwawayProfileIds.push(profileId);
+      return (await ctx.db.get(profileId))!;
+    }
 
-    note("auth.negatives.checked", [
-      "FIELD_STAFF",
-      "BRANCH_MANAGER",
-      "ACCOUNTANT",
-      "CLIENT",
-    ].map((r) => `${r}: ${byRole[r]?.staffId || "noActive?"}`),
+    async function expectDeniedAs(
+      who: string,
+      call: (c: MutationCtx) => Promise<unknown>,
+    ): Promise<string | null> {
+      const p = await ensureRoleIdentity(who);
+      if (!p.userId) return `${who} profile has no userId to impersonate`;
+      const userId = p.userId; // narrow once — closures can't keep property narrowing
+      return await expectThrow(() => call(asUser(userId)));
+    }
+
+    for (const who of ["FIELD_STAFF", "BRANCH_MANAGER", "ACCOUNTANT", "CLIENT"]) {
+      const msg = await expectDeniedAs(who, (c) =>
+        surrender(c, {
+          loanId: loanA,
+          reason: `helper check — ${who} must not surrender`,
+          device: "verify",
+        }),
       );
+      chkTrue(
+        `auth.${who}.surrender.denied`,
+        !!msg && msg.includes("Only a SUPER_ADMIN"),
+        msg ?? "call unexpectedly succeeded",
+      );
+    }
+    const msgNoAuth = await expectThrow(() =>
+      surrender(ctx, { loanId: loanA, reason: "anonymous", device: "verify" }),
+    );
+    chkTrue(
+      "auth.anonymous.surrender.denied",
+      !!msgNoAuth && msgNoAuth.includes("Not signed in"),
+      msgNoAuth ?? "call unexpectedly succeeded",
+    );
 
-    // ── step 4: SUPER_ADMIN can surrender an eligible active loan ─────────
-    const surrenderRes = (await (loans.surrender as any)(
-      asUser(sa.userId),
-      {
-        loanId: fixtureLoanId,
-        reason: "Test loan surrendered by verify harness — routine administration",
-        device: "verify",
-      },
-    )) as any;
-    chk("sa.surrender.ok", true, surrenderRes.ok === true);
-    chk("sa.surrender.loanId", fixtureLoanId, surrenderRes.loanId);
+    // ── step 4: SUPER_ADMIN surrenders an eligible loan (dues stay on record)
+    const surrenderRes = await surrender(saCtx, {
+      loanId: loanA,
+      reason: "Verify harness surrender — routine administration",
+      device: "verify",
+    });
+    chk("sa.surrender.ok", true, surrenderRes.ok);
+    chk("sa.surrender.loanId", `LN-VER-A-${suffix}`, surrenderRes.loanId);
     chk("sa.surrender.status", "SURRENDERED", surrenderRes.status);
+    // The open debt is preserved verbatim — surrender never erases dues.
     chk(
-      "sa.surrender.outstanding.unchanged",
+      "sa.surrender.outstandingPreserved",
       rows[1].totalDue + rows[2].totalDue,
       surrenderRes.outstanding,
     );
-    const loanAfterSurrender = await ctx.db.get(fixtureLoanId);
-    chk("sa.surrender.loan.status", "SURRENDERED", loanAfterSurrender?.status);
+    const loanAAfter = (await ctx.db.get(loanA))!;
+    chk("sa.surrender.loan.status", "SURRENDERED", loanAAfter.status);
+    chk("sa.surrender.loan.closureKind", "SURRENDER", loanAAfter.closureKind);
     chk(
-      "sa.surrender.loan.closureKind",
-      "SURRENDER",
-      loanAfterSurrender?.closureKind,
+      "sa.surrender.loan.closureReason",
+      "Verify harness surrender — routine administration",
+      loanAAfter.closureReason,
     );
+    chk("sa.surrender.loan.closedBy", sa._id, loanAAfter.closedBy);
     chk(
-      "sa.surrender.loan.closureReason.present",
-      "Test loan surrendered by verify harness",
-      loanAfterSurrender?.closureReason,
+      "sa.surrender.loan.outstandingUnchanged",
+      loanADoc.outstanding,
+      loanAAfter.outstanding,
     );
 
-    // After surrender, the same loan cannot be surrendered again and cannot
-    // be settled / deleted while still being surrendered.
-    try {
-      await loans.surrender.handler(asUser(sa.userId), {
-        loanId: fixtureLoanId,
-        reason: "double",
-        device: "verify",
-      });
-      chk("sa.surrender.uniqueness", "surrendered", "did not throw");
-    } catch (e: any) {
-      const msg = e.message || String(e);
-      chk(
-        "sa.surrender.uniqueness",
-        msg.includes("surrendered") || msg.includes("only a disbursed loan"),
-        msg,
-      );
-    }
+    const surrenderAudit = (await ctx.db.query("auditLogs").collect()).filter(
+      (a) =>
+        a.action === "LOAN_SURRENDERED" &&
+        a.referenceId === `LN-VER-A-${suffix}`,
+    );
+    chk("sa.surrender.audit.count", 1, surrenderAudit.length);
 
-    try {
-      await (loans.settle as any)(asUser(sa.userId), {
-        loanId: fixtureLoanId,
+    // A surrendered loan is operationally closed for money movement.
+    const dupSurrender = await expectThrow(() =>
+      surrender(saCtx, { loanId: loanA, reason: "double", device: "verify" }),
+    );
+    chkTrue(
+      "sa.surrender.doubleReplaced",
+      !!dupSurrender && dupSurrender.includes("surrendered"),
+      dupSurrender ?? "second surrender unexpectedly succeeded",
+    );
+    const settleFromSurrendered = await expectThrow(() =>
+      settle(saCtx, {
+        loanId: loanA,
         settlementAmount: 1,
         mode: "CASH",
-        reason: "double",
+        reason: "settle a surrendered loan",
         device: "verify",
-      });
-      chk("sa.settle.fromSurrendered", "should throw", "did not throw");
-    } catch (e: any) {
-      chk(
-        "sa.settle.fromSurrendered",
-        e.message?.toLowerCase().includes("surrendered") || e.message?.toLowerCase().includes("only a disbursed loan"),
-        e.message,
-      );
-    }
+      }),
+    );
+    chkTrue(
+      "sa.settle.fromSurrendered.rejected",
+      !!settleFromSurrendered && settleFromSurrendered.includes("surrendered"),
+      settleFromSurrendered ?? "settle on surrendered loan unexpectedly succeeded",
+    );
+    const collectFromSurrendered = await expectThrow(() =>
+      collect(saCtx, {
+        loanId: loanA,
+        amount: 100,
+        mode: "CASH",
+        remarks: "collect on surrendered loan",
+        device: "verify",
+      }),
+    );
+    chkTrue(
+      "sa.collect.onSurrendered.rejected",
+      !!collectFromSurrendered && collectFromSurrendered.includes("no collections accepted"),
+      collectFromSurrendered ?? "collection on surrendered loan unexpectedly succeeded",
+    );
+    const closeSurrenderedUnpaid = await expectThrow(() =>
+      close(saCtx, { loanId: loanA, reason: "close unpaid surrendered loan", device: "verify" }),
+    );
+    chkTrue(
+      "sa.close.surrenderedUnpaid.rejected",
+      !!closeSurrenderedUnpaid && closeSurrenderedUnpaid.includes("outstanding"),
+      closeSurrenderedUnpaid ?? "close of unpaid surrendered loan unexpectedly succeeded",
+    );
+    const archiveSurrendered = await expectThrow(() =>
+      archive(saCtx, { loanId: loanA, reason: "archive surrendered loan", device: "verify" }),
+    );
+    chkTrue(
+      "sa.archive.surrendered.rejected",
+      !!archiveSurrendered && archiveSurrendered.includes("Only a closed or settled"),
+      archiveSurrendered ?? "archive of surrendered loan unexpectedly succeeded",
+    );
 
-    // ── step 5: create a second ACTIVE loan for settle / close scenarios ──
-    const loanB = await ctx.db.insert("loans", {
-      loanId: `LN-VER-B-${suffix}`,
-      clientId: fixtureClientId,
-      productId,
-      staffId: sa._id,
-      branchId: branchA._id,
-      principal: rows.reduce((s, r) => s + r.principal, 0),
-      interestTotal: rows.reduce((s, r) => s + r.interest, 0),
-      charges: rows[0].totalDue - rows[0].principal,
-      totalPayable: rows.reduce((s, r) => s + r.totalDue, 0),
-      installment: rows[0].totalDue,
-      frequency: "MONTHLY",
-      tenure: 3,
-      interestRate: 18,
-      interestMethod: "FLAT",
-      status: "DISBURSED",
-      outstanding: rows.reduce((s, r) => s + r.totalDue, 0),
-      paidTotal: 0,
-      disbursedAt: now - DAY * 20,
-      disbursedBy: sa._id,
-      approvedAt: now - DAY * 20,
-      approvedBy: sa._id,
-      nextDueDate: rows[0].dueDate,
-      lastPaymentAt: undefined,
-      overdueDays: 0,
-      createdAt: now - DAY * 30,
+    // ── step 5: settle with a FULL cash payment (no waiver) ────────────────
+    // Partial payment first, then settle the remaining open balance in cash.
+    const partial = rows[1].totalDue * 0.5;
+    const partRes = await collect(saCtx, {
+      loanId: loanB,
+      amount: partial,
+      mode: "CASH",
+      remarks: "Verify harness partial payment on loan B",
+      device: "verify",
     });
-    for (let i = 0; i < rows.length; i++) {
-      const r = rows[i];
-      await ctx.db.insert("loanSchedules", {
-        loanId: loanB,
-        index: i + 1,
-        dueDate: r.dueDate,
-        principal: 0,
-        remaining: r.totalDue,
-        totalDue: r.totalDue,
-        paid: 0,
-        interest: r.interest,
-        status: "PENDING",
-        updatedAt: now,
-      });
-    }
-    chk("scenario.loanB.id.present", true, !!loanB);
-
-    // Partial payment on loan B (row 2 partial).
-    const partPayment = await loans.collect.handler(
-      asUser(sa.userId),
-      {
-        loanId: loanB,
-        amount: rows[1].totalDue * 0.5,
-        mode: "CASH",
-        remarks: "Verify harness partial payment on loan B row 2",
-        device: "verify",
-      },
-    ) as any;
-    chk("scenario.loanB.partialPayment.ok", true, partPayment?.ok === true);
-    const loanBAfterPart = await ctx.db.get(loanB) as any;
-    chk("scenario.loanB.partialPayment.outstanding.reduced", rows.reduce((s, r) => s + r.totalDue, 0) - rows[1].totalDue * 0.5, loanBAfterPart?.outstanding);
-
-    // ── step 6: SUPER_ADMIN can settle a loan and clearly distinguish
-    //      payment vs. waiver ──────────────────────────────────────────────
-    const settleResult = (await (loans.settle as any)(
-      asUser(sa.userId),
-      {
-        loanId: loanB,
-        settlementAmount: rows[1].totalDue * 0.5,
-        mode: "CASH",
-        reason: "Verify harness settlement — full cash payment of partial",
-        device: "verify",
-      },
-    )) as any;
-    chk("sa.settle.ok", true, settleResult.ok === true);
-    chk("sa.settle.status", "SETTLED", settleResult.status);
-    chk("sa.settle.settlementPaid", rows[1].totalDue * 0.5, settleResult.settlementPaid);
+    chkTrue("scenario.loanB.partial.ok", partRes.ok === true, partRes);
+    chkTrue("scenario.loanB.partial.receipt", !!partRes.receiptNumber, partRes.receiptNumber);
+    const openAfterPartial = await loanOpenBalance(ctx, loanB);
     chk(
-      "sa.settle.waivedAmount.zeroForFullPayment",
-      0,
-      settleResult.waivedAmount,
+      "scenario.loanB.partial.outstandingReduced",
+      Math.round((Σ - partial) * 100) / 100,
+      openAfterPartial,
     );
 
-    const loanBAfterSettle = await ctx.db.get(loanB) as any;
-    chk("sa.settle.loan.status", "SETTLED", loanBAfterSettle?.status);
-    chk("sa.settle.loan.outstanding", 0, loanBAfterSettle?.outstanding);
-    chk("sa.settle.loan.waivedAmount", 0, loanBAfterSettle?.waivedAmount ?? null);
-    chk(
-      "sa.settle.loan.paidTotal",
-      rows[0].totalDue + rows[1].totalDue,
-      loanBAfterSettle?.paidTotal,
-    );
-    chk("sa.settle.loan.closureKind", "SETTLEMENT", loanBAfterSettle?.closureKind);
-    chk("sa.settle.loan.closureReason.present", true, !!loanBAfterSettle?.closureReason);
-    chk("sa.settle.loan.closedBy", sa._id, loanBAfterSettle?.closedBy);
+    const settleRes = await settle(saCtx, {
+      loanId: loanB,
+      settlementAmount: openAfterPartial,
+      mode: "CASH",
+      reason: "Verify harness full-cash settlement of loan B",
+      device: "verify",
+    });
+    chk("sa.settle.ok", true, settleRes.ok);
+    chk("sa.settle.status", "SETTLED", settleRes.status);
+    chk("sa.settle.settlementPaid", openAfterPartial, settleRes.settlementPaid);
+    chk("sa.settle.waivedAmount.zeroForFullCash", 0, settleRes.waivedAmount);
+    chkTrue("sa.settle.receiptNumber.present", !!settleRes.receiptNumber, settleRes.receiptNumber);
 
-    // Verify the settlementPayment registration rows: only the settlement cash
-    // appears as NORMAL; waiveAmount is separate.
-    const collectionsB = await ctx.db
-      .query("collections")
-      .withIndex("by_loan", (q) => q.eq("loanId", loanB))
-      .collect();
-    const normalBins = collectionsB.filter((c) => c.status === "NORMAL");
-    chk("sa.settle.collections.normalCount", 1, normalBins.length);
+    const loanBAfter = (await ctx.db.get(loanB))!;
+    chk("sa.settle.loan.status", "SETTLED", loanBAfter.status);
+    chk("sa.settle.loan.outstanding", 0, loanBAfter.outstanding);
+    chk("sa.settle.loan.waivedAmount", 0, loanBAfter.waivedAmount ?? null);
+    chk("sa.settle.loan.paidTotal", Σ, loanBAfter.paidTotal);
+    chk("sa.settle.loan.closureKind", "SETTLEMENT", loanBAfter.closureKind);
     chk(
-      "sa.settle.collections.amountMatchesSettlementCash",
-      rows[1].totalDue * 0.5,
-      normalBins[0]?.amount,
+      "sa.settle.loan.closureReason",
+      "Verify harness full-cash settlement of loan B",
+      loanBAfter.closureReason,
     );
-    chk("sa.settle.collections.receiptNumber.present", true, !!normalBins[0]?.receiptNumber);
-    chk("sa.settle.collections.mode", "CASH", normalBins[0]?.mode);
-    // No schedule row should show waived > 0 because the settlement cleared each
-    // remaining row exactly (partial paid, remainder waived by exact match).
-    const waivedRows = await ctx.db
-      .query("loanSchedules")
-      .withIndex("by_loan", (q) => q.eq("loanId", loanB))
-      .collect();
-    const sumWaived = waivedRows.reduce((s, r: any) => s + (r.waived || 0), 0);
-    chk("sa.settle.waivedRows.totalZero", 0, sumWaived);
+    chk("sa.settle.loan.closedBy", sa._id, loanBAfter.closedBy);
+    chkTrue("sa.settle.loan.closeDate.present", !!loanBAfter.closeDate, loanBAfter.closeDate);
 
-    // A settled loan cannot be settled again.
-    try {
-      await (loans.settle as any)(asUser(sa.userId), {
+    // Ledger coherence: partial + settlement are the only NORMAL collections
+    // and together they equal the whole schedule — nothing waived, nothing
+    // invented.
+    const collectionsB = (
+      await ctx.db
+        .query("collections")
+        .withIndex("by_loan", (q) => q.eq("loanId", loanB))
+        .collect()
+    ).filter((c) => c.status === "NORMAL");
+    chk("sa.settle.collections.normalCount", 2, collectionsB.length);
+    const settleCol = collectionsB.find((c) => c.amount === openAfterPartial);
+    chkTrue("sa.settle.collections.settlementRowPresent", !!settleCol, collectionsB.map((c) => c.amount));
+    chk("sa.settle.collections.settlementMode", "CASH", settleCol?.mode);
+    chkTrue("sa.settle.collections.receipt", !!settleCol?.receiptNumber, settleCol?.receiptNumber);
+    const collectedB = Math.round(collectionsB.reduce((s, c) => s + c.amount, 0) * 100) / 100;
+    chk("sa.settle.collections.sumEqualsSchedule", Σ, collectedB);
+    const waivedB = (
+      await ctx.db
+        .query("loanSchedules")
+        .withIndex("by_loan", (q) => q.eq("loanId", loanB))
+        .collect()
+    ).reduce((s, r: any) => s + (r.waived ?? 0), 0);
+    chk("sa.settle.waivedRows.totalZero", 0, waivedB);
+
+    const dupSettle = await expectThrow(() =>
+      settle(saCtx, {
         loanId: loanB,
         settlementAmount: 1,
         mode: "CASH",
-        reason: "dup",
+        reason: "settle a settled loan",
         device: "verify",
-      });
-      chk("sa.settle.duplicate", "should throw", "did not throw");
-    } catch (e: any) {
-      chk(
-        "sa.settle.duplicate",
-        e.message?.toLowerCase().includes("settled") || e.message?.toLowerCase().includes("only a disbursed loan"),
-        e.message,
-      );
-    }
-
-    // ── step 7: a fully repaid loan can be closed ─────────────────────────
-    const loanC = await ctx.db.insert("loans", {
-      loanId: `LN-VER-C-${suffix}`,
-      clientId: fixtureClientId,
-      productId,
-      staffId: sa._id,
-      branchId: branchA._id,
-      principal: rows.reduce((s, r) => s + r.principal, 0),
-      interestTotal: rows.reduce((s, r) => s + r.interest, 0),
-      charges: rows[0].totalDue - rows[0].principal,
-      totalPayable: rows.reduce((s, r) => s + r.totalDue, 0),
-      installment: rows[0].totalDue,
-      frequency: "MONTHLY",
-      tenure: 3,
-      interestRate: 18,
-      interestMethod: "FLAT",
-      status: "DISBURSED",
-      outstanding: rows.reduce((s, r) => s + r.totalDue, 0),
-      paidTotal: 0,
-      disbursedAt: now - DAY * 20,
-      disbursedBy: sa._id,
-      approvedAt: now - DAY * 20,
-      approvedBy: sa._id,
-      nextDueDate: rows[0].dueDate,
-      lastPaymentAt: undefined,
-      overdueDays: 0,
-      createdAt: now - DAY * 30,
-    });
-    for (let i = 0; i < rows.length; i++) {
-      const r = rows[i];
-      await ctx.db.insert("loanSchedules", {
-        loanId: loanC,
-        index: i + 1,
-        dueDate: r.dueDate,
-        principal: 0,
-        remaining: 0,
-        totalDue: r.totalDue,
-        interest: r.interest,
-        paid: r.totalDue, // fully paid
-        status: "PENDING",
-        updatedAt: now,
-      });
-    }
-
-    // Record a single honest collection that clears the remaining balance.
-    await (loans.collect as any)(
-      asUser(sa.userId),
-      {
-        loanId: loanC,
-        amount: rows.reduce((s, r) => s + r.totalDue, 0),
-        mode: "CASH",
-        remarks: "Verify harness full repayment of loan C",
-        device: "verify",
-      },
-    ) as any;
-    const loanCBeforeClose = await ctx.db.get(loanC);
-    chk("sa.close.fullRepaidLoan.status.before", "CLOSED", loanCBeforeClose?.status);
-
-    try {
-      await (loans.close as any)(
-        asUser(sa.userId),
-        { loanId: loanC, reason: "Full repayment of loan C", device: "verify" },
-      );
-      chk("sa.close.fullRepaidLoan.status.after", "CLOSED", "not present");
-    } catch (e: any) {
-      chk("sa.close.fullRepaidLoan.status.after", "closed", "closed");
-    }
-    const loanCAfter = await ctx.db.get(loanC);
-    chk("sa.close.fullRepaidLoan.closureKind", "REPAYMENT", loanCAfter?.closureKind);
-    chk("sa.close.fullRepaidLoan.outstanding", 0, loanCAfter?.outstanding);
-
-    // ── step 8: a loan with zero outstanding but status ACTIVE can still be closed
-    const loanD = await ctx.db.insert("loans", {
-      loanId: `LN-VER-D-${suffix}`,
-      clientId: fixtureClientId,
-      productId,
-      staffId: sa._id,
-      branchId: branchA._id,
-      principal: rows.reduce((s, r) => s + r.principal, 0),
-      interestTotal: rows.reduce((s, r) => s + r.interest, 0),
-      charges: 0,
-      totalPayable: rows.reduce((s, r) => s + r.totalDue, 0),
-      installment: rows[0].totalDue,
-      frequency: "MONTHLY",
-      tenure: 3,
-      interestRate: 18,
-      interestMethod: "FLAT",
-      status: "ACTIVE",
-      outstanding: 0,
-      paidTotal: 0,
-      disbursedAt: now - DAY * 20,
-      disbursedBy: sa._id,
-      approvedAt: now - DAY * 20,
-      approvedBy: sa._id,
-      nextDueDate: rows[0].dueDate,
-      lastPaymentAt: undefined,
-      overdueDays: 0,
-      createdAt: now - DAY * 30,
-    });
-    for (let i = 0; i < rows.length; i++) {
-      const r = rows[i];
-      await ctx.db.insert("loanSchedules", {
-        loanId: loanD,
-        index: i + 1,
-        dueDate: r.dueDate,
-        principal: 0,
-        remaining: 0,
-        totalDue: r.totalDue,
-        interest: r.interest,
-        paid: r.totalDue,
-        status: "PENDING",
-        updatedAt: now,
-      });
-    }
-    const loanDBefore = await ctx.db.get(loanD);
-    chk("sa.close.statusOnlyActiveLoan.status.before", "ACTIVE", loanDBefore?.status);
-
-    try {
-      await (loans.close as any)(
-        asUser(sa.userId),
-        { loanId: loanD, reason: "Zero outstanding active loan, closeable", device: "verify" },
-      );
-      chk("sa.close.statusOnlyActiveLoan.status.after", "CLOSED", "not present");
-    } catch (e: any) {
-      chk("sa.close.statusOnlyActiveLoan.status.after", "closed", "closed");
-    }
-    const loanDAfter = await ctx.db.get(loanD);
-    chk("sa.close.statusOnlyActiveLoan.closureKind", "REPAYMENT", loanDAfter?.closureKind);
-    chk("sa.close.statusOnlyActiveLoan.outstanding", 0, loanDAfter?.outstanding);
-
-    // ── step 9: an unpaid loan cannot be falsely marked as fully repaid ────
-    const loanE = await ctx.db.insert("loans", {
-      loanId: `LN-VER-E-${suffix}`,
-      clientId: fixtureClientId,
-      productId,
-      staffId: sa._id,
-      branchId: branchA._id,
-      principal: rows.reduce((s, r) => s + r.principal, 0),
-      interestTotal: rows.reduce((s, r) => s + r.interest, 0),
-      charges: 0,
-      totalPayable: rows.reduce((s, r) => s + r.totalDue, 0),
-      installment: rows[0].totalDue,
-      frequency: "MONTHLY",
-      tenure: 3,
-      interestRate: 18,
-      interestMethod: "FLAT",
-      status: "DISBURSED",
-      outstanding: rows.reduce((s, r) => s + r.totalDue, 0),
-      paidTotal: 0,
-      disbursedAt: now - DAY * 20,
-      disbursedBy: sa._id,
-      approvedAt: now - DAY * 20,
-      approvedBy: sa._id,
-      nextDueDate: rows[0].dueDate,
-      lastPaymentAt: undefined,
-      overdueDays: 0,
-      createdAt: now - DAY * 30,
-    });
-    for (let i = 0; i < rows.length; i++) {
-      const r = rows[i];
-      await ctx.db.insert("loanSchedules", {
-        loanId: loanE,
-        index: i + 1,
-        dueDate: r.dueDate,
-        principal: 0,
-        remaining: r.totalDue,
-        totalDue: r.totalDue,
-        interest: r.interest,
-        paid: 0,
-        status: "PENDING",
-        updatedAt: now,
-      });
-    }
-    const loanEBefore = await ctx.db.get(loanE);
-    chk("sa.close.unpaidLoan.status.before", "DISBURSED", loanEBefore?.status);
-
-    try {
-      await (loans.close as any)(
-        asUser(sa.userId),
-        { loanId: loanE, reason: "falsely closed", device: "verify" },
-      );
-      chk("sa.close.unpaidLoan.rejected", true, "did not throw");
-    } catch (e: any) {
-      const msg = e.message || String(e);
-      chk(
-        "sa.close.unpaidLoan.rejected",
-        msg.includes("outstanding") || msg.includes("cannot close") || msg.includes("not"),
-        msg,
-      );
-    }
-
-    // ── step 10: active and financially unresolved loans cannot be deleted ──
-    try {
-      await loans.deleteClosed.handler(
-        asUser(sa.userId),
-        {
-          loanId: fixtureLoanId,
-          reason: "surrendered loans cannot be deleted",
-          device: "verify",
-        },
-      );
-      chk("sa.delete.activeLoan.denied", true, "did not throw");
-    } catch (e: any) {
-      const msg = e.message || String(e);
-      chk(
-        "sa.delete.activeLoan.rejected",
-        msg.includes("closed") || msg.includes("surrendered") || msg.includes("resolved"),
-        msg,
-      );
-    }
-
-    // ── step 11: eligible closed/settled loans can be archived ─────────────
-    const loanBAfterSettle2 = await ctx.db.get(loanB) as any;
-    const archB = (await loans.archive(
-      asUser(sa.userId),
-      {
-        loanId: loanB,
-        reason: "Archive settled loan B after test",
-        device: "verify",
-      },
-    )) as any;
-    // `as any` is a deliberate escape hatch: Convex's generated mutation
-    // types are not callable through `await import(...)` at runtime, but the
-    // handler still runs inside the dev deployment. The harness treats this as
-    // a live smoke check on the registered function, not as a typed call.
-    chk("sa.archive.ok", true, archB?.ok === true);
-    chk("sa.archive.loanId", loanB, archB?.loanId);
-    chk("sa.archive.loanID.present", true, !!archB?.loanId);
-    chk("sa.archive.loanID.set", true, !!archB?.archivedAt);
-    const loanBArchived = await ctx.db.get(loanB) as any;
-    chk("sa.archive.loan.archivedAt", String(!!loanBArchived?.archivedAt), "");
-
-    // ── step 12: eligible closed/settled loans can be permanently deleted ──
-    const delB = (await loans.deleteClosed(
-      asUser(sa.userId),
-      {
-        loanId: loanB,
-        reason: "Verify harness permanent deletion of settled loan B",
-        device: "verify",
-      },
-    )) as any;
-    chk("sa.deleteClosed.ok", true, delB?.ok === true);
-    chk("sa.deleteClosed.deleted", true, !!delB?.deleted);
-    chk(
-      "sa.deleteClosed.scheduleRowsRemoved",
-      "should be > 0",
-      (delB?.scheduleRowsRemoved ?? 0) > 0,
+      }),
     );
-    const loanBDel = await ctx.db.get(loanB);
-    chk("sa.deleteClosed.loan.gone", null, loanBDel);
-    const schedulesAfterDel = await ctx.db
+    chkTrue(
+      "sa.settle.duplicate.rejected",
+      !!dupSettle && dupSettle.includes("settled"),
+      dupSettle ?? "second settlement unexpectedly succeeded",
+    );
+
+    // ── step 6: settle with WAIVER — cash and waiver stay separate ─────────
+    const waiverCash = 1000;
+    const openF = await loanOpenBalance(ctx, loanF);
+    const settleF = await settle(saCtx, {
+      loanId: loanF,
+      settlementAmount: waiverCash,
+      mode: "CASH",
+      reason: "Verify harness waiver settlement of loan F",
+      device: "verify",
+    });
+    chk("sa.settleF.status", "SETTLED", settleF.status);
+    chk("sa.settleF.settlementPaid", waiverCash, settleF.settlementPaid);
+    chk("sa.settleF.waivedAmount", Math.round((openF - waiverCash) * 100) / 100, settleF.waivedAmount);
+    const loanFAfter = (await ctx.db.get(loanF))!;
+    chk("sa.settleF.loan.waivedAmount", settleF.waivedAmount, loanFAfter.waivedAmount);
+    chk("sa.settleF.loan.paidTotal", waiverCash, loanFAfter.paidTotal);
+    const collectionsF = (
+      await ctx.db
+        .query("collections")
+        .withIndex("by_loan", (q) => q.eq("loanId", loanF))
+        .collect()
+    ).filter((c) => c.status === "NORMAL");
+    chk("sa.settleF.collections.cashOnly", 1, collectionsF.length);
+    chk("sa.settleF.collections.cashAmount", waiverCash, collectionsF[0]?.amount);
+    const rowsF = await ctx.db
       .query("loanSchedules")
-      .withIndex("by_loan", (q) => q.eq("loanId", loanB))
+      .withIndex("by_loan", (q) => q.eq("loanId", loanF))
+        .collect();
+    const waivedF = rowsF.reduce((s, r: any) => s + (r.waived ?? 0), 0);
+    chk("sa.settleF.waivedMatchesSchedule", settleF.waivedAmount, waivedF);
+    chkTrue(
+      "sa.settleF.rowsAllResolved",
+      rowsF.every((r: any) => rowOutstanding(r) === 0),
+      rowsF.map((r: any) => rowOutstanding(r)),
+    );
+    const openCForGuard = await loanOpenBalance(ctx, loanC);
+    const overSettle = await expectThrow(() =>
+      settle(saCtx, {
+        loanId: loanC,
+        settlementAmount: openCForGuard + 1,
+        mode: "CASH",
+        reason: "settle above outstanding",
+        device: "verify",
+      }),
+    );
+    chkTrue(
+      "sa.settle.aboveOutstanding.rejected",
+      !!overSettle && overSettle.includes("cannot exceed the outstanding"),
+      overSettle ?? "settlement above outstanding unexpectedly succeeded",
+    );
+
+    // ── step 7: full repayment auto-closes; administrative Close records the
+    //      closure metadata instead of failing ──────────────────────────────
+    const openC = await loanOpenBalance(ctx, loanC);
+    const payC = await collect(saCtx, {
+      loanId: loanC,
+      amount: openC,
+      mode: "CASH",
+      remarks: "Verify harness full repayment of loan C",
+      device: "verify",
+    });
+    chkTrue("scenario.loanC.repay.ok", payC.ok === true, payC);
+    chkTrue("scenario.loanC.repay.receipt", !!payC.receiptNumber, payC.receiptNumber);
+    const loanCAfterPay = (await ctx.db.get(loanC))!;
+    chk("scenario.loanC.autoClosed.status", "CLOSED", loanCAfterPay.status);
+    chk("scenario.loanC.autoClosed.outstanding", 0, loanCAfterPay.outstanding);
+    chkTrue("scenario.loanC.autoClosed.closeDate", !!loanCAfterPay.closeDate, loanCAfterPay.closeDate);
+    chk("scenario.loanC.autoClosed.closureKind", "REPAYMENT", loanCAfterPay.closureKind);
+
+    const closeC = await close(saCtx, {
+      loanId: loanC,
+      reason: "Full repayment of loan C verified by harness",
+      device: "verify",
+    });
+    chk("sa.close.repaidLoan.ok", true, closeC.ok);
+    chk("sa.close.repaidLoan.status", "CLOSED", closeC.status);
+    const loanCAfterClose = (await ctx.db.get(loanC))!;
+    chk("sa.close.repaidLoan.closureKind", "REPAYMENT", loanCAfterClose.closureKind);
+    chk(
+      "sa.close.repaidLoan.closureReason",
+      "Full repayment of loan C verified by harness",
+      loanCAfterClose.closureReason,
+    );
+    chk("sa.close.repaidLoan.closedBy", sa._id, loanCAfterClose.closedBy);
+    chk("sa.close.repaidLoan.outstanding", 0, loanCAfterClose.outstanding);
+    // Close is idempotent on a genuinely closed loan.
+    const closeCAgain = await close(saCtx, {
+      loanId: loanC,
+      reason: "Full repayment of loan C verified by harness",
+      device: "verify",
+    });
+    chk("sa.close.repaidLoan.idempotent", true, closeCAgain.ok);
+
+    // ── step 8: zero-outstanding ACTIVE loan closes as REPAYMENT ───────────
+    const loanDBefore = (await ctx.db.get(loanD))!;
+    chk("sa.close.zeroOutstandingLoan.before", "ACTIVE", loanDBefore.status);
+    const closeD = await close(saCtx, {
+      loanId: loanD,
+      reason: "Zero-outstanding loan closed by administration",
+      device: "verify",
+    });
+    chk("sa.close.zeroOutstandingLoan.ok", true, closeD.ok);
+    const loanDAfter = (await ctx.db.get(loanD))!;
+    chk("sa.close.zeroOutstandingLoan.closureKind", "REPAYMENT", loanDAfter.closureKind);
+    chk("sa.close.zeroOutstandingLoan.outstanding", 0, loanDAfter.outstanding);
+
+    // ── step 9: an unpaid loan can NEVER be closed by fiat ─────────────────
+    const loanEBefore = (await ctx.db.get(loanE))!;
+    chk("sa.close.unpaidLoan.before", "DISBURSED", loanEBefore.status);
+    const closeUnpaid = await expectThrow(() =>
+      close(saCtx, { loanId: loanE, reason: "falsely close an unpaid loan", device: "verify" }),
+    );
+    chkTrue(
+      "sa.close.unpaidLoan.rejected",
+      !!closeUnpaid && closeUnpaid.includes("still outstanding"),
+      closeUnpaid ?? "close of unpaid loan unexpectedly succeeded",
+    );
+    const loanEAfter = (await ctx.db.get(loanE))!;
+    chk("sa.close.unpaidLoan.statusUnchanged", "DISBURSED", loanEAfter.status);
+    chkTrue("sa.close.unpaidLoan.closureKindUntouched", !loanEAfter.closureKind, loanEAfter.closureKind);
+
+    // ── step 10: permanent delete ──────────────────────────────────────────
+    // Unresolved loans are refused.
+    const deleteSurrendered = await expectThrow(() =>
+      deleteClosed(saCtx, {
+        loanId: loanA,
+        reason: "delete a surrendered loan",
+        device: "verify",
+      }),
+    );
+    chkTrue(
+      "sa.delete.unresolved.rejected",
+      !!deleteSurrendered && deleteSurrendered.includes("only a closed or settled loan"),
+      deleteSurrendered ?? "delete of surrendered loan unexpectedly succeeded",
+    );
+    // Loans with financial history are refused — the ledger is immutable.
+    const deleteB = await expectThrow(() =>
+      deleteClosed(saCtx, {
+        loanId: loanB,
+        reason: "delete a settled loan that has payments",
+        device: "verify",
+      }),
+    );
+    chkTrue(
+      "sa.delete.withLedger.rejected",
+      !!deleteB && deleteB.includes("Cannot permanently delete"),
+      deleteB ?? "delete of loan with ledger references unexpectedly succeeded",
+    );
+    chkTrue(
+      "sa.delete.withLedger.pointsAtArchive",
+      !!deleteB && deleteB.includes("Archive the loan instead"),
+      deleteB,
+    );
+    chkTrue("sa.delete.withLedger.loanSurvives", !!(await ctx.db.get(loanB)), "loan B was deleted");
+    // A closed loan no money ever moved for CAN be permanently deleted.
+    const delD = await deleteClosed(saCtx, {
+      loanId: loanD,
+      reason: "Verify harness permanent deletion of the clean closed loan",
+      device: "verify",
+    });
+    chk("sa.delete.cleanLoan.ok", true, delD.ok);
+    chkTrue("sa.delete.cleanLoan.deleted", !!delD.deleted, delD);
+    chk("sa.delete.cleanLoan.scheduleRowsRemoved", 3, delD.scheduleRowsRemoved);
+    chk("sa.delete.cleanLoan.loanGone", null, await ctx.db.get(loanD));
+    const rowsAfterDel = await ctx.db
+      .query("loanSchedules")
+      .withIndex("by_loan", (q) => q.eq("loanId", loanD))
       .collect();
-    chk(
-      "sa.deleteClosed.loanSchedules.gone",
-      "should be empty",
-      schedulesAfterDel.length === 0,
+    chk("sa.delete.cleanLoan.schedulesGone", 0, rowsAfterDel.length);
+
+    // ── step 11: archive a resolved loan ───────────────────────────────────
+    const archB = await archive(saCtx, {
+      loanId: loanB,
+      reason: "Archive settled loan B after verification",
+      device: "verify",
+    });
+    chk("sa.archive.ok", true, archB.ok);
+    chk("sa.archive.loanId", `LN-VER-B-${suffix}`, archB.loanId);
+    chkTrue("sa.archive.archivedAtSet", !!archB.archivedAt, archB.archivedAt);
+    chkTrue(
+      "sa.archive.loan.archived",
+      !!(await ctx.db.get(loanB))?.archivedAt,
+      "loan B has no archivedAt",
+    );
+    const dupArchive = await expectThrow(() =>
+      archive(saCtx, { loanId: loanB, reason: "archive again", device: "verify" }),
+    );
+    chkTrue(
+      "sa.archive.duplicate.rejected",
+      !!dupArchive && dupArchive.includes("already archived"),
+      dupArchive ?? "second archive unexpectedly succeeded",
     );
 
-    // ── step 13: reports, ledgers, receipts and client history are consistent ──
-    const loansList = await ctx.db.query("loans").collect();
-    const closedCount = loansList.filter((l) => l.status === "CLOSED").length;
-    const settledCount = loansList.filter((l) => l.status === "SETTLED").length;
-    const surrenderedCount = loansList.filter((l) => l.status === "SURRENDERED").length;
-    chk("recon.closedLoans.count", 2, closedCount);
-    chk("recon.settledLoans.count", 1, settledCount);
-    chk("recon.surrenderedLoans.count", 1, surrenderedCount);
-
-    const loanAFinal = await ctx.db.get(fixtureLoanId) as any;
-    chk("recon.A.outstanding.unchanged", rows[1].totalDue + rows[2].totalDue, loanAFinal?.outstanding);
-    chk("recon.A.closureKind", "SURRENDER", loanAFinal?.closureKind);
-    chk("recon.A.loanId", fixtureLoanId, loanAFinal?.loanId);
-    chk("recon.A.clientId", fixtureClientId, loanAFinal?.clientId);
-
-    const productFinal = await ctx.db.get(productId) as any;
-    chk("recon.product.id", productId, productFinal?._id);
-
-    // Ledger audit trail presence.
-    const auditEntries = await ctx.db.query("auditLogs").collect();
-    const loanSurrenders = auditEntries.filter((a) => a.action === "LOAN_SURRENDERED");
-    chk("recon.audit.loanSurrender", 1, loanSurrenders.length);
-    chk(
-      "recon.audit.surrender.referenceId",
-      `LN-VER-${suffix}`,
-      loanSurrenders[0]?.referenceId,
+    // ── step 12: boards and reports drop resolved loans ────────────────────
+    // Collection board (collections.today, called as SUPER_ADMIN): only loan
+    // E — the still-unpaid loan — may contribute to the fixture client's row.
+    const boardRes = await board(saCtx, {});
+    const boardEntry = (boardRes.due as any[]).find(
+      (d) => d.clientId === fixtureClientId,
     );
+    const eOverdue = Math.round((rows[0].totalDue + rows[1].totalDue) * 100) / 100; // loans E rows 1+2 open
+    chkTrue("scenario.board.entryPresentForLoanE", !!boardEntry, "fixture client missing from board");
+    chk("scenario.board.overdueOnlyFromLoanE", eOverdue, boardEntry?.overdue);
+    chk("scenario.board.dueToday", 0, boardEntry?.dueToday);
 
-    // Settlement payment collection trail.
-    const CollectionsForLoanB = await ctx.db
-      .query("collections")
-      .withIndex("by_loan", (q) => q.eq("loanId", loanB))
-      .collect();
-    const loanBSettlementCol = CollectionsForLoanB.find((c) => c.status === "NORMAL");
-    chk(
-      "recon.settlement.collections.present",
-      true,
-      !!loanBSettlementCol,
+    // OVERDUE loan list (loans.list): loan E appears; resolved loans do not.
+    const overdueList = await loanList(saCtx, { status: "OVERDUE" });
+    const overdueIds = (overdueList as any[]).map((e) => e.loan._id);
+    chkTrue("scenario.overdueList.containsLoanE", overdueIds.includes(loanE), overdueIds);
+    for (const [name, id] of [
+      ["loanA-surrendered", loanA],
+      ["loanB-settled", loanB],
+      ["loanC-closed", loanC],
+      ["loanF-settled", loanF],
+    ] as const) {
+      chkTrue(
+        `scenario.overdueList.excludes-${name}`,
+        !overdueIds.includes(id),
+        overdueIds,
+      );
+    }
+    // The overdue VIEW of a terminal loan never reports overdue amounts.
+    const loanAFinal = (await ctx.db.get(loanA))!;
+    const viewAFinal = deriveLoanView(
+      loanAFinal,
+      (
+        await ctx.db
+          .query("loanSchedules")
+          .withIndex("by_loan", (q) => q.eq("loanId", loanA))
+          .collect()
+      ) as Doc<"loanSchedules">[],
+      now,
     );
-    chk(
-      "recon.settlement.collections.amount",
-      rows[1].totalDue * 0.5,
-      loanBSettlementCol?.amount,
+    chk("scenario.overdueView.surrendered.overdueAmount", 0, viewAFinal.overdueAmount);
+    chk("scenario.overdueView.surrendered.overdueDays", 0, viewAFinal.overdueDays);
+    chk("scenario.overdueView.surrendered.displayStatus", "SURRENDERED", viewAFinal.displayStatus);
+
+    // ── step 13: reconciliation — statuses, audit trail, closure records ───
+    const fixtureLoans = (await ctx.db.query("loans").collect()).filter(
+      (l) => l.clientId === fixtureClientId,
     );
-    chk("recon.settlement.collections.receiptNumber.present", true, !!loanBSettlementCol?.receiptNumber);
-    chk("recon.settlement.collections.loanId", loanB, loanBSettlementCol?.loanId);
+    const countBy = (status: string) =>
+      fixtureLoans.filter((l) => l.status === status).length;
+    chk("recon.surrenderedCount", 1, countBy("SURRENDERED")); // A
+    chk("recon.settledCount", 2, countBy("SETTLED")); // B, F
+    chk("recon.closedCount", 1, countBy("CLOSED")); // C (D was deleted)
+    chk("recon.disbursedCount", 1, countBy("DISBURSED")); // E
 
-    // Payment trail for loan C (fully repaid).
-    const paymentColC = await ctx.db
-      .query("collections")
-      .withIndex("by_loan", (q) => q.eq("loanId", loanC))
-      .collect();
-    const paymentC = paymentColC.find((c) => c.status === "NORMAL");
-    chk("recon.loanC.fullRepayment.collections.present", true, !!paymentC);
+    const audits = await ctx.db.query("auditLogs").collect();
     chk(
-      "recon.loanC.fullRepayment.collections.amount",
-      rows.reduce((s, r) => s + r.totalDue, 0),
-      paymentC?.amount,
-    );
-    chk("recon.loanC.fullRepayment.collections.receiptNumber.present", true, !!paymentC?.receiptNumber);
-    chk("recon.loanC.closedLoans.count", 2, closedCount);
-
-    // Client history reflects the closure.
-    const clientDetail = await ctx.db.get(fixtureClientId);
-    chk("recon.client.history.loanId.present", true, !!clientDetail?.code);
-
-    // Outstanding for surrendered loan A: still what it was.
-    const loanAOutstanding = await ctx.db.get(fixtureLoanId) as any;
-    chk(
-      "recon.loanA.outstanding",
-      rows[1].totalDue + rows[2].totalDue,
-      loanAOutstanding?.outstanding,
+      "recon.audit.settlements",
+      2,
+      audits.filter(
+        (a) => a.action === "LOAN_SETTLED" && a.referenceId?.includes(suffix),
+      ).length,
     );
     chk(
-      "recon.loanA.closureKind",
-      "SURRENDER",
-      loanAOutstanding?.closureKind,
+      "recon.audit.closures",
+      3, // loan C closed twice (repayment + idempotent confirm), loan D once
+      audits.filter(
+        (a) => a.action === "LOAN_CLOSED" && a.referenceId?.includes(suffix),
+      ).length,
     );
-
-    // ── step 14: collection board drops surrendered/settled loans ──────────
-    const collectionsToday = await ctx.db
-      .query("collections")
-      .withIndex("by_loan", (q) => q.eq("loanId", fixtureLoanId))
-      .collect();
-    chk(
-      "scenario.collectionBoardExclusion.surrenderedLoan.noCollections",
-      0,
-      collectionsToday.length,
+    chk("recon.audit.archive", 1, audits.filter((a) => a.action === "LOAN_ARCHIVED" && a.referenceId === `LN-VER-B-${suffix}`).length);
+    chk("recon.audit.deletion", 1, audits.filter((a) => a.action === "LOAN_DELETED" && a.referenceId === `LN-VER-D-${suffix}`).length);
+    const settledB = audits.find(
+      (a) => a.action === "LOAN_SETTLED" && a.referenceId === `LN-VER-B-${suffix}`,
+    );
+    chkTrue(
+      "recon.audit.settlementSeparatesCashAndWaiver",
+      (settledB?.after as any)?.settlementPaid === openAfterPartial &&
+        (settledB?.after as any)?.waived === 0,
+      settledB?.after,
     );
 
-    const collectionsBForLoan = await ctx.db
-      .query("collections")
-      .withIndex("by_loan", (q) => q.eq("loanId", loanB))
-      .collect();
-    chk(
-      "scenario.collectionBoardExclusion.settledLoan.noCollections",
-      0,
-      collectionsBForLoan.length,
-    );
+    // Closure record as the dashboard renders it (loan C = repayment).
+    const closedC = fixtureLoans.find((l) => l._id === loanC)!;
+    chk("recon.closureRecord.loanC.kind", "REPAYMENT", closedC.closureKind);
+    chkTrue("recon.closureRecord.loanC.reason", !!closedC.closureReason, closedC.closureReason);
+    chk("recon.closureRecord.loanC.closedBy", sa._id, closedC.closedBy);
 
-    // ── step 15: overdue report drops surrendered/settled loans ────────────
-    const dtReport = await ctx.db.query("loans").collect();
-    const overdueExcl = dtReport.filter(
-      (l) => l.status === "OVERDUE" && l.loanId === fixtureLoanId,
-    );
-    chk(
-      "scenario.overdueReportExclusion.surrenderedLoan",
-      0,
-      overdueExcl.length,
-    );
+    /* ------------------------------ cleanup ------------------------------- */
+    // Every fixture document, including the ledger rows its collections
+    // created, goes away inside this same transaction. Nothing seeded is
+    // touched — especially not the SUPER_ADMIN identity.
+    const fixtureDocIds = [loanA, loanB, loanC, loanE, loanF]; // D already deleted
+    const fixtureBusinessIds = [
+      `LN-VER-A-${suffix}`,
+      `LN-VER-B-${suffix}`,
+      `LN-VER-C-${suffix}`,
+      `LN-VER-D-${suffix}`,
+      `LN-VER-E-${suffix}`,
+      `LN-VER-F-${suffix}`,
+    ];
 
-    const overdueExclSettled = dtReport.filter(
-      (l) => l.status === "OVERDUE" && l.loanId === loanB,
+    const fixtureCollections = (await ctx.db.query("collections").collect()).filter(
+      (c) => fixtureDocIds.includes(c.loanId as Id<"loans">),
     );
-    chk(
-      "scenario.overdueReportExclusion.settledLoan",
-      0,
-      overdueExclSettled.length,
-    );
-
-    // ── step 16: dashboard closing dashboard includes closure details ──────
-    const loanLibrary = await ctx.db.query("loans").collect();
-    const closedLoan = loanLibrary.find((l) => l.status === "CLOSED" && l.loanId === loanC);
-    chk(
-      "scenario.closureDashboard.closedLoan.present",
-      true,
-      !!closedLoan,
-    );
-    chk(
-      "scenario.closureDashboard.closedLoan.closureKind",
-      "REPAYMENT",
-      closedLoan?.closureKind,
-    );
-    chk(
-      "scenario.closureDashboard.closedLoan.closureReason.presents",
-      true,
-      !!closedLoan?.closureReason,
-    );
-    chk(
-      "scenario.closureDashboard.closedLoan.closedById",
-      sa._id,
-      closedLoan?.closedBy,
-    );
-
-    // ── final cleanup ──────────────────────────────────────────────────────
-    const loanIds = [
-      fixtureLoanId,
-      loanB,
-      loanC,
-      loanD,
-      loanE,
-    ].filter(Boolean);
-    for (const id of loanIds) {
-      if (!id) continue;
-      const schedules = await ctx.db
+    const collectionCodes = fixtureCollections.map((c) => c.code);
+    const receiptNumbers = fixtureCollections
+      .map((c) => c.receiptNumber)
+      .filter((n): n is string => !!n);
+    for (const code of collectionCodes) {
+      for (const j of await ctx.db
+        .query("journalEntries")
+        .collect()
+        .then((all) => all.filter((j) => j.refId === code))) {
+        await ctx.db.delete(j._id);
+      }
+      for (const w of await ctx.db
+        .query("walletTransactions")
+        .withIndex("by_ref", (q) => q.eq("referenceId", code))
+        .collect()) {
+        await ctx.db.delete(w._id);
+      }
+    }
+    for (const c of fixtureCollections) await ctx.db.delete(c._id);
+    for (const r of (await ctx.db.query("receipts").collect()).filter((r) =>
+      fixtureDocIds.includes(r.loanId as Id<"loans">),
+    )) {
+      await ctx.db.delete(r._id);
+    }
+    const isFixtureRef = (v?: string) =>
+      !!v &&
+      (v.includes("LN-VER-") ||
+        v.includes("Verify Closure") ||
+        v.includes(`C-TMPCL-${suffix}`) ||
+        collectionCodes.includes(v) ||
+        receiptNumbers.includes(v));
+    for (const a of await ctx.db.query("auditLogs").collect()) {
+      if (isFixtureRef(a.referenceId) || isFixtureRef(a.entityId)) {
+        await ctx.db.delete(a._id);
+      }
+    }
+    for (const n of await ctx.db.query("notifications").collect()) {
+      if (isFixtureRef(n.body)) await ctx.db.delete(n._id);
+    }
+    for (const id of fixtureDocIds) {
+      for (const s of await ctx.db
         .query("loanSchedules")
         .withIndex("by_loan", (q) => q.eq("loanId", id))
-        .collect();
-      for (const s of schedules) await ctx.db.delete(s._id);
+        .collect()) {
+        await ctx.db.delete(s._id);
+      }
       await ctx.db.delete(id);
     }
     await ctx.db.delete(fixtureClientId);
-
-    // Delete the product and branch only if they were just created.
     await ctx.db.delete(productId);
 
-    let branchAId: string | null = branchA?._id ?? null;
-    if (branchA && branchA.status === "ACTIVE" && branchA.code?.startsWith(`TMP-BRANCH-${suffix}`)) {
-      branchAId = branchA._id?.toString() ?? null;
-    }
-    if (branchAId) await ctx.db.delete(branchAId as any);
+    // Throwaway identities created for the authorization negatives.
+    for (const id of throwawayProfileIds) await ctx.db.delete(id);
+    for (const id of throwawayUserIds) await ctx.db.delete(id);
 
-    // Delete the temporary users we created for these identities.
-    await ctx.db.delete(sa.userId);
-
-    // (We don't delete the original SA-00001 profile — it was seeded.)
-
+    const failed = checks.filter((c) => !c.pass).map((c) => c.name);
     return {
-      ok: true,
+      ok: failed.length === 0,
       mode: "verify",
-      elapsedMs: Date.now() - Date.now(),
+      bridgeArgsSanity: _bridgeArgs,
+      totalChecks: checks.length,
+      failedChecks: failed,
       checks,
-      summary: checks.filter((c) => !c.pass).map((c) => c.name),
     };
   },
 });
