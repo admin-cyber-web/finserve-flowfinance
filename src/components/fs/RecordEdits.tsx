@@ -13,7 +13,7 @@ import type {
   LoanRequestValue,
   NomineeValue,
 } from "@/lib/finance/validate";
-import { sentenceCase } from "@/lib/utils";
+import { cn, sentenceCase } from "@/lib/utils";
 import {
   Dialog,
   DialogContent,
@@ -282,6 +282,7 @@ type ClientEditTarget = {
   fatherName?: string | null;
   mobile: string;
   address?: string | null;
+  maternalHomeAddress?: string | null;
   village: string;
   occupation: string;
   monthlyIncome: number;
@@ -374,6 +375,7 @@ function ClientEditForm({
     fatherName: target.fatherName ?? "",
     mobile: target.mobile,
     address: target.address ?? "",
+    maternalHomeAddress: target.maternalHomeAddress ?? "",
     village: target.village,
     occupation: target.occupation,
     monthlyIncome: String(target.monthlyIncome ?? ""),
@@ -620,6 +622,14 @@ function ClientEditForm({
         fatherName: form.fatherName.trim(),
         mobile: form.mobile.trim(),
         address: form.address.trim(),
+        // Only sent when it actually differs from what was loaded, so a
+        // caller that did not supply the stored value can never wipe it by
+        // saving the rest of the form. An explicit clear (loaded value,
+        // emptied field) is sent as "" and the server drops it.
+        ...(form.maternalHomeAddress.trim() !==
+        (target.maternalHomeAddress ?? "").trim()
+          ? { maternalHomeAddress: form.maternalHomeAddress.trim() }
+          : {}),
         village: form.village.trim(),
         occupation: form.occupation.trim(),
         monthlyIncome: monthly,
@@ -699,6 +709,19 @@ function ClientEditForm({
             }
           />
         </div>
+      </div>
+      <div>
+        <label className={labelCls} htmlFor="client-edit-maternal">
+          Maternal home address
+        </label>
+        <textarea
+          id="client-edit-maternal"
+          className={cn(inputCls, "min-h-14 resize-y py-2")}
+          value={form.maternalHomeAddress}
+          onChange={(e) => set("maternalHomeAddress")(e.target.value)}
+          rows={2}
+          placeholder="Father's home — house, village, post, district"
+        />
       </div>
       <div>
         <label className={labelCls} htmlFor="client-edit-address">
