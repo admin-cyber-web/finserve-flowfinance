@@ -238,8 +238,13 @@ export default function LoanDetail() {
           <Money value={loan.installment} className="text-sm" />
         </div>
         <div className="border-2 border-ink bg-white p-2.5 shadow-hard-sm">
-          <div className="text-[10px] font-black uppercase text-muted-foreground">Charges</div>
+          <div className="text-[10px] font-black uppercase text-muted-foreground">
+            Processing fee
+          </div>
           <Money value={loan.charges} className="text-sm" />
+          <div className="mt-0.5 text-[10px] font-semibold text-muted-foreground">
+            Net disbursed <Money value={Math.max(0, loan.principal - loan.charges)} />
+          </div>
         </div>
       </div>
 

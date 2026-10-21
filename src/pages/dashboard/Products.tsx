@@ -1,72 +1,128 @@
 import {
   EmptyState,
   KeyValue,
+  Money,
   PageHeader,
   RowSkeleton,
   StatusChip,
+  formatDate,
 } from "@/components/fs/primitives";
 import { api } from "@/convex/_generated/api";
 import { useQuery } from "convex/react";
 import { Package } from "lucide-react";
 
 export default function Products() {
-  const products = useQuery(api.loans.products, { activeOnly: false });
+  const catalog = useQuery(api.loans.productSchedules, {});
 
   return (
     <div className="space-y-4 pb-10">
       <PageHeader
         title="Loan products"
-        subtitle="Terms drive schedule generation and eligibility policy"
+        subtitle="Three standard products — terms fixed in the backend"
       />
 
-      {products === undefined ? (
-        <RowSkeleton rows={4} />
-      ) : products.length === 0 ? (
+      {catalog === undefined ? (
+        <RowSkeleton rows={3} />
+      ) : catalog.length === 0 ? (
         <EmptyState
           title="No products configured"
           hint="Loan products define interest, tenure and policy limits."
           icon={<Package className="size-5" />}
         />
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2">
-          {products.map((p) => (
-            <section key={p._id} className="border-2 border-ink bg-card shadow-hard">
-              <div className="flex items-center justify-between gap-2 border-b-2 border-ink bg-navy px-3 py-2 text-paper">
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-black uppercase">{p.name}</div>
-                  <div className="font-mono text-[10px] font-bold uppercase text-gold">
-                    {p.code}
+        <div className="space-y-4">
+          {catalog.map(
+            ({ product: p, principal, charges, netDisbursed, installment, totalInterest, totalPayable, schedule }) => (
+              <section key={p._id} className="border-2 border-ink bg-card shadow-hard">
+                <div className="flex items-center justify-between gap-2 border-b-2 border-ink bg-navy px-3 py-2 text-paper">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-black uppercase">{p.name}</div>
+                    <div className="font-mono text-[10px] font-bold uppercase text-gold">
+                      {p.code}
+                    </div>
+                  </div>
+                  <StatusChip status={p.status} />
+                </div>
+
+                <div className="grid gap-x-4 p-3 sm:grid-cols-2">
+                  <div>
+                    <KeyValue k="Principal (fixed)" v={<Money value={principal} />} mono />
+                    <KeyValue
+                      k="Processing fee"
+                      v={
+                        <>
+                          <Money value={charges} /> · {p.chargePercent > 0 ? `${p.chargePercent}%` : "4%"} of principal
+                        </>
+                      }
+                    />
+                    <KeyValue k="Net disbursed to client" v={<Money value={netDisbursed} />} mono />
+                    <KeyValue
+                      k="Interest"
+                      v={`${p.interestRate}% p.a. · ${p.interestMethod.toLowerCase()} balance`}
+                    />
+                  </div>
+                  <div>
+                    <KeyValue
+                      k="Repayment"
+                      v={`${p.tenure} × ${p.frequency.toLowerCase()} installments`}
+                    />
+                    <KeyValue k="Installment" v={<Money value={installment} />} mono />
+                    <KeyValue k="Total interest" v={<Money value={totalInterest} />} mono />
+                    <KeyValue k="Total payable" v={<Money value={totalPayable} />} mono />
+                    <KeyValue k="Grace days" v={String(p.graceDays)} />
+                    <KeyValue k="Max obligation" v={`${p.maxObligationRatio}% of income`} />
                   </div>
                 </div>
-                <StatusChip status={p.status} />
-              </div>
-              <div className="p-3">
-                <KeyValue
-                  k="Interest"
-                  v={`${p.interestRate}% ${p.interestMethod.toLowerCase()}`}
-                />
-                <KeyValue k="Tenure" v={`${p.tenure} ${p.frequency.toLowerCase()} periods`} />
-                <KeyValue
-                  k="Amount range"
-                  v={`₹${p.minAmount.toLocaleString("en-IN")} – ₹${p.maxAmount.toLocaleString("en-IN")}`}
-                  mono
-                />
-                <KeyValue
-                  k="Charges"
-                  v={`₹${p.processingFee.toLocaleString("en-IN")} + ${p.chargePercent}%`}
-                />
-                <KeyValue k="Grace days" v={String(p.graceDays)} />
-                <KeyValue k="Max obligation" v={`${p.maxObligationRatio}% of income`} />
-              </div>
-            </section>
-          ))}
+
+                {/* Installment schedule — computed by the backend engine. */}
+                <div className="border-t-2 border-ink px-3 py-2">
+                  <div className="mb-1 text-[10px] font-black uppercase tracking-[0.16em] text-muted-foreground">
+                    Installment schedule ({schedule.length} periods · reducing balance)
+                  </div>
+                  <div className="max-h-64 overflow-y-auto border-2 border-ink">
+                    <table className="w-full border-collapse text-xs">
+                      <thead className="sticky top-0 bg-muted">
+                        <tr className="text-left text-[10px] font-black uppercase">
+                          <th className="border-b-2 border-ink px-2 py-1">#</th>
+                          <th className="border-b-2 border-ink px-2 py-1">Due</th>
+                          <th className="border-b-2 border-ink px-2 py-1 text-right">Principal</th>
+                          <th className="border-b-2 border-ink px-2 py-1 text-right">Interest</th>
+                          <th className="border-b-2 border-ink px-2 py-1 text-right">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {schedule.map((r) => (
+                          <tr key={r.index} className="odd:bg-card even:bg-muted/40">
+                            <td className="border-b border-ink/10 px-2 py-1 font-black">{r.index}</td>
+                            <td className="border-b border-ink/10 px-2 py-1 whitespace-nowrap">
+                              {formatDate(r.dueDate)}
+                            </td>
+                            <td className="border-b border-ink/10 px-2 py-1 text-right font-mono">
+                              ₹{r.principal.toLocaleString("en-IN")}
+                            </td>
+                            <td className="border-b border-ink/10 px-2 py-1 text-right font-mono">
+                              ₹{r.interest.toLocaleString("en-IN")}
+                            </td>
+                            <td className="border-b border-ink/10 px-2 py-1 text-right font-mono font-black">
+                              ₹{r.totalDue.toLocaleString("en-IN")}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </section>
+            ),
+          )}
         </div>
       )}
 
       <div className="border-2 border-ink bg-sky p-3 text-xs font-bold">
-        Policy fields (max obligation ratio, ranges, overdue history) are
-        evaluated on the server at submission <em>and</em> again at approval —
-        they can never be bypassed from the UI.
+        Interest is computed on the reducing balance by the backend engine — the
+        same calculation used for every installment, receipt, outstanding and
+        statement. Principal, rate, fee and schedule are stored on the product
+        and cannot be overridden from the UI.
       </div>
     </div>
   );

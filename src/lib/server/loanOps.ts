@@ -228,7 +228,11 @@ export async function disburseLoan(
     tenure: loan.tenure,
     disbursedOn: nowMs,
     graceDays: product.graceDays,
-    charges: loan.charges,
+    // The processing fee is NOT financed into the repayment schedule. The
+    // schedule (and therefore the client's debt) is principal + reducing-
+    // balance interest only; the fee is recognised separately as fee income
+    // and deducted from the cash delivered at disbursement (net model).
+    charges: 0,
   });
 
   for (const row of rows) {
@@ -256,7 +260,10 @@ export async function disburseLoan(
     .withIndex("by_profile", (q) => q.eq("profileId", staff._id))
     .unique();
   if (wallet) {
-    walletDebit = loan.principal;
+    // Only the NET cash physically handed to the client leaves the wallet;
+    // the processing fee is withheld and booked as fee income, never as a
+    // second principal movement.
+    walletDebit = round2(loan.principal - loan.charges);
     await writeWalletTx(ctx, {
       walletId: wallet._id,
       profileId: staff._id,
@@ -277,7 +284,11 @@ export async function disburseLoan(
   await writeJournal(
     ctx,
     disbursementEntry({
-      principal: round2(loan.principal + loan.charges),
+      // Receivable = principal only (the fee is a separate income line, not
+      // part of what the client owes as principal). Cash Cr = principal -
+      // fee (the net amount delivered). Balanced: principal = (principal -
+      // fee) + fee.
+      principal: loan.principal,
       fee: loan.charges,
       cashSource: "staff",
       memo: `Loan disbursal ${loan.loanId} — ${client.name}`,

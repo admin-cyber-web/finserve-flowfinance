@@ -75,6 +75,60 @@ export const products = query({
   },
 });
 
+/**
+ * Loan product catalogue WITH a server-computed sample installment schedule
+ * for each ACTIVE product, generated at the product's fixed principal using
+ * the SAME reducing-balance engine that powers live loans. Drives the Loan
+ * Products page so the frontend never recomputes interest itself.
+ */
+export const productSchedules = query({
+  args: {},
+  handler: async (ctx) => {
+    const me = await requireProfile(ctx, { allowInactive: true });
+    requirePermission(me, "view_loans");
+    const all = (await ctx.db.query("loanProducts").collect())
+      .filter((p) => p.status === "ACTIVE")
+      .sort((a, b) => a.code.localeCompare(b.code));
+
+    return all.map((p) => {
+      // These standard products carry a single fixed principal (min == max).
+      const principal = p.minAmount;
+      const charges = round2(
+        p.processingFee + (principal * p.chargePercent) / 100,
+      );
+      const rows = baseScheduleRows({
+        principal,
+        interestRate: p.interestRate,
+        interestMethod: p.interestMethod as InterestMethod,
+        frequency: p.frequency as Frequency,
+        tenure: p.tenure,
+        disbursedOn: Date.now(),
+        graceDays: p.graceDays,
+        charges: 0,
+      });
+      const totalInterest = round2(rows.reduce((s, r) => s + r.interest, 0));
+      const totalPayable = round2(rows.reduce((s, r) => s + r.totalDue, 0));
+      const installment = rows[1]?.totalDue ?? rows[0]?.totalDue ?? 0;
+      return {
+        product: p,
+        principal,
+        charges,
+        netDisbursed: round2(principal - charges),
+        installment,
+        totalInterest,
+        totalPayable,
+        schedule: rows.map((r) => ({
+          index: r.index,
+          dueDate: r.dueDate,
+          principal: r.principal,
+          interest: r.interest,
+          totalDue: r.totalDue,
+        })),
+      };
+    });
+  },
+});
+
 export const list = query({
   args: {
     status: v.optional(v.string()),
@@ -289,7 +343,9 @@ export const preview = query({
       tenure: product.tenure,
       disbursedOn: Date.now(),
       graceDays: product.graceDays,
-      charges,
+      // Match disbursement exactly: the fee is never financed into the
+      // schedule — it is shown separately as `charges` / `netDisbursed`.
+      charges: 0,
     });
 
     const inRange = amount >= product.minAmount && amount <= product.maxAmount;
@@ -308,6 +364,7 @@ export const preview = query({
       product,
       amount,
       charges,
+      netDisbursed: round2(amount - charges),
       totalInterest,
       totalPayable,
       installment: rows[0]?.totalDue ?? 0,

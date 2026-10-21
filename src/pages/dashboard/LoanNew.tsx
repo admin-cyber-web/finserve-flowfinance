@@ -118,7 +118,12 @@ export default function LoanNew() {
             {products.map((p) => (
               <button
                 key={p._id}
-                onClick={() => setProductId(p._id)}
+                onClick={() => {
+                  setProductId(p._id);
+                  // Fixed-principal product: lock the amount to the backend
+                  // principal so the frontend can never override it.
+                  setAmount(String(p.minAmount));
+                }}
                 className={
                   "border-2 border-ink p-3 text-left shadow-hard-sm " +
                   (productId === p._id ? "bg-gold" : "bg-white")
@@ -185,9 +190,15 @@ export default function LoanNew() {
             </div>
             <div className="border-2 border-paper/30 p-2">
               <div className="text-[9px] font-black uppercase text-paper/60">
-                Charges
+                Processing fee
               </div>
               <Money value={preview.charges} className="text-lg" />
+            </div>
+            <div className="border-2 border-paper/30 p-2">
+              <div className="text-[9px] font-black uppercase text-paper/60">
+                Net disbursed
+              </div>
+              <Money value={preview.netDisbursed} className="text-lg" />
             </div>
             <div className="border-2 border-paper/30 p-2">
               <div className="text-[9px] font-black uppercase text-paper/60">
@@ -195,9 +206,9 @@ export default function LoanNew() {
               </div>
               <Money value={preview.totalInterest} className="text-lg" />
             </div>
-            <div className="border-2 border-paper/30 p-2">
+            <div className="col-span-2 border-2 border-paper/30 p-2">
               <div className="text-[9px] font-black uppercase text-paper/60">
-                Total payable
+                Total payable (principal + interest)
               </div>
               <Money value={preview.totalPayable} className="text-lg" />
             </div>
