@@ -350,6 +350,9 @@ const schema = defineSchema(
       amount: v.number(),
       staffId: v.id("profiles"),
       branchId: v.id("branches"),
+      // Centre the client belongs to — set when the application is created
+      // (centre-wise disbursement traces every request back to its centre).
+      centerId: v.optional(v.id("centers")),
       status: v.string(), // DRAFT | SUBMITTED | UNDER_REVIEW | APPROVED | REJECTED | DISBURSED
       history: v.array(
         v.object({
@@ -381,6 +384,9 @@ const schema = defineSchema(
       productId: v.id("loanProducts"),
       staffId: v.id("profiles"),
       branchId: v.id("branches"),
+      // Centre the client belonged to at sanction — copied from the client
+      // record on approval so every loan traces back to its centre.
+      centerId: v.optional(v.id("centers")),
       principal: v.number(),
       interestTotal: v.number(),
       charges: v.number(),

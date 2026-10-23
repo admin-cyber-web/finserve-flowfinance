@@ -59,7 +59,7 @@ export default function Loans() {
         action={
           can("create_loan") ? (
             <Button size="sm" onClick={() => navigate("/dashboard/loans/new")}>
-              <Plus /> New
+              <Plus /> New Loan
             </Button>
           ) : undefined
         }

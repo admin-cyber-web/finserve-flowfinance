@@ -9,9 +9,10 @@ import {
   RowSkeleton,
   SectionTitle,
 } from "@/components/fs/primitives";
+import { CenterWiseLoan } from "@/components/fs/CenterWiseLoan";
 import { Button } from "@/components/ui/button";
 import { useMutation, useQuery } from "convex/react";
-import { CheckCircle2, TriangleAlert } from "lucide-react";
+import { CheckCircle2, HandCoins, TriangleAlert, Users } from "lucide-react";
 import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
@@ -22,6 +23,12 @@ export default function LoanNew() {
 
   const [clientId, setClientId] = useState<Id<"clients"> | null>(
     (params.get("client") as Id<"clients"> | null) ?? null,
+  );
+  // Two paths in one workflow: centre-wise disbursement (primary, default)
+  // and the original single-client wizard. Arriving with a pre-selected
+  // client (Client 360° → "Give loan") opens the single-client path.
+  const [mode, setMode] = useState<"CENTER" | "SINGLE">(
+    params.get("client") ? "SINGLE" : "CENTER",
   );
   const [productId, setProductId] = useState<Id<"loanProducts"> | null>(null);
   const [amount, setAmount] = useState("");
@@ -72,13 +79,69 @@ export default function LoanNew() {
     }
   };
 
-  return (
-    <div className="space-y-4 pb-10">
+  const modeSwitcher = (
+    <>
       <PageHeader
         title="New loan"
-        subtitle="Policy-checked preview before submission"
+        subtitle="Centre-wise disbursement or a single client — policy-checked before submission"
         back="/dashboard/loans"
       />
+
+      {/* Mode chooser — centre-wise first and primary. */}
+      <section className="space-y-2 border-2 border-ink bg-card p-3 shadow-hard-sm">
+        <h2 className="text-xs font-black uppercase tracking-[0.14em] text-muted-foreground">
+          How do you want to lend?
+        </h2>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <button
+            onClick={() => setMode("CENTER")}
+            className={
+              "w-full border-2 border-ink p-3 text-left shadow-hard-sm transition-transform active:translate-x-[2px] active:translate-y-[2px] active:shadow-none " +
+              (mode === "CENTER" ? "bg-gold" : "bg-white")
+            }
+          >
+            <span className="flex items-center gap-2 text-sm font-black uppercase">
+              <Users className="size-4" /> Center-Wise Loan Disbursement
+            </span>
+            <span className="mt-1 block text-[11px] font-semibold text-muted-foreground">
+              Primary path — create loan requests for every eligible member of
+              one centre in a single batch, straight through the normal
+              approval workflow.
+            </span>
+          </button>
+          <button
+            onClick={() => setMode("SINGLE")}
+            className={
+              "w-full border-2 border-ink p-3 text-left shadow-hard-sm transition-transform active:translate-x-[2px] active:translate-y-[2px] active:shadow-none " +
+              (mode === "SINGLE" ? "bg-gold" : "bg-white")
+            }
+          >
+            <span className="flex items-center gap-2 text-sm font-black uppercase">
+              <HandCoins className="size-4" /> Single Client Loan
+            </span>
+            <span className="mt-1 block text-[11px] font-semibold text-muted-foreground">
+              One borrower at a time through the existing application,
+              approval and disbursement flow.
+            </span>
+          </button>
+        </div>
+      </section>
+    </>
+  );
+
+  // Centre-wise path — the batch wizard lives in its own component.
+  if (mode === "CENTER") {
+    return (
+      <div className="space-y-4 pb-10">
+        {modeSwitcher}
+        <CenterWiseLoan />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4 pb-10">
+      {modeSwitcher}
 
       {/* Step 1 — client */}
       <section className="space-y-2 border-2 border-ink bg-card p-4 shadow-hard-sm">

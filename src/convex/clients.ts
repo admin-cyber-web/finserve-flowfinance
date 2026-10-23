@@ -424,8 +424,10 @@ export const create = mutation({
     husbandName: v.optional(v.string()),
     fatherAddress: v.optional(v.string()),
     maternalHomeAddress: v.optional(v.string()),
-    dob: v.optional(v.number()),
-    age: v.number(),
+    // Date of birth is REQUIRED for every new client — age is always
+    // re-derived from it server-side (see handler).
+    dob: v.number(),
+    age: v.number(), // accepted for compatibility, never trusted — derived from `dob`
     gender: v.string(),
     mobile: v.string(),
     altMobile: v.optional(v.string()),
@@ -475,8 +477,9 @@ export const create = mutation({
         name: v.string(),
         fatherName: v.optional(v.string()),
         relationship: v.string(),
-        dob: v.optional(v.number()),
-        age: v.optional(v.number()),
+        // Required — the co-applicant's age is always derived from it.
+        dob: v.number(),
+        age: v.optional(v.number()), // compatibility only, never trusted
         gender: v.optional(v.string()),
         mobile: v.optional(v.string()),
         address: v.optional(v.string()),
@@ -599,21 +602,18 @@ export const create = mutation({
     const mobile = mobileNumber(args.mobile);
     const gender = oneOf(args.gender, ["MALE", "FEMALE", "OTHER"], "gender");
 
-    // Age is re-derived from the date of birth whenever provided — a direct
-    // backend call can never smuggle in an age inconsistent with the DOB.
-    let age = intInRange(args.age, "age", 18, 100);
-    let dob: number | undefined;
-    if (args.dob !== undefined) {
-      if (
-        !Number.isFinite(args.dob) ||
-        args.dob > now ||
-        args.dob < now - 100 * 366 * 24 * 3_600_000
-      ) {
-        throw new AppError("Invalid date of birth.");
-      }
-      dob = args.dob;
-      age = intInRange(ageFromDob(dob, now), "age", 18, 100);
+    // The date of birth is mandatory and the ONLY source of age — a direct
+    // backend call can never smuggle in an age inconsistent with it (the
+    // client-submitted `age` field is accepted for compatibility, ignored).
+    if (
+      !Number.isFinite(args.dob) ||
+      args.dob > now ||
+      args.dob < now - 100 * 366 * 24 * 3_600_000
+    ) {
+      throw new AppError("Invalid date of birth.");
     }
+    const dob = args.dob;
+    const age = intInRange(ageFromDob(dob, now), "age", 18, 100);
 
     // Permanent address is mandatory for a new application. The legacy
     // `village` column (search + display) is derived from its first line
@@ -705,21 +705,17 @@ export const create = mutation({
       if (coVoter && !/^[A-Z]{3}[0-9]{7}$/.test(coVoter)) {
         throw new AppError("Co-applicant Voter ID must look like ABC1234567.");
       }
-      let coAge: number | undefined;
-      let coDob: number | undefined;
-      if (co.dob !== undefined) {
-        if (
-          !Number.isFinite(co.dob) ||
-          co.dob > now ||
-          co.dob < now - 100 * 366 * 24 * 3_600_000
-        ) {
-          throw new AppError("Invalid co-applicant date of birth.");
-        }
-        coDob = co.dob;
-        coAge = intInRange(ageFromDob(coDob, now), "coApplicant.age", 18, 100);
-      } else if (co.age !== undefined) {
-        coAge = intInRange(co.age, "coApplicant.age", 18, 100);
+      // The co-applicant's date of birth is required too — their age is
+      // always derived from it, never taken from the client payload.
+      if (
+        !Number.isFinite(co.dob) ||
+        co.dob > now ||
+        co.dob < now - 100 * 366 * 24 * 3_600_000
+      ) {
+        throw new AppError("Invalid co-applicant date of birth.");
       }
+      const coDob = co.dob;
+      const coAge = intInRange(ageFromDob(coDob, now), "coApplicant.age", 18, 100);
       coApplicant = {
         name: requiredString(co.name, "coApplicant.name", 80),
         fatherName: optionalString(co.fatherName, "coApplicant.fatherName", 80),

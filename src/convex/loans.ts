@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { query, mutation, type MutationCtx } from "./_generated/server";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import {
   AppError,
   logAudit,
@@ -20,6 +20,7 @@ import {
   surrenderLoan,
   type LoanView,
 } from "../lib/server/loanOps";
+import { resolveBranchForActor } from "../lib/server/centerOps";
 import { round2, completedMonthsBetween } from "../lib/finance/money";
 import { rowOutstanding } from "../lib/finance/schedule";
 import type { Frequency, InterestMethod } from "../lib/finance/types";
@@ -459,13 +460,18 @@ export const submit = mutation({
       ) + 1,
     ).padStart(6, "0")}`;
 
+    // Org-wide admins may have no home branch — resolve one exactly like
+    // client onboarding does so single loans always work end-to-end.
+    const applicationBranch = me.branchId ?? (await resolveBranchForActor(ctx, me));
+
     const applicationId = await ctx.db.insert("loanApplications", {
       appId,
       clientId: args.clientId,
       productId: args.productId,
       amount,
       staffId: me._id,
-      branchId: me.branchId!,
+      branchId: applicationBranch,
+      centerId: client.centerId,
       status: "SUBMITTED",
       history: [
         {
@@ -496,7 +502,7 @@ export const submit = mutation({
         obligationRatio: eligibility.obligationRatio,
       },
       referenceId: appId,
-      branchId: me.branchId,
+      branchId: applicationBranch,
       device: args.device,
     });
 
@@ -505,7 +511,7 @@ export const submit = mutation({
     for (const p of profiles) {
       if (
         (p.role === "BRANCH_MANAGER" || p.role === "SUPER_ADMIN") &&
-        p.branchId === me.branchId &&
+        p.branchId === applicationBranch &&
         p.status === "ACTIVE"
       ) {
         await notify(ctx, p._id, {
@@ -518,6 +524,425 @@ export const submit = mutation({
     }
 
     return { ok: true, applicationId, appId };
+  },
+});
+
+/* --------------------- Centre-wise loan disbursement -------------------- */
+
+/** Hard ceiling on one centre-wise batch — mirrors the largest roster the
+ * centre report paginates to, and keeps one transaction comfortably small. */
+const BATCH_MAX_CLIENTS = 100;
+
+/** Centres the acting user may run a centre-wise batch against (branch
+ * scope is enforced here AND again inside the batch mutation). */
+export const centerOptions = query({
+  args: {},
+  handler: async (ctx) => {
+    const me = await requireProfile(ctx, { allowInactive: true });
+    requirePermission(me, "create_loan");
+    const centers = (await ctx.db.query("centers").collect())
+      .filter(
+        (c) => me.role === "SUPER_ADMIN" || !me.branchId || c.branchId === me.branchId,
+      )
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const clients = await ctx.db.query("clients").collect();
+    return centers.map((c) => ({
+      _id: c._id,
+      code: c.code,
+      name: c.name,
+      village: c.village,
+      clientCount: clients.filter((cl) => cl.centerId === c._id).length,
+    }));
+  },
+});
+
+/**
+ * Roster of a centre for the centre-wise disbursement wizard: every client
+ * linked to the centre, with the SAME server-side checks the single-loan
+ * flow runs (active-loan exposure, overdue history, KYC, pending duplicate
+ * applications, product terms and the income/obligation policy). Ineligible
+ * members come back with `blockers` explaining why — the wizard never hides
+ * them, and never lets them into a batch.
+ */
+export const centerRoster = query({
+  args: {
+    centerId: v.id("centers"),
+    productId: v.optional(v.id("loanProducts")),
+  },
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx, { allowInactive: true });
+    requirePermission(me, "create_loan");
+    const center = await ctx.db.get(args.centerId);
+    if (!center) throw new AppError("Centre not found.");
+    if (me.role !== "SUPER_ADMIN" && me.branchId && center.branchId !== me.branchId) {
+      throw new AppError("This centre is outside your branch.");
+    }
+    const product = args.productId ? await ctx.db.get(args.productId) : null;
+    if (args.productId && !product) throw new AppError("Loan product not found.");
+    if (product && product.status !== "ACTIVE") {
+      throw new AppError("This loan product is inactive.");
+    }
+
+    const now = Date.now();
+    const allLoans = await ctx.db.query("loans").collect();
+    const applications = await ctx.db.query("loanApplications").collect();
+    const members = (await ctx.db.query("clients").collect())
+      .filter((c) => c.centerId === center._id)
+      .sort((a, b) => a.code.localeCompare(b.code))
+      .slice(0, BATCH_MAX_CLIENTS);
+
+    const rows = members.map((client) => {
+      const loans = allLoans.filter((l) => l.clientId === client._id);
+      const active = loans.filter((l) => ["ACTIVE", "OVERDUE"].includes(l.status));
+      const overdueHistory = loans.filter((l) => l.status === "OVERDUE").length;
+      const pendingApp =
+        applications.find(
+          (a) =>
+            a.clientId === client._id &&
+            ["SUBMITTED", "UNDER_REVIEW"].includes(a.status),
+        ) ?? null;
+
+      const blockers: string[] = [];
+      const warnings: string[] = [];
+      if (client.status !== "ACTIVE") {
+        blockers.push(`Client is ${client.status.toLowerCase()}.`);
+      }
+      if (client.kycStatus === "REJECTED") {
+        blockers.push("KYC documents were rejected — re-verify before lending.");
+      }
+      if (me.role === "FIELD_STAFF" && client.assignedTo !== me._id) {
+        blockers.push(
+          "Not assigned to you — field staff can only lend to their own clients.",
+        );
+      }
+      if (pendingApp) {
+        blockers.push(
+          `Loan application ${pendingApp.appId} is already ${pendingApp.status.toLowerCase()}.`,
+        );
+      }
+
+      let amount: number | null = null;
+      let charges: number | null = null;
+      let netDisbursed: number | null = null;
+      let installment: number | null = null;
+      if (product) {
+        amount = product.minAmount; // fixed-principal catalogue products
+        if (amount < product.minAmount || amount > product.maxAmount) {
+          blockers.push(
+            `Amount must be between ₹${product.minAmount.toLocaleString("en-IN")} and ₹${product.maxAmount.toLocaleString("en-IN")} for ${product.name}.`,
+          );
+        }
+        const existingObligations = round2(
+          active.reduce(
+            (s, l) => s + l.installment * (MONTH_FACTOR[l.frequency] ?? 1),
+            0,
+          ),
+        );
+        const rowsPreview = baseScheduleRows({
+          principal: amount,
+          interestRate: product.interestRate,
+          interestMethod: product.interestMethod as InterestMethod,
+          frequency: product.frequency as Frequency,
+          tenure: product.tenure,
+          disbursedOn: now,
+          graceDays: product.graceDays,
+          charges: 0,
+        });
+        const proposedMonthly = round2(
+          (rowsPreview[0]?.totalDue ?? amount) *
+            (MONTH_FACTOR[product.frequency] ?? 1),
+        );
+        const eligibility = eligibilityFor(
+          client,
+          product,
+          existingObligations,
+          proposedMonthly,
+          overdueHistory,
+          active.length,
+        );
+        for (const issue of eligibility.issues) {
+          if (issue.level === "BLOCKER") blockers.push(issue.message);
+          else warnings.push(issue.message);
+        }
+        charges = round2(
+          product.processingFee + (amount * product.chargePercent) / 100,
+        );
+        netDisbursed = round2(amount - charges);
+        installment = rowsPreview[0]?.totalDue ?? amount;
+      }
+
+      return {
+        client: {
+          _id: client._id,
+          code: client.code,
+          name: client.name,
+          village: client.village,
+          kycStatus: client.kycStatus,
+          status: client.status,
+        },
+        assignedTo: client.assignedTo,
+        activeLoans: active.length,
+        overdueHistory,
+        pendingApplication: pendingApp
+          ? { appId: pendingApp.appId, status: pendingApp.status }
+          : null,
+        amount,
+        charges,
+        netDisbursed,
+        installment,
+        blockers,
+        warnings,
+        eligible: blockers.length === 0,
+      };
+    });
+
+    return {
+      center: {
+        _id: center._id,
+        code: center.code,
+        name: center.name,
+        village: center.village,
+      },
+      product,
+      rows,
+      eligibleCount: rows.filter((r) => r.eligible).length,
+    };
+  },
+});
+
+/**
+ * Centre-wise loan disbursement — creates ONE SUBMITTED application per
+ * selected client through the same policy engine, product terms and
+ * duplicate guards as `submit`. It NEVER approves or disburses anything:
+ * the batch only feeds the existing approval workflow, so a whole-centre
+ * selection can never bypass authorisation, wallet limits or cash controls.
+ *
+ * Per-client failures are reported, not fatal: eligible members are created
+ * even when others in the batch are skipped with a reason.
+ */
+export const submitCenterBatch = mutation({
+  args: {
+    centerId: v.id("centers"),
+    productId: v.id("loanProducts"),
+    amount: v.number(),
+    clientIds: v.array(v.id("clients")),
+    remark: v.optional(v.string()),
+    device: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx);
+    requirePermission(me, "create_loan");
+    const center = await ctx.db.get(args.centerId);
+    const product = await ctx.db.get(args.productId);
+    if (!center) throw new AppError("Centre not found.");
+    if (!product) throw new AppError("Loan product not found.");
+    if (me.role !== "SUPER_ADMIN" && me.branchId && center.branchId !== me.branchId) {
+      throw new AppError("This centre is outside your branch.");
+    }
+    if (product.status !== "ACTIVE") {
+      throw new AppError("This loan product is inactive.");
+    }
+    const amount = money(args.amount, "amount");
+    if (amount < product.minAmount || amount > product.maxAmount) {
+      throw new AppError(
+        `Amount must be between ₹${product.minAmount.toLocaleString("en-IN")} and ₹${product.maxAmount.toLocaleString("en-IN")}.`,
+      );
+    }
+    // De-duplicate while preserving order; one batch covers one centre.
+    const wanted = [...new Set(args.clientIds)];
+    if (wanted.length === 0) {
+      throw new AppError("Select at least one client for the batch.");
+    }
+    if (wanted.length > BATCH_MAX_CLIENTS) {
+      throw new AppError(
+        `A centre-wise batch can cover at most ${BATCH_MAX_CLIENTS} clients.`,
+      );
+    }
+
+    const now = Date.now();
+    const remark = args.remark
+      ? requiredString(args.remark, "remark", 300)
+      : undefined;
+    const branchId = me.branchId ?? center.branchId;
+    const created: {
+      clientId: Id<"clients">;
+      code: string;
+      name: string;
+      applicationId: Id<"loanApplications">;
+      appId: string;
+    }[] = [];
+    const skipped: {
+      clientId: Id<"clients">;
+      code: string;
+      name: string;
+      reason: string;
+    }[] = [];
+
+    let appSeq = (await ctx.db.query("loanApplications").collect()).reduce(
+      (max, a) => Math.max(max, Number(a.appId.split("-")[1] ?? 0)),
+      0,
+    );
+    const loansAll = await ctx.db.query("loans").collect();
+    const appsAll = await ctx.db.query("loanApplications").collect();
+
+    for (const clientId of wanted) {
+      const client = await ctx.db.get(clientId);
+      let record: (typeof created)[number] | null = null;
+      try {
+        if (!client) throw new AppError("Client not found.");
+        if (client.centerId !== center._id) {
+          throw new AppError(`${client.code} does not belong to this centre.`);
+        }
+        if (me.role === "FIELD_STAFF" && client.assignedTo !== me._id) {
+          throw new AppError("You can only apply for your own assigned clients.");
+        }
+        if (client.status !== "ACTIVE") {
+          throw new AppError(`${client.code} is ${client.status.toLowerCase()}.`);
+        }
+        if (client.kycStatus === "REJECTED") {
+          throw new AppError(
+            `${client.code} — KYC rejected; re-verify before lending.`,
+          );
+        }
+        if (
+          appsAll.some(
+            (a) =>
+              a.clientId === clientId &&
+              ["SUBMITTED", "UNDER_REVIEW"].includes(a.status),
+          )
+        ) {
+          throw new AppError(
+            `${client.code} already has a pending loan application.`,
+          );
+        }
+
+        // Server-side policy check — identical engine to the single flow.
+        const loans = loansAll.filter((l) => l.clientId === clientId);
+        const active = loans.filter((l) =>
+          ["ACTIVE", "OVERDUE"].includes(l.status),
+        );
+        const existingObligations = round2(
+          active.reduce(
+            (s, l) => s + l.installment * (MONTH_FACTOR[l.frequency] ?? 1),
+            0,
+          ),
+        );
+        const rowsPreview = baseScheduleRows({
+          principal: amount,
+          interestRate: product.interestRate,
+          interestMethod: product.interestMethod as InterestMethod,
+          frequency: product.frequency as Frequency,
+          tenure: product.tenure,
+          disbursedOn: now,
+          graceDays: product.graceDays,
+          charges: 0,
+        });
+        const proposedMonthly = round2(
+          (rowsPreview[0]?.totalDue ?? amount) *
+            (MONTH_FACTOR[product.frequency] ?? 1),
+        );
+        const eligibility = eligibilityFor(
+          client,
+          product,
+          existingObligations,
+          proposedMonthly,
+          loans.filter((l) => l.status === "OVERDUE").length,
+          active.length,
+        );
+        if (!eligibility.eligible) {
+          throw new AppError(
+            eligibility.issues.find((i) => i.level === "BLOCKER")?.message ??
+              "Client does not meet lender policy.",
+          );
+        }
+
+        appSeq += 1;
+        const appId = `LA-${String(appSeq).padStart(6, "0")}`;
+        const applicationId = await ctx.db.insert("loanApplications", {
+          appId,
+          clientId,
+          productId: args.productId,
+          amount,
+          staffId: me._id,
+          branchId,
+          centerId: center._id,
+          status: "SUBMITTED",
+          history: [
+            {
+              actorId: me._id,
+              actorName: me.name,
+              role: me.role,
+              action: "SUBMITTED",
+              remark: `Centre-wise disbursement — ${center.code} · ${center.name}${remark ? ` — ${remark}` : ""}`,
+              at: now,
+            },
+          ],
+          eligibility,
+          submittedAt: now,
+          createdAt: now,
+        });
+        record = { clientId, code: client.code, name: client.name, applicationId, appId };
+      } catch (err) {
+        // Partial-batch reporting: one member's failure never rolls back
+        // the rest — it is surfaced with its exact reason instead.
+        skipped.push({
+          clientId,
+          code: client?.code ?? "—",
+          name: client?.name ?? "Unknown client",
+          reason: err instanceof Error ? err.message : "Could not create application.",
+        });
+      }
+      if (record) {
+        created.push(record);
+        await logAudit(ctx, {
+          actorId: me._id,
+          actorName: me.name,
+          role: me.role,
+          action: "LOAN_APPLIED",
+          entity: "loanApplications",
+          entityId: record.appId,
+          after: {
+            client: record.name,
+            product: product.name,
+            amount,
+            center: center.code,
+            mode: "CENTRE_WISE_BATCH",
+          },
+          referenceId: record.appId,
+          branchId,
+          device: args.device,
+        });
+      }
+    }
+
+    // Notify branch decision makers ONCE for the whole batch.
+    if (created.length > 0) {
+      const profiles = await ctx.db.query("profiles").collect();
+      for (const p of profiles) {
+        if (
+          (p.role === "BRANCH_MANAGER" || p.role === "SUPER_ADMIN") &&
+          p.branchId === branchId &&
+          p.status === "ACTIVE"
+        ) {
+          await notify(ctx, p._id, {
+            title: "Centre-wise loan batch submitted",
+            body: `${created.length} loan request(s) at ₹${amount.toLocaleString("en-IN")} each — ${center.name} (${center.code}) from ${me.name}.`,
+            kind: "APPROVAL",
+            link: `/dashboard/approvals`,
+          });
+        }
+      }
+    }
+
+    return {
+      ok: skipped.length === 0,
+      centerCode: center.code,
+      centerName: center.name,
+      createdCount: created.length,
+      skippedCount: skipped.length,
+      created,
+      skipped,
+    };
   },
 });
 
@@ -647,6 +1072,9 @@ export const decide = mutation({
         productId: app.productId,
         staffId: app.staffId,
         branchId: app.branchId,
+        // Every loan traces back to the client's centre (centre-wise batches
+        // record it at application time; single loans inherit it here).
+        centerId: app.centerId ?? client?.centerId,
         principal: app.amount,
         interestTotal: round2(previewRows.reduce((s, r) => s + r.interest, 0)),
         charges,

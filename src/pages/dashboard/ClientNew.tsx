@@ -36,10 +36,11 @@ import {
   OFFICE_KYC,
   OFFICE_VERIFICATION,
 } from "@/lib/finance/types";
-import type {
-  BankAccountValue,
-  LoanRequestValue,
-  NomineeValue,
+import {
+  ageFromDob,
+  type BankAccountValue,
+  type LoanRequestValue,
+  type NomineeValue,
 } from "@/lib/finance/validate";
 import { useState, type Dispatch, type SetStateAction } from "react";
 import { useNavigate } from "react-router";
@@ -72,6 +73,163 @@ const emptyFamilyMember = (): FamilyMemberRow => ({
   relationship: "",
   occupation: "",
 });
+
+/**
+ * Date of birth — kept as separate day / month / year parts so a
+ * half-finished selection survives re-renders. The Age field on the form is
+ * DERIVED from these parts (read-only); the backend re-derives age from the
+ * submitted DOB and never trusts a client-supplied age.
+ */
+type DobParts = { d: string; m: string; y: string };
+const emptyDob = (): DobParts => ({ d: "", m: "", y: "" });
+const MONTH_SHORT = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+
+/** Epoch ms of a complete, real calendar date — null when incomplete or
+ * impossible (e.g. 31 Feb). Shared by both DOB pickers on this form. */
+function dobTimestamp(parts: DobParts): number | null {
+  if (!parts.d || !parts.m || !parts.y) return null;
+  const y = Number(parts.y);
+  const m = Number(parts.m);
+  const d = Number(parts.d);
+  const dt = new Date(y, m - 1, d);
+  if (
+    dt.getFullYear() !== y ||
+    dt.getMonth() !== m - 1 ||
+    dt.getDate() !== d
+  ) {
+    return null;
+  }
+  return dt.getTime();
+}
+
+/** DD/MM/YYYY display for a DOB (blank until the selection is complete). */
+function formatDob(parts: DobParts): string {
+  if (!parts.d || !parts.m || !parts.y) return "";
+  return `${parts.d.padStart(2, "0")}/${parts.m.padStart(2, "0")}/${parts.y}`;
+}
+
+/** Calculated age for a completed DOB selection — null while incomplete.
+ * Uses the SAME helper the backend re-validates with. */
+function ageIfComplete(parts: DobParts): number | null {
+  const ts = dobTimestamp(parts);
+  return ts !== null ? ageFromDob(ts) : null;
+}
+
+/** Date-of-birth picker with separate day / month / year dropdowns.
+ * Future dates are disabled and impossible calendar days (31 Feb) can never
+ * be completed; the chosen date is echoed back as DD/MM/YYYY. */
+function DobPicker({
+  parts,
+  onChange,
+  className,
+}: {
+  parts: DobParts;
+  onChange: (next: DobParts) => void;
+  className: string;
+}) {
+  const today = new Date();
+  const thisYear = today.getFullYear();
+  const thisMonth = today.getMonth() + 1;
+  const thisDay = today.getDate();
+  const years = Array.from({ length: 101 }, (_, i) => String(thisYear - i));
+  const daysInMonth =
+    parts.y && parts.m
+      ? new Date(Number(parts.y), Number(parts.m), 0).getDate()
+      : 31;
+  const days = Array.from({ length: daysInMonth }, (_, i) => String(i + 1));
+  const selectCls = cn(className, "h-[42px] min-w-0");
+
+  // Changing month/year can invalidate the selected day (31 Jan → Feb, or
+  // 29 Feb → a non-leap year) — clear it so an impossible date never forms.
+  const setMonth = (m: string) => {
+    const maxDays = parts.y ? new Date(Number(parts.y), Number(m), 0).getDate() : 31;
+    onChange({
+      ...parts,
+      m,
+      d: parts.d && Number(parts.d) > maxDays ? "" : parts.d,
+    });
+  };
+  const setYear = (y: string) => {
+    const maxDays = parts.m ? new Date(Number(y), Number(parts.m), 0).getDate() : 31;
+    onChange({
+      ...parts,
+      y,
+      d: parts.d && Number(parts.d) > maxDays ? "" : parts.d,
+    });
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <select
+        aria-label="Birth day"
+        value={parts.d}
+        onChange={(e) => onChange({ ...parts, d: e.target.value })}
+        className={cn(selectCls, "w-20 shrink-0")}
+      >
+        <option value="">Day</option>
+        {days.map((d) => (
+          <option
+            key={d}
+            value={d}
+            disabled={
+              parts.y === String(thisYear) &&
+              parts.m === String(thisMonth) &&
+              Number(d) > thisDay
+            }
+          >
+            {d.padStart(2, "0")}
+          </option>
+        ))}
+      </select>
+      <select
+        aria-label="Birth month"
+        value={parts.m}
+        onChange={(e) => setMonth(e.target.value)}
+        className={cn(selectCls, "w-24 shrink-0")}
+      >
+        <option value="">Month</option>
+        {MONTH_SHORT.map((name, i) => (
+          <option
+            key={name}
+            value={String(i + 1)}
+            disabled={parts.y === String(thisYear) && i + 1 > thisMonth}
+          >
+            {name}
+          </option>
+        ))}
+      </select>
+      <select
+        aria-label="Birth year"
+        value={parts.y}
+        onChange={(e) => setYear(e.target.value)}
+        className={cn(selectCls, "w-24 shrink-0")}
+      >
+        <option value="">Year</option>
+        {years.map((y) => (
+          <option key={y} value={y}>
+            {y}
+          </option>
+        ))}
+      </select>
+      <span className="font-mono text-xs font-black tabular-nums text-muted-foreground">
+        {formatDob(parts) || "DD/MM/YYYY"}
+      </span>
+    </div>
+  );
+}
 
 /** "KYC documents available" checkboxes (Aadhaar / PAN / Voter ID / Other). */
 function KycDocChecks({
@@ -133,7 +291,9 @@ export default function ClientNew() {
   const [fatherName, setFatherName] = useState("");
   const [applicantFatherName, setApplicantFatherName] = useState("");
   const [maternalHomeAddress, setMaternalHomeAddress] = useState("");
-  const [age, setAge] = useState("");
+  // Date of birth (day / month / year) — the Age field is derived from it,
+  // read-only, and re-derived server-side on submit.
+  const [dob, setDob] = useState<DobParts>(emptyDob());
   const [gender, setGender] = useState<(typeof GENDERS)[number]>("FEMALE");
   const [mobile, setMobile] = useState("");
   const [address, setAddress] = useState("");
@@ -152,6 +312,7 @@ export default function ClientNew() {
   const [coFatherName, setCoFatherName] = useState("");
   const [coRelationship, setCoRelationship] = useState("");
   const [coGender, setCoGender] = useState<(typeof GENDERS)[number]>("MALE");
+  const [coDob, setCoDob] = useState<DobParts>(emptyDob());
   const [coMobile, setCoMobile] = useState("");
   const [coAddress, setCoAddress] = useState("");
   const [coAadhaar, setCoAadhaar] = useState("");
@@ -223,6 +384,11 @@ export default function ClientNew() {
     selected ? "skip" : { q: q.trim() || undefined },
   );
 
+  // Ages are calculated live from the DOB pickers — both Age fields are
+  // read-only displays and can never disagree with the chosen date.
+  const applicantAge = ageIfComplete(dob);
+  const coAge = ageIfComplete(coDob);
+
   if (!can("create_client")) {
     return (
       <div className="space-y-4">
@@ -273,7 +439,19 @@ export default function ClientNew() {
 
     // Local validation mirrors the backend so mistakes surface instantly.
     if (name.trim().length < 2) return toast.error("Client name is required.");
-    const ageNum = Number(age);
+    // Date of birth is required; the age shown on the form is calculated
+    // from it and is re-derived server-side (the backend never trusts a
+    // client-supplied age).
+    const dobTs = dobTimestamp(dob);
+    if (dobTs === null) {
+      return toast.error(
+        "Date of birth is required — pick the day, month and year.",
+      );
+    }
+    if (dobTs > Date.now()) {
+      return toast.error("Date of birth cannot be in the future.");
+    }
+    const ageNum = ageFromDob(dobTs);
     if (!Number.isInteger(ageNum) || ageNum < 18 || ageNum > 100) {
       return toast.error("Age must be between 18 and 100.");
     }
@@ -314,6 +492,21 @@ export default function ClientNew() {
       return toast.error(
         "Co-applicant relationship with the applicant is required.",
       );
+    }
+    // Co-applicant DOB — same rules as the applicant's: required, valid,
+    // never in the future; age is calculated from it.
+    const coDobTs = dobTimestamp(coDob);
+    if (coDobTs === null) {
+      return toast.error(
+        "Co-applicant date of birth is required — pick the day, month and year.",
+      );
+    }
+    if (coDobTs > Date.now()) {
+      return toast.error("Co-applicant date of birth cannot be in the future.");
+    }
+    const coAgeNum = ageFromDob(coDobTs);
+    if (!Number.isInteger(coAgeNum) || coAgeNum < 18 || coAgeNum > 100) {
+      return toast.error("Co-applicant age must be between 18 and 100.");
     }
     if (coMobile.trim() && !/^[6-9]\d{9}$/.test(coMobile.trim())) {
       return toast.error("Enter a valid 10-digit co-applicant mobile number.");
@@ -604,7 +797,8 @@ export default function ClientNew() {
         fatherName: fatherName.trim() || undefined,
         applicantFatherName: applicantFatherName.trim() || undefined,
         maternalHomeAddress: maternalHomeAddress.trim() || undefined,
-        age: ageNum,
+        dob: dobTs,
+        age: ageNum, // re-derived server-side from `dob`
         gender,
         mobile: mobile.trim(),
         address: address.trim(),
@@ -635,6 +829,8 @@ export default function ClientNew() {
           name: coName.trim(),
           fatherName: coFatherName.trim() || undefined,
           relationship: coRelationship.trim(),
+          dob: coDobTs,
+          age: coAgeNum, // re-derived server-side from `dob`
           gender: coGender,
           mobile: coMobile.trim() || undefined,
           address: coAddress.trim() || undefined,
@@ -888,16 +1084,6 @@ export default function ClientNew() {
               onChange={(e) => setApplicantFatherName(e.target.value)}
             />
           </label>
-          <label className="block sm:col-span-2">
-            <span className={label}>Maternal home address</span>
-            <textarea
-              value={maternalHomeAddress}
-              onChange={(e) => setMaternalHomeAddress(e.target.value)}
-              rows={2}
-              placeholder="Father's home — house, village, post, district"
-              className={cn(field, "resize-y")}
-            />
-          </label>
           <label className="block">
             <span className={label}>Mobile number *</span>
             <Input
@@ -909,12 +1095,18 @@ export default function ClientNew() {
               placeholder="9876543210"
             />
           </label>
+          <div className="block sm:col-span-2">
+            <span className={label}>Date of birth * (day / month / year)</span>
+            <DobPicker parts={dob} onChange={setDob} className={field} />
+          </div>
           <label className="block">
             <span className={label}>Age (18–100) *</span>
             <Input
               className={field}
-              value={age}
-              onChange={(e) => setAge(e.target.value)}
+              value={applicantAge ?? ""}
+              readOnly
+              aria-readonly="true"
+              placeholder="Auto-calculated"
               inputMode="numeric"
               maxLength={3}
             />
@@ -940,6 +1132,16 @@ export default function ClientNew() {
               onChange={(e) => setAddress(e.target.value)}
               rows={2}
               placeholder="House, village, post, district"
+              className={cn(field, "resize-y")}
+            />
+          </label>
+          <label className="block sm:col-span-2">
+            <span className={label}>Maternal home address</span>
+            <textarea
+              value={maternalHomeAddress}
+              onChange={(e) => setMaternalHomeAddress(e.target.value)}
+              rows={2}
+              placeholder="Father's home — house, village, post, district"
               className={cn(field, "resize-y")}
             />
           </label>
@@ -1083,6 +1285,22 @@ export default function ClientNew() {
               inputMode="numeric"
               maxLength={10}
               placeholder="9876543210"
+            />
+          </label>
+          <div className="block sm:col-span-2">
+            <span className={label}>Date of birth * (day / month / year)</span>
+            <DobPicker parts={coDob} onChange={setCoDob} className={field} />
+          </div>
+          <label className="block">
+            <span className={label}>Age (18–100) *</span>
+            <Input
+              className={field}
+              value={coAge ?? ""}
+              readOnly
+              aria-readonly="true"
+              placeholder="Auto-calculated"
+              inputMode="numeric"
+              maxLength={3}
             />
           </label>
           <label className="block sm:col-span-2">
