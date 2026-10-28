@@ -30,10 +30,10 @@
  *     installment, never extrapolated from the calendar.
  */
 
-import { DAY_MS, IST_OFFSET_MS } from "./dateReport";
 import { overdueDays, round2 } from "./excelReports";
 import { rowOutstanding } from "./schedule";
 import { LOAN_PURPOSE_LABELS, type LoanPurpose } from "./types";
+import { idExactMatches } from "../server/idMatch";
 
 /* ------------------------------- Inputs ---------------------------------- */
 
@@ -143,6 +143,11 @@ export function resolveClientMatches(
   const needle = norm(query);
   if (!needle) return [];
 
+  // The Client ID matches strictly: identical after stripping punctuation
+  // or identical digit strings — so "000137", "C-000137" and "C000137"
+  // all resolve, but a query never matches a record it merely resembles.
+  const idMatches = (code: string) => idExactMatches(code, query);
+
   const byId = new Map<string, StatementMatch>();
   const push = (match: StatementMatch) => {
     if (!byId.has(match.clientId)) byId.set(match.clientId, match);
@@ -150,7 +155,7 @@ export function resolveClientMatches(
 
   for (const c of clients) {
     const loanIds = loansByClient[c._id] ?? [];
-    if (norm(c.code) === needle) {
+    if (idMatches(c.code)) {
       push({ clientId: c._id, code: c.code, name: c.name, mobile: c.mobile, loanIds, matchedOn: "CLIENT_ID" });
       continue;
     }

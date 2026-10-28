@@ -4,8 +4,6 @@ import type { Doc, Id } from "./_generated/dataModel";
 import {
   AppError,
   logAudit,
-  notify,
-  requirePermission,
   requireProfile,
   requireRole,
   revokeUserSessions,
@@ -13,12 +11,11 @@ import {
 import { istDateKey } from "../lib/server/convexHelpers";
 import {
   mobileNumber,
-  money,
   oneOf,
   optionalString,
   requiredString,
 } from "../lib/finance/validate";
-import { FS_ROLES, USER_STATUSES } from "../lib/finance/types";
+import { idQueryMatches, staffIdMatches } from "../lib/server/idMatch";
 
 /* ----------------------------- Dashboard ------------------------------------- */
 
@@ -462,7 +459,8 @@ export const auditLogs = query({
     search: v.optional(v.string()),
   },
   handler: async (ctx, { limit, entity, search }) => {
-    const me = await requireProfile(ctx, { allowInactive: true });
+    // Auth check — the audit trail is only readable by signed-in staff.
+    await requireProfile(ctx, { allowInactive: true });
     const cap = Math.min(Math.max(((limit ?? 100) as number), 1), 200);
 
     let rows = await ctx.db.query("auditLogs").collect();
@@ -522,7 +520,10 @@ export const search = query({
     for (const c of clients) {
       if (me.role === "FIELD_STAFF" && c.assignedTo !== me._id) continue;
       if (me.role === "BRANCH_MANAGER" && c.branchId !== me.branchId) continue;
-      if (c.searchText.includes(term)) {
+      if (
+        c.searchText.includes(term) ||
+        idQueryMatches(c.code, q)
+      ) {
         results.push({
           kind: "CLIENT",
           id: c._id,
@@ -566,7 +567,10 @@ export const search = query({
       if (me.role === "BRANCH_MANAGER" && p.branchId !== me.branchId) continue;
       if (
         p.name.toLowerCase().includes(term) ||
-        p.staffId.toLowerCase().includes(term)
+        p.staffId.toLowerCase().includes(term) ||
+        // Numeric, prefixed ("BM-10002") and hyphen-less ("BM10002")
+        // forms of the staff ID — including its legacy identifiers.
+        staffIdMatches(p.staffId, p.legacyStaffIds, q)
       ) {
         results.push({
           kind: "STAFF",
@@ -725,6 +729,7 @@ export const listUsers = query({
       all = all.filter((p) =>
         p.name.toLowerCase().includes(term) ||
         String(p.staffId ?? "").toLowerCase().includes(term) ||
+        staffIdMatches(p.staffId, p.legacyStaffIds, args.search ?? "") ||
         String(p.email ?? "").toLowerCase().includes(term) ||
         (!!p.mobile && digits.length >= 3 && p.mobile.includes(digits)),
       );
@@ -768,8 +773,9 @@ const EDITABLE_STAFF_ROLES = [
 /**
  * SUPER_ADMIN-only: edit a staff / branch-manager / admin profile.
  *
- * Deliberately NOT editable here: `staffId` (the system ID — BM-10002 stays
- * BM-10002), `credentialHash` (sign-in is never touched by an edit),
+ * Deliberately NOT editable here: `staffId` (the backend-generated number
+ * — 0001, 0002, 0003… — is assigned once and never edited),
+ * `credentialHash` (sign-in is never touched by an edit),
  * `status` (use setStatus), and `clientId` (clients are edited through
  * `clients.update`). Every change is written with before/after to the
  * append-only audit log.
@@ -822,6 +828,11 @@ export const updateStaff = mutation({
     if (args.branchId !== undefined) {
       const branch = await ctx.db.get(args.branchId);
       if (!branch) throw new AppError("Branch not found.");
+      if (branch.status !== "ACTIVE") {
+        throw new AppError(
+          `Branch "${branch.name}" is not active. Staff can only be moved to an active branch.`,
+        );
+      }
       patch.branchId = args.branchId;
     }
     if (args.joiningDate !== undefined) {

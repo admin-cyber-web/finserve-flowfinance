@@ -219,6 +219,44 @@ export async function makeCode(
   return `${prefix}${String(seq).padStart(pad, "0")}${suffix}`;
 }
 
+/**
+ * Next displayed staff number (0001, 0002, 0003, ...) from the atomic
+ * `counters` table. Convex serialises mutation commits (OCC with automatic
+ * retry), so the read-modify-write below can never hand the same number to
+ * two concurrent staff creations.
+ *
+ * The counter is only ever advanced past numbers already present on a
+ * profile, so a fresh or partially migrated database self-heals. Legacy
+ * prefixed IDs (BM-10002) and CLIENT portal profiles never feed the
+ * sequence — they live in their own namespaces.
+ *
+ * 0001 (SUPER_ADMIN) and 0002 (Pankaj Tiwari) are already on file; 0003 is
+ * reserved for Roshan Mishra — the next account created through New Staff
+ * receives 0003, and every account after that continues 0004, 0005, ...
+ */
+export async function nextStaffNumber(ctx: Mtx): Promise<string> {
+  const counter = await ctx.db
+    .query("counters")
+    .withIndex("by_key", (q) => q.eq("key", "staff"))
+    .unique();
+
+  let highest = counter?.value ?? 0;
+  const profiles = await ctx.db.query("profiles").collect();
+  for (const p of profiles) {
+    if (p.role === "CLIENT") continue;
+    const n = Number(String(p.staffId ?? "").replace(/\D/g, "") || 0);
+    if (n > highest) highest = n;
+  }
+
+  const next = highest + 1;
+  if (counter) {
+    if (counter.value !== next) await ctx.db.patch(counter._id, { value: next });
+  } else {
+    await ctx.db.insert("counters", { key: "staff", value: next });
+  }
+  return String(next).padStart(4, "0");
+}
+
 export function istDateKey(now: number): string {
   // Business runs on IST regardless of server timezone.
   return new Date(now + 5.5 * 3600 * 1000).toISOString().slice(0, 10);

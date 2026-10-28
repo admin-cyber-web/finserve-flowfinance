@@ -15,7 +15,6 @@ import {
   Banknote,
   Coins,
   FileBarChart,
-  IndianRupee,
   LayoutDashboard,
   Loader2,
   LogOut,
@@ -90,6 +89,8 @@ interface NavItem {
   permission?: Permission;
   /** When set, the item only renders for this exact profile role. */
   role?: string;
+  /** When set, the item only renders for one of these exact roles. */
+  roles?: string[];
   end?: boolean;
 }
 
@@ -112,7 +113,15 @@ const NAV: NavItem[] = [
   { to: "/dashboard/reports", label: "Reports", icon: FileBarChart, permission: "reports" },
   { to: "/dashboard/accounting", label: "Accounting", icon: BookOpen, permission: "accounting" },
   { to: "/dashboard/audit", label: "Audit & Money Trail", icon: ShieldCheck, permission: "audit_logs" },
-  { to: "/dashboard/products", label: "Loan Products", icon: Package, permission: "view_loans" },
+  {
+    to: "/dashboard/products",
+    label: "Loan Products",
+    icon: Package,
+    permission: "view_loans",
+    // Loan Products is a Branch Manager / SUPER_ADMIN section — the backend
+    // query enforces the same roles, so hiding this item is not the guard.
+    roles: ["BRANCH_MANAGER", "SUPER_ADMIN"],
+  },
 ];
 
 const TITLES: Record<string, string> = {
@@ -161,7 +170,9 @@ function NavList({
     <nav className="flex flex-col gap-1">
       {NAV.filter(
         (item) =>
-          allowed(item.permission) && (!item.role || item.role === role),
+          allowed(item.permission) &&
+          (!item.role || item.role === role) &&
+          (!item.roles || item.roles.includes(role ?? "")),
       ).map((item) => {
         const active = item.end
           ? pathname === item.to
@@ -388,8 +399,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
           <input
             autoFocus
             value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="C-000128, LN-000001, Rahul…"
+            onChange={(e) => setQ(e.target.value)}             placeholder="000128, LN-000001, Rahul…"
             className="h-11 w-full bg-transparent px-3 text-sm font-bold outline-none"
           />
         </div>

@@ -9,7 +9,7 @@ import {
   requireProfile,
   requireRole,
 } from "../lib/server/convexHelpers";
-import { istDateKey } from "../lib/server/convexHelpers";
+import { idQueryMatches } from "../lib/server/idMatch";
 import {
   centerReportRows,
   createCenterForActor,
@@ -101,7 +101,10 @@ export const list = query({
         (c) =>
           c.searchText.includes(q) ||
           (digits.length >= 3 && c.mobile.includes(digits)) ||
-          c.code.toLowerCase().startsWith(q),
+          c.code.toLowerCase().startsWith(q) ||
+          // Numeric / prefixed / hyphen-less forms of the Client ID
+          // ("000137", "C-000137", "C000137") all resolve to the record.
+          idQueryMatches(c.code, args.search ?? ""),
       );
     }
     clients = clients.sort((a, b) => b.createdAt - a.createdAt);
@@ -830,13 +833,31 @@ export const create = mutation({
     }
     branchId = assigneeProfile.branchId ?? branchId;
 
-    // Client codes continue from the highest issued code.
+    // Client numbers come from their OWN sequence (separate from staff):
+    // numeric only — no role prefix, no hyphen — leading zeros kept
+    // (000001, 000002, ...). Legacy "C-000137" style codes still count
+    // towards the highest number, so a restored database never reissues a
+    // number. The counter row makes duplicate client IDs impossible even
+    // under concurrent creation (Convex serialises mutation commits).
     const existing = await ctx.db.query("clients").collect();
-    const maxCode = existing.reduce((max, c) => {
-      const n = Number(c.code.split("-")[1] ?? 0);
-      return Number.isFinite(n) && n > max ? n : max;
-    }, 0);
-    const code = `C-${String(maxCode + 1).padStart(6, "0")}`;
+    const clientCounter = await ctx.db
+      .query("counters")
+      .withIndex("by_key", (q) => q.eq("key", "client"))
+      .unique();
+    let highestClientNumber = clientCounter?.value ?? 0;
+    for (const c of existing) {
+      const n = Number(c.code.replace(/\D/g, "") || 0);
+      if (n > highestClientNumber) highestClientNumber = n;
+    }
+    const nextClientNumber = highestClientNumber + 1;
+    if (clientCounter) {
+      if (clientCounter.value !== nextClientNumber) {
+        await ctx.db.patch(clientCounter._id, { value: nextClientNumber });
+      }
+    } else {
+      await ctx.db.insert("counters", { key: "client", value: nextClientNumber });
+    }
+    const code = String(nextClientNumber).padStart(6, "0");
 
     // Centre linkage: the centre selected in the joining form is re-verified
     // against the database here (exists + same branch) so a direct backend

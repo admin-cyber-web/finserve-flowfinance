@@ -7,7 +7,9 @@ import {
   notify,
   requirePermission,
   requireProfile,
+  requireRole,
 } from "../lib/server/convexHelpers";
+import { idQueryMatches } from "../lib/server/idMatch";
 import {
   archiveLoan,
   baseScheduleRows,
@@ -69,6 +71,13 @@ async function scopeLoans(
 export const products = query({
   args: { activeOnly: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
+    // Product selection is part of creating a loan — enforce the same
+    // permission the loan-creation mutations require, so an unauthorised
+    // role can never read the catalogue (and nothing here can be written
+    // from the client: principal, rate, fee and schedule live on the
+    // product record).
+    const me = await requireProfile(ctx, { allowInactive: true });
+    requirePermission(me, "create_loan");
     const all = (await ctx.db.query("loanProducts").collect()).sort((a, b) =>
       a.code.localeCompare(b.code),
     );
@@ -86,7 +95,10 @@ export const productSchedules = query({
   args: {},
   handler: async (ctx) => {
     const me = await requireProfile(ctx, { allowInactive: true });
-    requirePermission(me, "view_loans");
+    // The Loan Products section (full terms, rates, fees, schedules) is
+    // restricted to Branch Managers and SUPER_ADMIN — enforced here in the
+    // backend, not only by hiding the nav item.
+    requireRole(me, "BRANCH_MANAGER", "SUPER_ADMIN");
     const all = (await ctx.db.query("loanProducts").collect())
       .filter((p) => p.status === "ACTIVE")
       .sort((a, b) => a.code.localeCompare(b.code));
@@ -143,7 +155,7 @@ export const list = query({
   handler: async (ctx, args) => {
     const me = await requireProfile(ctx, { allowInactive: true });
     requirePermission(me, "view_loans");
-    let loans = await scopeLoans(ctx, me, {
+    const loans = await scopeLoans(ctx, me, {
       staffId: args.staffId ?? null,
       branchId: args.branchId ?? null,
       clientId: args.clientId ?? null,
@@ -204,7 +216,11 @@ export const list = query({
       enriched = enriched.filter(
         (e) =>
           e.loan.loanId.toLowerCase().includes(q) ||
-          (e.client && (e.client.name.toLowerCase().includes(q) || e.client.code.toLowerCase().includes(q))),
+          (e.client &&
+            (e.client.name.toLowerCase().includes(q) ||
+              e.client.code.toLowerCase().includes(q) ||
+              // Numeric / prefixed / hyphen-less Client ID forms.
+              idQueryMatches(e.client.code, args.search ?? ""))),
       );
     }
     enriched.sort((a, b) => b.loan.createdAt - a.loan.createdAt);

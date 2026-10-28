@@ -393,7 +393,7 @@ export function MobileShell({ children }: { children: ReactNode }) {
           ))}
           {(results ?? []).length === 0 && debounced.trim().length < 2 && (
             <p className="py-4 text-center text-xs font-semibold text-muted-foreground">
-              Try “Ramesh”, “C-000128”, “LN-000001” or a receipt number.
+              Try “Ramesh”, “000128”, “LN-000001” or a receipt number.
             </p>
           )}
         </div>

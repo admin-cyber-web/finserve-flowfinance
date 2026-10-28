@@ -6,6 +6,7 @@ import {
   AppError,
   getActor,
   logAudit,
+  nextStaffNumber,
   requirePermission,
   requireProfile,
   writeWalletTx,
@@ -14,8 +15,10 @@ import {
 import { FS_ROLES, USER_STATUSES } from "../lib/finance/types";
 import { oneOf, requiredString, optionalString, money } from "../lib/finance/validate";
 import { normalizeCredential, hashCredential, verifyCredential } from "../lib/server/credentials";
+import { staffIdMatches } from "../lib/server/idMatch";
 
 export const SUPER_ADMIN_EMAIL = "tiwarijhumki@gmail.com";
+
 
 export const me = query({
   args: {},
@@ -38,7 +41,7 @@ export const findBySystemId = query({
     const match = profiles.find(
       (p) =>
         p.role !== "CLIENT" &&
-        p.staffId?.toUpperCase() === trimmed,
+        staffIdMatches(p.staffId, p.legacyStaffIds, trimmed),
     );
     if (!match) return null;
     return {
@@ -63,7 +66,7 @@ export const verifyStaffLogin = mutation({
     const target = profiles.find(
       (p) =>
         p.role !== "CLIENT" &&
-        p.staffId?.toUpperCase() === trimmedSystemId,
+        staffIdMatches(p.staffId, p.legacyStaffIds, trimmedSystemId),
     );
     if (!target) {
       throw new AppError("Invalid system ID or credentials.");
@@ -119,7 +122,8 @@ export const staffCredentialsSignIn = internalMutation({
 
     const profiles = await ctx.db.query("profiles").collect();
     const target = profiles.find(
-      (p) => p.role !== "CLIENT" && p.staffId?.toUpperCase() === trimmed,
+      (p) =>
+        p.role !== "CLIENT" && staffIdMatches(p.staffId, p.legacyStaffIds, trimmed),
     );
     if (!target) {
       return { ok: false, message: "Invalid system ID or credentials." };
@@ -225,19 +229,21 @@ export const createStaffUser = mutation({
 
     const mobile = requiredString(args.mobile, "mobile", 20);
 
-    const seq = await ctx.db
-      .query("profiles")
-      .withIndex("by_role", (q) => q.eq("role", role))
-      .collect();
-    const prefix =
-      role === "FIELD_STAFF"
-        ? "ST"
-        : role === "BRANCH_MANAGER"
-          ? "BM"
-          : role === "ACCOUNTANT"
-            ? "AC"
-            : "SA";
-    const staffId = `${prefix}-${String(10001 + seq.length).padStart(5, "0")}`;
+    // Branch relationship is validated here in the backend: new users can
+    // only join an ACTIVE branch (Ballia is the sole active branch — the
+    // retired ones are kept for history but can never receive new staff).
+    const branch = await ctx.db.get(args.branchId);
+    if (!branch) throw new AppError("Branch not found.");
+    if (branch.status !== "ACTIVE") {
+      throw new AppError(
+        `Branch "${branch.name}" is not active. New users can only be created in an active branch.`,
+      );
+    }
+
+    // Backend-generated sequential number (0004, 0005, ...) — no role
+    // prefix, no hyphen, leading zeros kept, collision-free under
+    // concurrent creation. Never entered manually.
+    const staffId = await nextStaffNumber(ctx);
 
     let credentialHash: string | null = null;
     let needsSetup = false;
@@ -425,6 +431,7 @@ export const bootstrapSuperAdmin = mutation({
       const adminBranch = branches[0]._id;
 
       const createAt = Date.now();
+      const bootstrapStaffId = await nextStaffNumber(ctx);
       const adminId = await ctx.db.insert("profiles", {
         name: "System Administrator",
         mobile: "",
@@ -432,7 +439,7 @@ export const bootstrapSuperAdmin = mutation({
         role: "SUPER_ADMIN",
         branchId: adminBranch,
         status: "ACTIVE",
-        staffId: "SA-00001",
+        staffId: bootstrapStaffId,
         credentialHash: await hashCredential(normalizeCredential(password)),
         joiningDate: createAt,
         createdAt: createAt,
@@ -445,7 +452,7 @@ export const bootstrapSuperAdmin = mutation({
         role: me.role,
         action: "SUPER_ADMIN_BOOTSTRAP",
         entity: "profiles",
-        entityId: "SA-00001",
+        entityId: bootstrapStaffId,
         after: { email, created: true },
         branchId: adminBranch,
       });

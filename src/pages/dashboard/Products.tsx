@@ -8,11 +8,21 @@ import {
   formatDate,
 } from "@/components/fs/primitives";
 import { api } from "@/convex/_generated/api";
+import { useProfile } from "@/hooks/use-profile";
 import { useQuery } from "convex/react";
 import { Package } from "lucide-react";
 
 export default function Products() {
-  const catalog = useQuery(api.loans.productSchedules, {});
+  const { profile, loading } = useProfile();
+  // Loan Products is a Branch Manager / SUPER_ADMIN section. The backend
+  // query enforces the same roles — this guard only renders a clean notice
+  // instead of firing a request that would be refused.
+  const allowed =
+    profile?.role === "BRANCH_MANAGER" || profile?.role === "SUPER_ADMIN";
+  const catalog = useQuery(
+    api.loans.productSchedules,
+    allowed ? {} : "skip",
+  );
 
   return (
     <div className="space-y-4 pb-10">
@@ -21,7 +31,15 @@ export default function Products() {
         subtitle="Three standard products — terms fixed in the backend"
       />
 
-      {catalog === undefined ? (
+      {loading ? (
+        <RowSkeleton rows={3} />
+      ) : !allowed ? (
+        <EmptyState
+          title="Restricted section"
+          hint="Loan products are visible to Branch Managers and the Super Admin only."
+          icon={<Package className="size-5" />}
+        />
+      ) : catalog === undefined ? (
         <RowSkeleton rows={3} />
       ) : catalog.length === 0 ? (
         <EmptyState
@@ -51,7 +69,10 @@ export default function Products() {
                       k="Processing fee"
                       v={
                         <>
-                          <Money value={charges} /> · {p.chargePercent > 0 ? `${p.chargePercent}%` : "4%"} of principal
+                          <Money value={charges} /> ·{" "}
+                          {p.chargePercent > 0
+                            ? `${p.chargePercent}% of principal + flat fee`
+                            : "one-time, flat"}
                         </>
                       }
                     />

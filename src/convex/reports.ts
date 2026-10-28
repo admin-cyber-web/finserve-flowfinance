@@ -1066,11 +1066,14 @@ export const dateReport = query({
       profiles,
     });
 
-    // Filter options the viewer is actually allowed to use.
-    const inBranchScope = (b: { _id: typeof branches[number]["_id"] }) =>
-      me.role === "BRANCH_MANAGER" || me.role === "FIELD_STAFF"
+    // Filter options the viewer is actually allowed to use. Only ACTIVE
+    // branches are offered — Ballia is the sole active branch, the rest are
+    // retained for history but never selectable.
+    const inBranchScope = (b: { _id: typeof branches[number]["_id"]; status: string }) =>
+      b.status === "ACTIVE" &&
+      (me.role === "BRANCH_MANAGER" || me.role === "FIELD_STAFF"
         ? b._id === me.branchId
-        : true;
+        : true);
     const branchOpts = branches
       .filter(inBranchScope)
       .sort((a, b) => a.name.localeCompare(b.name))
