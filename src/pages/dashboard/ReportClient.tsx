@@ -321,12 +321,21 @@ export default function ReportClient({
                       )
                     }
                   />
-                  <KeyValue k="Loan product" v={productName ?? NA} />
+                  {productName ? <KeyValue k="Loan product" v={productName} /> : null}
                   <KeyValue
                     k="Purpose (application)"
                     v={client.loanRequest?.purpose?.replace(/_/g, " ") ?? NA}
                   />
-                  <KeyValue k="Tenure" v={`${loan.tenure} months`} />
+                  <KeyValue
+                    k="Tenure"
+                    v={`${loan.tenure} ${
+                      loan.frequency === "WEEKLY"
+                        ? "weeks"
+                        : loan.frequency === "FORTNIGHTLY"
+                          ? "fortnights"
+                          : "months"
+                    } · ${loan.frequency.toLowerCase()}`}
+                  />
                   <KeyValue k="Repayment frequency" v={loan.frequency} />
                   <KeyValue k="Interest" v={`${loan.interestRate}% · ${loan.interestMethod} · ₹${loan.interestTotal.toLocaleString("en-IN")}`} />
                   <KeyValue k="Field staff on loan" v={staffName ?? NA} />

@@ -351,7 +351,9 @@ const schema = defineSchema(
     loanApplications: defineTable({
       appId: v.string(), // LA-000123
       clientId: v.id("clients"),
-      productId: v.id("loanProducts"),
+      // Loan products were removed; kept optional so historical documents
+      // still validate while new applications carry none.
+      productId: v.optional(v.id("loanProducts")),
       amount: v.number(),
       staffId: v.id("profiles"),
       branchId: v.id("branches"),
@@ -386,7 +388,9 @@ const schema = defineSchema(
       loanId: v.string(), // LN-000123
       applicationId: v.optional(v.id("loanApplications")),
       clientId: v.id("clients"),
-      productId: v.id("loanProducts"),
+      // Optional: loans created after the catalogue was removed store the
+      // fixed terms (rate/frequency/tenure) directly instead.
+      productId: v.optional(v.id("loanProducts")),
       staffId: v.id("profiles"),
       branchId: v.id("branches"),
       // Centre the client belonged to at sanction — copied from the client

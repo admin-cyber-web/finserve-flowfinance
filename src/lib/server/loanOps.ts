@@ -10,6 +10,7 @@ import type { Doc, Id } from "../../convex/_generated/dataModel";
 import { collectionEntry, disbursementEntry } from "../finance/journal";
 import { round2 } from "../finance/money";
 import { generateSchedule, rowOutstanding, type ScheduleRow } from "../finance/schedule";
+import { FIXED_LOAN_TERMS } from "./loanTerms";
 import type { Frequency, InterestMethod, PayMode } from "../finance/types";
 import { evaluateEligibility } from "../finance/eligibility";
 import {
@@ -213,13 +214,15 @@ export async function disburseLoan(
     throw new AppError(`Loan is ${loan.status} — only an approved loan can be disbursed.`);
   }
 
-  const [client, product, staff] = await Promise.all([
+  const [client, staff] = await Promise.all([
     ctx.db.get(loan.clientId),
-    ctx.db.get(loan.productId),
     ctx.db.get(loan.staffId),
   ]);
-  if (!client || !product || !staff) throw new AppError("Loan references are broken.");
+  if (!client || !staff) throw new AppError("Loan references are broken.");
 
+  // The schedule is regenerated from the terms stored ON THE LOAN (written
+  // by the approval step from the fixed backend terms) — never from a
+  // product record and never from anything the client supplied.
   const rows = baseScheduleRows({
     principal: loan.principal,
     interestRate: loan.interestRate,
@@ -227,7 +230,7 @@ export async function disburseLoan(
     frequency: loan.frequency as Frequency,
     tenure: loan.tenure,
     disbursedOn: nowMs,
-    graceDays: product.graceDays,
+    graceDays: FIXED_LOAN_TERMS.graceDays,
     // The processing fee is NOT financed into the repayment schedule. The
     // schedule (and therefore the client's debt) is principal + reducing-
     // balance interest only; the fee is recognised separately as fee income
@@ -1185,7 +1188,6 @@ export async function deleteLoanRecord(
 
 export function eligibilityFor(
   client: Doc<"clients">,
-  product: Doc<"loanProducts">,
   existingObligations: number,
   proposedObligation: number,
   overdueHistory: number,
@@ -1196,7 +1198,9 @@ export function eligibilityFor(
     monthlyIncome: client.monthlyIncome,
     existingObligations,
     proposedObligation,
-    maxObligationRatio: product.maxObligationRatio,
+    // Policy threshold lives with the fixed backend terms — there is no
+    // product record to read it from any more.
+    maxObligationRatio: FIXED_LOAN_TERMS.maxObligationRatio,
     overdueHistory,
     activeLoans,
   });

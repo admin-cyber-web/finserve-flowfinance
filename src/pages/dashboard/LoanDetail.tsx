@@ -107,7 +107,14 @@ export default function LoanDetail() {
     <div className="space-y-4 pb-10">
       <PageHeader
         title={loan.loanId}
-        subtitle={`${client?.name ?? "—"} · ${product?.name ?? ""} · ${staff?.name ?? ""}`}
+        subtitle={[
+          client?.name ?? "—",
+          product?.name,
+          `${loan.interestRate}% ${loan.interestMethod.toLowerCase()} · ${loan.tenure} ${loan.frequency.toLowerCase()} installments`,
+          staff?.name,
+        ]
+          .filter(Boolean)
+          .join(" · ")}
         back="/dashboard/loans"
         action={<StatusChip status={view.displayStatus} />}
       />

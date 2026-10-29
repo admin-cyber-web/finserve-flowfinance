@@ -1376,10 +1376,13 @@ export const statement = query({
             .withIndex("by_client", (q) => q.eq("clientId", client._id))
             .collect(),
           loan.applicationId ? ctx.db.get(loan.applicationId) : null,
-          ctx.db.get(loan.productId),
+          loan.productId ? ctx.db.get(loan.productId) : null,
         ]);
       statementLoans.push({
         ...loan,
+        // Legacy only — loans created after the catalogue was removed carry
+        // no product; the statement engine never reads this field.
+        productId: loan.productId ?? "",
         schedule: schedule
           .sort((a, b) => a.index - b.index)
           .map((r) => ({

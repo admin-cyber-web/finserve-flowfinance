@@ -19,7 +19,6 @@ import {
   Loader2,
   LogOut,
   HandCoins,
-  Package,
   Search,
   ShieldCheck,
   Stamp,
@@ -113,15 +112,6 @@ const NAV: NavItem[] = [
   { to: "/dashboard/reports", label: "Reports", icon: FileBarChart, permission: "reports" },
   { to: "/dashboard/accounting", label: "Accounting", icon: BookOpen, permission: "accounting" },
   { to: "/dashboard/audit", label: "Audit & Money Trail", icon: ShieldCheck, permission: "audit_logs" },
-  {
-    to: "/dashboard/products",
-    label: "Loan Products",
-    icon: Package,
-    permission: "view_loans",
-    // Loan Products is a Branch Manager / SUPER_ADMIN section — the backend
-    // query enforces the same roles, so hiding this item is not the guard.
-    roles: ["BRANCH_MANAGER", "SUPER_ADMIN"],
-  },
 ];
 
 const TITLES: Record<string, string> = {
@@ -137,7 +127,6 @@ const TITLES: Record<string, string> = {
   "/dashboard/reports": "Reports",
   "/dashboard/accounting": "Accounting",
   "/dashboard/audit": "Audit & Money Trail",
-  "/dashboard/products": "Loan Products",
 };
 
 function initials(name?: string | null): string {

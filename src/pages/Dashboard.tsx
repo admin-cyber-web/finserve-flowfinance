@@ -21,7 +21,6 @@ import LoanDetail from "./dashboard/LoanDetail";
 import LoanNew from "./dashboard/LoanNew";
 import Loans from "./dashboard/Loans";
 import Overdue from "./dashboard/Overdue";
-import Products from "./dashboard/Products";
 import Profile from "./dashboard/Profile";
 import Receipt from "./dashboard/Receipt";
 import Reports from "./dashboard/Reports";
@@ -139,7 +138,6 @@ export default function Dashboard() {
       <Route path="overdue" element={<Overdue />} />
       <Route path="accounting" element={<Accounting />} />
       <Route path="audit" element={<Audit />} />
-      <Route path="products" element={<Products />} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
   );

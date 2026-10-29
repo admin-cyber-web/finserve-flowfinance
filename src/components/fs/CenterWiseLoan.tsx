@@ -1,6 +1,12 @@
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { Money, RowSkeleton, SectionTitle, StatusChip } from "@/components/fs/primitives";
+import {
+  Money,
+  MoneyInput,
+  RowSkeleton,
+  SectionTitle,
+  StatusChip,
+} from "@/components/fs/primitives";
 import { Button } from "@/components/ui/button";
 import { useMutation, useQuery } from "convex/react";
 import { Check, CheckCircle2, Users } from "lucide-react";
@@ -11,7 +17,7 @@ import { toast } from "sonner";
 /**
  * Centre-Wise Loan Disbursement — the PRIMARY path of the New Loan flow.
  *
- * An authorised user picks a centre and a product, selects all (or some) of
+ * An authorised user picks the loan amount and a centre, selects all (or some) of
  * the centre's members, reviews the batch, and confirms. The backend then
  * creates ONE SUBMITTED application per selected client through the same
  * policy engine and duplicate guards as a single loan: nothing is approved
@@ -22,7 +28,7 @@ import { toast } from "sonner";
  */
 export function CenterWiseLoan() {
   const navigate = useNavigate();
-  const [productId, setProductId] = useState<Id<"loanProducts"> | null>(null);
+  const [amountStr, setAmountStr] = useState("");
   const [centerId, setCenterId] = useState<Id<"centers"> | null>(null);
   const [centerSearch, setCenterSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -32,28 +38,19 @@ export function CenterWiseLoan() {
     Awaited<ReturnType<typeof submitBatch>> | null
   >(null);
 
-  const products = useQuery(api.loans.products, {});
   const centers = useQuery(api.loans.centerOptions, {});
+  const amount = Number(amountStr || 0);
   const roster = useQuery(
     api.loans.centerRoster,
-    centerId ? { centerId, productId: productId ?? undefined } : "skip",
+    centerId && amount > 0 ? { centerId, amount } : "skip",
   );
   const submitBatch = useMutation(api.loans.submitCenterBatch);
 
-  const product = products?.find((p) => p._id === productId) ?? null;
-  const amount = product?.minAmount ?? 0;
-
-  // A new centre or product invalidates the previous member selection —
-  // cleared in the pick handlers below (never inside an effect).
+  // A new centre or a changed amount invalidates the previous member
+  // selection — cleared in the pick handlers below (never inside an effect).
   const pickCenter = (id: Id<"centers">) => {
     if (id === centerId) return;
     setCenterId(id);
-    setSelected(new Set());
-    setResult(null);
-  };
-  const pickProduct = (id: Id<"loanProducts">) => {
-    if (id === productId) return;
-    setProductId(id);
     setSelected(new Set());
     setResult(null);
   };
@@ -94,12 +91,11 @@ export function CenterWiseLoan() {
     : (centers ?? []);
 
   const onConfirm = async () => {
-    if (!productId || !centerId) return;
+    if (!centerId || amount <= 0) return;
     setSubmitting(true);
     try {
       const res = await submitBatch({
         centerId,
-        productId,
         amount,
         clientIds: [...selected] as Id<"clients">[],
         device: typeof navigator !== "undefined" ? navigator.userAgent.slice(0, 60) : undefined,
@@ -133,49 +129,16 @@ export function CenterWiseLoan() {
 
   return (
     <div className="space-y-4">
-      {/* Step 1 — product (the selected product fixes the amount, fee and
-          terms for every member in the batch). */}
+      {/* Step 1 — loan amount. Terms are fixed by the backend (79% reducing,
+          24 weekly installments, no product to choose). */}
       <section className="space-y-2 border-2 border-ink bg-card p-4 shadow-hard-sm">
-        <h2 className={sectionLabel}>1 · Loan product</h2>
-        {products === undefined ? (
-          <RowSkeleton rows={2} />
-        ) : products.length === 0 ? (
-          <p className="border-2 border-dashed border-ink p-3 text-center text-xs font-bold text-muted-foreground">
-            No active loan products are configured.
-          </p>
-        ) : (
-          <div className="grid gap-2">
-            {products.map((p) => (
-              <button
-                key={p._id}
-                onClick={() => pickProduct(p._id)}
-                className={
-                  cardBase + " " + (productId === p._id ? "bg-gold" : "bg-white")
-                }
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-black">{p.name}</span>
-                  <span className="font-mono text-xs font-black">{p.code}</span>
-                </div>
-                <div className="mt-1 text-[11px] font-semibold text-muted-foreground">
-                  ₹{p.minAmount.toLocaleString("en-IN")} · processing fee ₹
-                  {Math.round(
-                    p.processingFee + (p.minAmount * p.chargePercent) / 100,
-                  ).toLocaleString("en-IN")}{" "}
-                  · {p.interestRate}% {p.interestMethod.toLowerCase()} ·{" "}
-                  {p.tenure} {p.frequency.toLowerCase()} installments
-                </div>
-              </button>
-            ))}
-          </div>
-        )}
-        {product && (
-          <p className="border-2 border-ink bg-sky p-2 text-[11px] font-bold">
-            Every loan in this batch uses {product.name}'s fixed principal of ₹
-            {amount.toLocaleString("en-IN")} — the amount, fee and schedule are
-            the product's, set by the backend.
-          </p>
-        )}
+        <h2 className={sectionLabel}>1 · Loan amount (each member)</h2>
+        <MoneyInput value={amountStr} onChange={setAmountStr} label="Loan amount" />
+        <p className="border-2 border-ink bg-sky p-2 text-[11px] font-bold">
+          Every loan in this batch uses the fixed backend terms — 79% p.a.
+          reducing balance · 24 weekly installments · no processing fee. Only
+          the principal below is an input.
+        </p>
       </section>
 
       {/* Step 2 — centre */}
@@ -258,6 +221,11 @@ export function CenterWiseLoan() {
           <p className="border-2 border-dashed border-ink p-3 text-center text-xs font-bold text-muted-foreground">
             Pick a centre above to load its members.
           </p>
+        ) : amount <= 0 ? (
+          <p className="border-2 border-dashed border-ink p-3 text-center text-xs font-bold text-muted-foreground">
+            Enter the loan amount in step 1 to load and score this centre's
+            members.
+          </p>
         ) : roster === undefined ? (
           <RowSkeleton rows={4} />
         ) : roster.rows.length === 0 ? (
@@ -266,12 +234,6 @@ export function CenterWiseLoan() {
           </p>
         ) : (
           <div className="flex flex-col gap-2">
-            {!product && (
-              <p className="border-2 border-ink bg-sky p-2 text-[11px] font-bold">
-                Choose a product above to score each member against its policy
-                and see loan amounts.
-              </p>
-            )}
             {roster.rows.map((r) => {
               const checked = selected.has(r.client._id);
               return (
@@ -323,7 +285,7 @@ export function CenterWiseLoan() {
                         ? ` · overdue history ${r.overdueHistory}`
                         : ""}
                     </div>
-                    {r.amount !== null && (
+                    {r.amount > 0 && (
                       <div className="mt-1 flex flex-wrap gap-x-3 text-[11px] font-bold">
                         <span>
                           Loan <Money value={r.amount} className="text-[11px]" />
@@ -370,7 +332,7 @@ export function CenterWiseLoan() {
       </section>
 
       {/* Step 4 — review */}
-      {product && roster && selectedRows.length > 0 && (
+      {roster && selectedRows.length > 0 && (
         <section className="space-y-3 border-2 border-ink bg-navy p-4 text-paper shadow-hard">
           <div className="text-[10px] font-black uppercase tracking-[0.18em] text-gold">
             4 · Review the batch
@@ -407,10 +369,13 @@ export function CenterWiseLoan() {
                 Terms — each client
               </div>
               <div className="text-sm font-black">
-                ₹{amount.toLocaleString("en-IN")} principal · fee ₹
-                {(selectedRows[0]?.charges ?? 0).toLocaleString("en-IN")} ·{" "}
-                {product.tenure} × {product.frequency.toLowerCase()} @{" "}
-                {product.interestRate}% reducing · installment ₹
+                ₹{amount.toLocaleString("en-IN")} principal ·{" "}
+                {roster.terms.interestRate}%{" "}
+                {roster.terms.interestMethod.toLowerCase()} ·{" "}
+                {roster.terms.tenure} {roster.terms.frequency.toLowerCase()}{" "}
+                installments · fee ₹
+                {(selectedRows[0]?.charges ?? 0).toLocaleString("en-IN")} ·
+                installment ₹
                 {(selectedRows[0]?.installment ?? 0).toLocaleString("en-IN")}
               </div>
             </div>
@@ -517,7 +482,7 @@ export function CenterWiseLoan() {
       )}
 
       {/* Confirmation — required before anything is written. */}
-      {confirming && product && roster && (
+      {confirming && roster && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4">
           <div className="w-full max-w-sm border-2 border-ink bg-card p-4 shadow-hard">
               <h3 className="text-lg font-black uppercase tracking-tight">
@@ -533,7 +498,9 @@ export function CenterWiseLoan() {
                 <span className="font-black">
                   {roster.center.name} ({roster.center.code})
                 </span>{" "}
-                under {product.name}? Each request goes to the approval queue.
+                at {roster.terms.interestRate}% reducing balance over{" "}
+                {roster.terms.tenure} weekly installments? Each request goes to
+                the approval queue.
               </p>
               <div className="mt-3 border-2 border-ink bg-sky p-2 text-[11px] font-bold">
                 Total proposed disbursement ₹

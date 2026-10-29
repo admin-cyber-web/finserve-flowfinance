@@ -7,8 +7,12 @@ import {
   notify,
   requirePermission,
   requireProfile,
-  requireRole,
 } from "../lib/server/convexHelpers";
+import {
+  FIXED_LOAN_TERMS,
+  authorizedCharges,
+  fixedScheduleInput,
+} from "../lib/server/loanTerms";
 import { idQueryMatches } from "../lib/server/idMatch";
 import {
   archiveLoan,
@@ -25,7 +29,6 @@ import {
 import { resolveBranchForActor } from "../lib/server/centerOps";
 import { round2, completedMonthsBetween } from "../lib/finance/money";
 import { rowOutstanding } from "../lib/finance/schedule";
-import type { Frequency, InterestMethod } from "../lib/finance/types";
 import {
   PermissionError,
   ValidationError,
@@ -68,79 +71,10 @@ async function scopeLoans(
   return loans;
 }
 
-export const products = query({
-  args: { activeOnly: v.optional(v.boolean()) },
-  handler: async (ctx, args) => {
-    // Product selection is part of creating a loan — enforce the same
-    // permission the loan-creation mutations require, so an unauthorised
-    // role can never read the catalogue (and nothing here can be written
-    // from the client: principal, rate, fee and schedule live on the
-    // product record).
-    const me = await requireProfile(ctx, { allowInactive: true });
-    requirePermission(me, "create_loan");
-    const all = (await ctx.db.query("loanProducts").collect()).sort((a, b) =>
-      a.code.localeCompare(b.code),
-    );
-    return args.activeOnly === false ? all : all.filter((p) => p.status === "ACTIVE");
-  },
-});
-
-/**
- * Loan product catalogue WITH a server-computed sample installment schedule
- * for each ACTIVE product, generated at the product's fixed principal using
- * the SAME reducing-balance engine that powers live loans. Drives the Loan
- * Products page so the frontend never recomputes interest itself.
- */
-export const productSchedules = query({
-  args: {},
-  handler: async (ctx) => {
-    const me = await requireProfile(ctx, { allowInactive: true });
-    // The Loan Products section (full terms, rates, fees, schedules) is
-    // restricted to Branch Managers and SUPER_ADMIN — enforced here in the
-    // backend, not only by hiding the nav item.
-    requireRole(me, "BRANCH_MANAGER", "SUPER_ADMIN");
-    const all = (await ctx.db.query("loanProducts").collect())
-      .filter((p) => p.status === "ACTIVE")
-      .sort((a, b) => a.code.localeCompare(b.code));
-
-    return all.map((p) => {
-      // These standard products carry a single fixed principal (min == max).
-      const principal = p.minAmount;
-      const charges = round2(
-        p.processingFee + (principal * p.chargePercent) / 100,
-      );
-      const rows = baseScheduleRows({
-        principal,
-        interestRate: p.interestRate,
-        interestMethod: p.interestMethod as InterestMethod,
-        frequency: p.frequency as Frequency,
-        tenure: p.tenure,
-        disbursedOn: Date.now(),
-        graceDays: p.graceDays,
-        charges: 0,
-      });
-      const totalInterest = round2(rows.reduce((s, r) => s + r.interest, 0));
-      const totalPayable = round2(rows.reduce((s, r) => s + r.totalDue, 0));
-      const installment = rows[1]?.totalDue ?? rows[0]?.totalDue ?? 0;
-      return {
-        product: p,
-        principal,
-        charges,
-        netDisbursed: round2(principal - charges),
-        installment,
-        totalInterest,
-        totalPayable,
-        schedule: rows.map((r) => ({
-          index: r.index,
-          dueDate: r.dueDate,
-          principal: r.principal,
-          interest: r.interest,
-          totalDue: r.totalDue,
-        })),
-      };
-    });
-  },
-});
+// NOTE: the loan-product catalogue (loans.products / loans.productSchedules)
+// has been removed with the Loan Products feature. Every new loan is priced
+// from the fixed backend terms in `lib/server/loanTerms.ts`; nothing on the
+// client can supply a rate, frequency, tenure or fee.
 
 export const list = query({
   args: {
@@ -187,7 +121,7 @@ export const list = query({
         view: view as LoanView,
         client: clientById.get(loan.clientId) ?? null,
         staff: profileById.get(loan.staffId) ?? null,
-        product: productById.get(loan.productId) ?? null,
+        product: loan.productId ? (productById.get(loan.productId) ?? null) : null,
         nextDue: rows.find((r) => rowOutstanding(r) > 0) ?? null,
       };
     });
@@ -254,7 +188,7 @@ export const get = query({
 
     const [client, product, staff] = await Promise.all([
       ctx.db.get(loan.clientId),
-      ctx.db.get(loan.productId),
+      loan.productId ? ctx.db.get(loan.productId) : Promise.resolve(null),
       ctx.db.get(loan.staffId),
     ]);
     const payments = (await ctx.db.query("collections").collect())
@@ -301,15 +235,13 @@ export const get = query({
 export const preview = query({
   args: {
     clientId: v.id("clients"),
-    productId: v.id("loanProducts"),
     amount: v.number(),
   },
-  handler: async (ctx, { clientId, productId, amount }) => {
+  handler: async (ctx, { clientId, amount }) => {
     const me = await requireProfile(ctx, { allowInactive: true });
     requirePermission(me, "create_loan");
     const client = await ctx.db.get(clientId);
-    const product = await ctx.db.get(productId);
-    if (!client || !product) throw new AppError("Client or product not found.");
+    if (!client) throw new AppError("Client not found.");
     if (!Number.isFinite(amount) || amount <= 0) {
       throw new AppError("Enter a loan amount.");
     }
@@ -326,59 +258,29 @@ export const preview = query({
         0,
       ),
     );
-    // Monthly equivalent of the proposed installment:
-    const schedulePreview = baseScheduleRows({
-      principal: amount,
-      interestRate: product.interestRate,
-      interestMethod: product.interestMethod as InterestMethod,
-      frequency: product.frequency as Frequency,
-      tenure: product.tenure,
-      disbursedOn: Date.now(),
-      graceDays: product.graceDays,
-      charges: 0,
-    });
+    // ONE backend calculation: the fixed weekly terms (79% reducing,
+    // 24 weekly installments) priced by the shared schedule engine.
+    const rows = baseScheduleRows(fixedScheduleInput(amount, Date.now()));
     const proposedMonthly = round2(
-      (schedulePreview[0]?.totalDue ?? amount) * (MONTH_FACTOR[product.frequency] ?? 1),
+      (rows[0]?.totalDue ?? amount) *
+        (MONTH_FACTOR[FIXED_LOAN_TERMS.frequency] ?? 1),
     );
     const eligibility = eligibilityFor(
       client,
-      product,
       existingObligations,
       proposedMonthly,
       overdueHistory,
       active.length,
     );
 
-    const charges = round2(
-      product.processingFee + (amount * product.chargePercent) / 100,
-    );
-    const rows = baseScheduleRows({
-      principal: amount,
-      interestRate: product.interestRate,
-      interestMethod: product.interestMethod as InterestMethod,
-      frequency: product.frequency as Frequency,
-      tenure: product.tenure,
-      disbursedOn: Date.now(),
-      graceDays: product.graceDays,
-      // Match disbursement exactly: the fee is never financed into the
-      // schedule — it is shown separately as `charges` / `netDisbursed`.
-      charges: 0,
-    });
-
-    const inRange = amount >= product.minAmount && amount <= product.maxAmount;
-    const rangeIssue = inRange
-      ? null
-      : {
-          level: "BLOCKER" as const,
-          message: `Amount must be between ₹${product.minAmount.toLocaleString("en-IN")} and ₹${product.maxAmount.toLocaleString("en-IN")} for ${product.name}.`,
-        };
+    // No separately authorized fee rule exists → no fee on a new loan.
+    const charges = authorizedCharges(amount);
 
     const totalInterest = round2(rows.reduce((s, r) => s + r.interest, 0));
     const totalPayable = round2(rows.reduce((s, r) => s + r.totalDue, 0));
 
     return {
       client,
-      product,
       amount,
       charges,
       netDisbursed: round2(amount - charges),
@@ -386,8 +288,10 @@ export const preview = query({
       totalPayable,
       installment: rows[0]?.totalDue ?? 0,
       regularInstallment: rows[1]?.totalDue ?? rows[0]?.totalDue ?? 0,
-      tenure: product.tenure,
-      frequency: product.frequency,
+      tenure: FIXED_LOAN_TERMS.tenure,
+      frequency: FIXED_LOAN_TERMS.frequency,
+      interestRate: FIXED_LOAN_TERMS.interestRate,
+      interestMethod: FIXED_LOAN_TERMS.interestMethod,
       schedule: rows.map((r) => ({
         index: r.index,
         dueDate: r.dueDate,
@@ -395,11 +299,7 @@ export const preview = query({
         interest: r.interest,
         totalDue: r.totalDue,
       })),
-      eligibility: {
-        ...eligibility,
-        issues: rangeIssue ? [rangeIssue, ...eligibility.issues] : eligibility.issues,
-        eligible: eligibility.eligible && !rangeIssue,
-      },
+      eligibility,
       existingObligations,
       proposedMonthly,
       activeLoans: active.length,
@@ -410,7 +310,6 @@ export const preview = query({
 export const submit = mutation({
   args: {
     clientId: v.id("clients"),
-    productId: v.id("loanProducts"),
     amount: v.number(),
     remark: v.optional(v.string()),
     device: v.optional(v.string()),
@@ -419,15 +318,10 @@ export const submit = mutation({
     const me = await requireProfile(ctx);
     requirePermission(me, "create_loan");
     const client = await ctx.db.get(args.clientId);
-    const product = await ctx.db.get(args.productId);
-    if (!client || !product) throw new AppError("Client or product not found.");
-    if (product.status !== "ACTIVE") throw new AppError("This loan product is inactive.");
+    if (!client) throw new AppError("Client not found.");
+    // Terms are NEVER client-supplied: the fixed backend terms + the shared
+    // engine below are the only source for rate, frequency, tenure and fee.
     const amount = money(args.amount, "amount");
-    if (amount < product.minAmount || amount > product.maxAmount) {
-      throw new AppError(
-        `Amount must be between ₹${product.minAmount.toLocaleString("en-IN")} and ₹${product.maxAmount.toLocaleString("en-IN")}.`,
-      );
-    }
     if (me.role === "FIELD_STAFF" && client.assignedTo !== me._id) {
       throw new AppError("You can only apply for your own assigned clients.");
     }
@@ -440,22 +334,13 @@ export const submit = mutation({
     const existingObligations = round2(
       active.reduce((s, l) => s + l.installment * (MONTH_FACTOR[l.frequency] ?? 1), 0),
     );
-    const rowsPreview = baseScheduleRows({
-      principal: amount,
-      interestRate: product.interestRate,
-      interestMethod: product.interestMethod as InterestMethod,
-      frequency: product.frequency as Frequency,
-      tenure: product.tenure,
-      disbursedOn: Date.now(),
-      graceDays: product.graceDays,
-      charges: 0,
-    });
+    const rowsPreview = baseScheduleRows(fixedScheduleInput(amount, Date.now()));
     const proposedMonthly = round2(
-      (rowsPreview[0]?.totalDue ?? amount) * (MONTH_FACTOR[product.frequency] ?? 1),
+      (rowsPreview[0]?.totalDue ?? amount) *
+        (MONTH_FACTOR[FIXED_LOAN_TERMS.frequency] ?? 1),
     );
     const eligibility = eligibilityFor(
       client,
-      product,
       existingObligations,
       proposedMonthly,
       loans.filter((l) => l.status === "OVERDUE").length,
@@ -483,7 +368,6 @@ export const submit = mutation({
     const applicationId = await ctx.db.insert("loanApplications", {
       appId,
       clientId: args.clientId,
-      productId: args.productId,
       amount,
       staffId: me._id,
       branchId: applicationBranch,
@@ -513,8 +397,8 @@ export const submit = mutation({
       entityId: appId,
       after: {
         client: client.name,
-        product: product.name,
         amount,
+        terms: `${FIXED_LOAN_TERMS.interestRate}% ${FIXED_LOAN_TERMS.interestMethod} · ${FIXED_LOAN_TERMS.tenure} ${FIXED_LOAN_TERMS.frequency}`,
         obligationRatio: eligibility.obligationRatio,
       },
       referenceId: appId,
@@ -532,7 +416,7 @@ export const submit = mutation({
       ) {
         await notify(ctx, p._id, {
           title: "Loan application submitted",
-          body: `${client.name} — ₹${amount.toLocaleString("en-IN")} (${product.name}) from ${me.name}.`,
+          body: `${client.name} — ₹${amount.toLocaleString("en-IN")} · ${FIXED_LOAN_TERMS.tenure} weekly installments from ${me.name}.`,
           kind: "APPROVAL",
           link: `/dashboard/approvals`,
         });
@@ -583,7 +467,7 @@ export const centerOptions = query({
 export const centerRoster = query({
   args: {
     centerId: v.id("centers"),
-    productId: v.optional(v.id("loanProducts")),
+    amount: v.number(),
   },
   handler: async (ctx, args) => {
     const me = await requireProfile(ctx, { allowInactive: true });
@@ -593,11 +477,9 @@ export const centerRoster = query({
     if (me.role !== "SUPER_ADMIN" && me.branchId && center.branchId !== me.branchId) {
       throw new AppError("This centre is outside your branch.");
     }
-    const product = args.productId ? await ctx.db.get(args.productId) : null;
-    if (args.productId && !product) throw new AppError("Loan product not found.");
-    if (product && product.status !== "ACTIVE") {
-      throw new AppError("This loan product is inactive.");
-    }
+    // One principal for the whole batch — terms come from the fixed backend
+    // configuration, never from a product record or the client.
+    const amount = money(args.amount, "amount");
 
     const now = Date.now();
     const allLoans = await ctx.db.query("loans").collect();
@@ -637,40 +519,23 @@ export const centerRoster = query({
         );
       }
 
-      let amount: number | null = null;
       let charges: number | null = null;
       let netDisbursed: number | null = null;
       let installment: number | null = null;
-      if (product) {
-        amount = product.minAmount; // fixed-principal catalogue products
-        if (amount < product.minAmount || amount > product.maxAmount) {
-          blockers.push(
-            `Amount must be between ₹${product.minAmount.toLocaleString("en-IN")} and ₹${product.maxAmount.toLocaleString("en-IN")} for ${product.name}.`,
-          );
-        }
+      {
         const existingObligations = round2(
           active.reduce(
             (s, l) => s + l.installment * (MONTH_FACTOR[l.frequency] ?? 1),
             0,
           ),
         );
-        const rowsPreview = baseScheduleRows({
-          principal: amount,
-          interestRate: product.interestRate,
-          interestMethod: product.interestMethod as InterestMethod,
-          frequency: product.frequency as Frequency,
-          tenure: product.tenure,
-          disbursedOn: now,
-          graceDays: product.graceDays,
-          charges: 0,
-        });
+        const rowsPreview = baseScheduleRows(fixedScheduleInput(amount, now));
         const proposedMonthly = round2(
           (rowsPreview[0]?.totalDue ?? amount) *
-            (MONTH_FACTOR[product.frequency] ?? 1),
+            (MONTH_FACTOR[FIXED_LOAN_TERMS.frequency] ?? 1),
         );
         const eligibility = eligibilityFor(
           client,
-          product,
           existingObligations,
           proposedMonthly,
           overdueHistory,
@@ -680,9 +545,7 @@ export const centerRoster = query({
           if (issue.level === "BLOCKER") blockers.push(issue.message);
           else warnings.push(issue.message);
         }
-        charges = round2(
-          product.processingFee + (amount * product.chargePercent) / 100,
-        );
+        charges = authorizedCharges(amount);
         netDisbursed = round2(amount - charges);
         installment = rowsPreview[0]?.totalDue ?? amount;
       }
@@ -719,7 +582,8 @@ export const centerRoster = query({
         name: center.name,
         village: center.village,
       },
-      product,
+      amount,
+      terms: FIXED_LOAN_TERMS,
       rows,
       eligibleCount: rows.filter((r) => r.eligible).length,
     };
@@ -739,7 +603,6 @@ export const centerRoster = query({
 export const submitCenterBatch = mutation({
   args: {
     centerId: v.id("centers"),
-    productId: v.id("loanProducts"),
     amount: v.number(),
     clientIds: v.array(v.id("clients")),
     remark: v.optional(v.string()),
@@ -749,21 +612,13 @@ export const submitCenterBatch = mutation({
     const me = await requireProfile(ctx);
     requirePermission(me, "create_loan");
     const center = await ctx.db.get(args.centerId);
-    const product = await ctx.db.get(args.productId);
     if (!center) throw new AppError("Centre not found.");
-    if (!product) throw new AppError("Loan product not found.");
     if (me.role !== "SUPER_ADMIN" && me.branchId && center.branchId !== me.branchId) {
       throw new AppError("This centre is outside your branch.");
     }
-    if (product.status !== "ACTIVE") {
-      throw new AppError("This loan product is inactive.");
-    }
+    // Rate, frequency, tenure and fee are fixed backend terms — only the
+    // principal is an input, and it is validated here on the server.
     const amount = money(args.amount, "amount");
-    if (amount < product.minAmount || amount > product.maxAmount) {
-      throw new AppError(
-        `Amount must be between ₹${product.minAmount.toLocaleString("en-IN")} and ₹${product.maxAmount.toLocaleString("en-IN")}.`,
-      );
-    }
     // De-duplicate while preserving order; one batch covers one centre.
     const wanted = [...new Set(args.clientIds)];
     if (wanted.length === 0) {
@@ -843,23 +698,15 @@ export const submitCenterBatch = mutation({
             0,
           ),
         );
-        const rowsPreview = baseScheduleRows({
-          principal: amount,
-          interestRate: product.interestRate,
-          interestMethod: product.interestMethod as InterestMethod,
-          frequency: product.frequency as Frequency,
-          tenure: product.tenure,
-          disbursedOn: now,
-          graceDays: product.graceDays,
-          charges: 0,
-        });
+        const rowsPreview = baseScheduleRows(
+          fixedScheduleInput(amount, Date.now()),
+        );
         const proposedMonthly = round2(
           (rowsPreview[0]?.totalDue ?? amount) *
-            (MONTH_FACTOR[product.frequency] ?? 1),
+            (MONTH_FACTOR[FIXED_LOAN_TERMS.frequency] ?? 1),
         );
         const eligibility = eligibilityFor(
           client,
-          product,
           existingObligations,
           proposedMonthly,
           loans.filter((l) => l.status === "OVERDUE").length,
@@ -877,7 +724,6 @@ export const submitCenterBatch = mutation({
         const applicationId = await ctx.db.insert("loanApplications", {
           appId,
           clientId,
-          productId: args.productId,
           amount,
           staffId: me._id,
           branchId,
@@ -919,8 +765,8 @@ export const submitCenterBatch = mutation({
           entityId: record.appId,
           after: {
             client: record.name,
-            product: product.name,
             amount,
+            terms: `${FIXED_LOAN_TERMS.interestRate}% ${FIXED_LOAN_TERMS.interestMethod} · ${FIXED_LOAN_TERMS.tenure} ${FIXED_LOAN_TERMS.frequency}`,
             center: center.code,
             mode: "CENTRE_WISE_BATCH",
           },
@@ -983,7 +829,6 @@ export const decide = mutation({
     const next = oneOf(action, ["APPROVED", "REJECTED"], "action");
     const now = Date.now();
     const client = await ctx.db.get(app.clientId);
-    const product = await ctx.db.get(app.productId);
 
     if (next === "REJECTED") {
       await ctx.db.patch(applicationId, {
@@ -1023,8 +868,9 @@ export const decide = mutation({
       return { ok: true, status: "REJECTED" };
     }
 
-    // Re-run policy at approval time.
-    if (client && product) {
+    // Re-run policy AND re-derive the schedule on the server at approval
+    // time — approval never trusts a stored or client-supplied figure.
+    if (client) {
       const loans = (await ctx.db.query("loans").collect()).filter(
         (l) => l.clientId === app.clientId,
       );
@@ -1032,22 +878,15 @@ export const decide = mutation({
       const existingObligations = round2(
         active.reduce((s, l) => s + l.installment * (MONTH_FACTOR[l.frequency] ?? 1), 0),
       );
-      const rowsPreview = baseScheduleRows({
-        principal: app.amount,
-        interestRate: product.interestRate,
-        interestMethod: product.interestMethod as InterestMethod,
-        frequency: product.frequency as Frequency,
-        tenure: product.tenure,
-        disbursedOn: now,
-        graceDays: product.graceDays,
-        charges: 0,
-      });
+      const rowsPreview = baseScheduleRows(
+        fixedScheduleInput(app.amount, now),
+      );
       const proposedMonthly = round2(
-        (rowsPreview[0]?.totalDue ?? app.amount) * (MONTH_FACTOR[product.frequency] ?? 1),
+        (rowsPreview[0]?.totalDue ?? app.amount) *
+          (MONTH_FACTOR[FIXED_LOAN_TERMS.frequency] ?? 1),
       );
       const eligibility = eligibilityFor(
         client,
-        product,
         existingObligations,
         proposedMonthly,
         loans.filter((l) => l.status === "OVERDUE").length,
@@ -1067,25 +906,14 @@ export const decide = mutation({
         ) + 1;
       const loanId = `LN-${String(loanSeq).padStart(6, "0")}`;
 
-      const previewRows = baseScheduleRows({
-        principal: app.amount,
-        interestRate: product.interestRate,
-        interestMethod: product.interestMethod as InterestMethod,
-        frequency: product.frequency as Frequency,
-        tenure: product.tenure,
-        disbursedOn: now,
-        graceDays: product.graceDays,
-        charges: 0,
-      });
-      const charges = round2(
-        product.processingFee + (app.amount * product.chargePercent) / 100,
-      );
+      const previewRows = rowsPreview;
+      // No separately authorized fee rule → no fee on this loan.
+      const charges = authorizedCharges(app.amount);
 
       const loanDocId = await ctx.db.insert("loans", {
         loanId,
         applicationId,
         clientId: app.clientId,
-        productId: app.productId,
         staffId: app.staffId,
         branchId: app.branchId,
         // Every loan traces back to the client's centre (centre-wise batches
@@ -1096,10 +924,10 @@ export const decide = mutation({
         charges,
         totalPayable: 0,
         installment: previewRows[0]?.totalDue ?? app.amount,
-        frequency: product.frequency,
-        tenure: product.tenure,
-        interestRate: product.interestRate,
-        interestMethod: product.interestMethod,
+        frequency: FIXED_LOAN_TERMS.frequency,
+        tenure: FIXED_LOAN_TERMS.tenure,
+        interestRate: FIXED_LOAN_TERMS.interestRate,
+        interestMethod: FIXED_LOAN_TERMS.interestMethod,
         status: "APPROVED",
         outstanding: 0,
         paidTotal: 0,
@@ -1149,7 +977,7 @@ export const decide = mutation({
       return { ok: true, status: "APPROVED", loanDocId, loanId };
     }
 
-    throw new AppError("Client or product missing for approval.");
+    throw new AppError("Client missing for approval.");
   },
 });
 

@@ -31,16 +31,15 @@ export default function LoanNew() {
   const [mode, setMode] = useState<"CHOOSE" | "CENTER" | "SINGLE">(
     params.get("client") ? "SINGLE" : "CHOOSE",
   );
-  const [productId, setProductId] = useState<Id<"loanProducts"> | null>(null);
   const [amount, setAmount] = useState("");
   const [clientPicker, setClientPicker] = useState(false);
   const [clientSearch, setClientSearch] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  // Product cards and the client list belong to the single-client path only —
-  // they are never fetched (or shown) before an option has been chosen.
+  // The client list belongs to the single-client path only — it is never
+  // fetched (or shown) before an option has been chosen. There is no product
+  // step: rate, frequency, tenure and fee are fixed backend terms.
   const single = mode === "SINGLE";
-  const products = useQuery(api.loans.products, single ? {} : "skip");
   const clients = useQuery(
     api.clients.list,
     single
@@ -51,17 +50,14 @@ export default function LoanNew() {
   );
 
   const numericAmount = Number(amount || 0);
-  const previewReady = !!clientId && !!productId && numericAmount > 0;
+  const previewReady = !!clientId && numericAmount > 0;
   const preview = useQuery(
     api.loans.preview,
-    previewReady
-      ? { clientId: clientId!, productId: productId!, amount: numericAmount }
-      : "skip",
+    previewReady ? { clientId: clientId!, amount: numericAmount } : "skip",
   );
   const submit = useMutation(api.loans.submit);
 
   const selectedClient = clients?.find((c) => c._id === clientId);
-  const product = products?.find((p) => p._id === productId);
 
   const onSubmit = async () => {
     if (!previewReady || !preview) return;
@@ -74,7 +70,6 @@ export default function LoanNew() {
     try {
       const result = await submit({
         clientId: clientId!,
-        productId: productId!,
         amount: numericAmount,
         device: navigator.userAgent.slice(0, 60),
       });
@@ -182,72 +177,24 @@ export default function LoanNew() {
         </button>
       </section>
 
-      {/* Step 2 — product */}
-      <section className="space-y-2 border-2 border-ink bg-card p-4 shadow-hard-sm">
-        <h2 className="text-xs font-black uppercase tracking-[0.14em] text-muted-foreground">
-          2 · Loan product
-        </h2>
-        {products === undefined ? (
-          <RowSkeleton rows={2} />
-        ) : (
-          <div className="grid gap-2">
-            {products.map((p) => (
-              <button
-                key={p._id}
-                onClick={() => {
-                  setProductId(p._id);
-                  // Fixed-principal product: lock the amount to the backend
-                  // principal so the frontend can never override it.
-                  setAmount(String(p.minAmount));
-                }}
-                className={
-                  "border-2 border-ink p-3 text-left shadow-hard-sm " +
-                  (productId === p._id ? "bg-gold" : "bg-white")
-                }
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-black">{p.name}</span>
-                  <span className="font-mono text-xs font-black">{p.code}</span>
-                </div>
-                <div className="mt-1 text-[11px] font-semibold text-muted-foreground">
-                  {p.interestRate}% {p.interestMethod.toLowerCase()} ·{" "}
-                  {p.tenure} {p.frequency.toLowerCase()} periods · ₹
-                  {p.minAmount.toLocaleString("en-IN")}–₹
-                  {p.maxAmount.toLocaleString("en-IN")}
-                </div>
-              </button>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {/* Step 3 — amount */}
+      {/* Step 2 — amount. Terms are fixed by the backend (79% reducing
+          balance, 24 weekly installments) — there is no product to pick. */}
       <section className="space-y-3 border-2 border-ink bg-card p-4 shadow-hard-sm">
         <h2 className="text-xs font-black uppercase tracking-[0.14em] text-muted-foreground">
-          3 · Amount
+          2 · Amount
         </h2>
-        <MoneyInput
-          value={amount}
-          onChange={setAmount}
-          label="Loan amount"
-          quick={
-            product
-              ? [product.minAmount, Math.round((product.minAmount + product.maxAmount) / 2), product.maxAmount]
-              : [10000, 25000, 50000]
-          }
-        />
-        {product && numericAmount > 0 && (
-          <p className="text-[11px] font-semibold text-muted-foreground">
-            Allowed range ₹{product.minAmount.toLocaleString("en-IN")} – ₹
-            {product.maxAmount.toLocaleString("en-IN")}
-          </p>
-        )}
+        <MoneyInput value={amount} onChange={setAmount} label="Loan amount" />
+        <div className="border-2 border-ink bg-sky p-2 text-[11px] font-bold">
+          Every new loan uses the same backend terms: 79% p.a. reducing
+          balance · {preview?.tenure ?? 24} weekly installments · no
+          processing fee applies.
+        </div>
       </section>
 
       {/* Preview */}
       {!previewReady ? (
         <div className="border-2 border-dashed border-ink/50 p-4 text-center text-xs font-black uppercase text-muted-foreground">
-          Select client, product and amount to see the schedule preview
+          Select a client and enter an amount to see the schedule preview
         </div>
       ) : preview === undefined ? (
         <RowSkeleton rows={3} />
@@ -266,7 +213,7 @@ export default function LoanNew() {
             </div>
             <div className="border-2 border-paper/30 p-2">
               <div className="text-[9px] font-black uppercase text-paper/60">
-                Processing fee
+                Processing fee (none applies)
               </div>
               <Money value={preview.charges} className="text-lg" />
             </div>
