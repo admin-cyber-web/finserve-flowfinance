@@ -367,6 +367,7 @@ export default function ReportClient({
                               <TH>Total due</TH>
                               <TH>Paid</TH>
                               <TH>Remaining</TH>
+                              <TH>Balance</TH>
                               <TH>Status</TH>
                             </tr>
                           </thead>
@@ -385,6 +386,11 @@ export default function ReportClient({
                                 <TD mono>{r.totalDue.toLocaleString("en-IN")}</TD>
                                 <TD mono>{r.paid.toLocaleString("en-IN")}</TD>
                                 <TD mono>{rowOutstanding(r).toLocaleString("en-IN")}</TD>
+                                <TD mono>
+                                  {r.principalBalance !== undefined
+                                    ? r.principalBalance.toLocaleString("en-IN")
+                                    : "—"}
+                                </TD>
                                 <TD>
                                   <StatusChip status={r.status} label={r.status} />
                                 </TD>

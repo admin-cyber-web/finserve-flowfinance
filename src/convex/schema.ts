@@ -446,6 +446,9 @@ const schema = defineSchema(
       // open WITHOUT ever being counted as money received.
       waived: v.optional(v.number()),
       remaining: v.number(),
+      // Declining principal balance AFTER this installment (0 on the last).
+      // Optional: rows written before this field existed have no value.
+      principalBalance: v.optional(v.number()),
       status: v.string(), // PAID | PARTIAL | PENDING | OVERDUE
       updatedAt: v.number(),
     })

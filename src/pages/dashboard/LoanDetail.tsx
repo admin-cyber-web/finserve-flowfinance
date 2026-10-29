@@ -289,6 +289,7 @@ export default function LoanDetail() {
                     <th className="px-2 py-2 text-right">Interest</th>
                     <th className="px-2 py-2 text-right">Total</th>
                     <th className="px-2 py-2 text-right">Paid</th>
+                    <th className="px-2 py-2 text-right">Balance</th>
                     <th className="px-2 py-2">Status</th>
                   </tr>
                 </thead>
@@ -327,6 +328,11 @@ export default function LoanDetail() {
                               bal ₹{rowOutstanding(r).toLocaleString("en-IN")}
                             </span>
                           )}
+                        </td>
+                        <td className="px-2 py-1.5 text-right font-mono tabular-nums">
+                          {r.principalBalance !== undefined
+                            ? `₹${r.principalBalance.toLocaleString("en-IN")}`
+                            : "—"}
                         </td>
                         <td className="px-2 py-1.5">
                           <StatusChip status={r.status} />

@@ -207,7 +207,6 @@ export function AdminShell({ children }: { children: ReactNode }) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [q, setQ] = useState("");
   const [debounced, setDebounced] = useState("");
-  const roleLabel = profileRole?.replace("_", " ").toLowerCase() ?? "user";
   const accountBlocked = Boolean(profile?.status && profile.status !== "ACTIVE");
   const notifications = useQuery(api.admin.notifications, { limit: 20 });
   const markRead = useMutation(api.admin.markRead);

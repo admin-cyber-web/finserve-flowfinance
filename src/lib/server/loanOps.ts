@@ -9,7 +9,12 @@
 import type { Doc, Id } from "../../convex/_generated/dataModel";
 import { collectionEntry, disbursementEntry } from "../finance/journal";
 import { round2 } from "../finance/money";
-import { generateSchedule, rowOutstanding, type ScheduleRow } from "../finance/schedule";
+import {
+  generateSchedule,
+  rowOutstanding,
+  withPrincipalBalance,
+  type ScheduleRow,
+} from "../finance/schedule";
 import { FIXED_LOAN_TERMS } from "./loanTerms";
 import type { Frequency, InterestMethod, PayMode } from "../finance/types";
 import { evaluateEligibility } from "../finance/eligibility";
@@ -58,6 +63,8 @@ export function baseScheduleRows(
     first.totalDue = round2(first.totalDue + charges);
     first.remaining = round2(first.remaining + charges);
     result.totalPayable = round2(result.totalPayable + charges);
+    // Keep the declining principal balance consistent with the new split.
+    withPrincipalBalance(result.rows);
   }
   return result.rows;
 }
@@ -248,6 +255,8 @@ export async function disburseLoan(
       totalDue: row.totalDue,
       paid: 0,
       remaining: row.totalDue,
+      // Declining principal balance after this installment (0 on the last).
+      principalBalance: row.principalBalance,
       status: "PENDING",
       updatedAt: nowMs,
     });

@@ -31,6 +31,8 @@ export interface ScheduleRow {
   totalDue: number;
   paid: number;
   remaining: number;
+  /** Outstanding principal AFTER this installment — declines to 0 by the last row. */
+  principalBalance: number;
 }
 
 export interface ScheduleResult {
@@ -45,6 +47,21 @@ export interface ScheduleResult {
 }
 
 const DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * Declining principal balance per row: the balance AFTER this installment is
+ * paid — the principal of every later installment. The last row closes at 0,
+ * and Σ principal always equals the receivable (the last row's rounding
+ * absorber is included automatically), for flat and reducing rows alike.
+ */
+export function withPrincipalBalance(rows: ScheduleRow[]): ScheduleRow[] {
+  let balance = 0;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    rows[i].principalBalance = balance;
+    balance = round2(balance + rows[i].principal);
+  }
+  return rows;
+}
 
 export function addPeriods(
   from: number,
@@ -104,10 +121,11 @@ export function generateSchedule(input: ScheduleInput): ScheduleResult {
         totalDue: round2(p + it),
         paid: 0,
         remaining: round2(p + it),
+        principalBalance: 0, // back-filled below
       });
     }
     return {
-      rows,
+      rows: withPrincipalBalance(rows),
       totalInterest,
       totalPayable,
       installment,
@@ -148,12 +166,13 @@ export function generateSchedule(input: ScheduleInput): ScheduleResult {
       totalDue,
       paid: 0,
       remaining: totalDue,
+      principalBalance: 0, // back-filled below
     });
   }
 
   const totalPayable = round2(principal + totalInterest);
   return {
-    rows,
+    rows: withPrincipalBalance(rows),
     totalInterest,
     totalPayable,
     installment,

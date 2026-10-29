@@ -45,6 +45,8 @@ export interface StatementScheduleRow {
   interest: number;
   totalDue: number;
   paid: number;
+  /** Declining principal balance after this installment (when recorded). */
+  principalBalance?: number;
   /** Amounts written off by an approved settlement — never cash. */
   waived?: number;
 }

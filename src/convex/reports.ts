@@ -48,7 +48,7 @@ export const run = query({
     const from = args.dateFrom ?? now - 30 * 86_400_000;
     const to = (args.dateTo ?? now) + 86_399_999;
 
-    const [collections, wallets, txns, handovers, expenses, issues, loans, clients, profiles] =
+    const [collections, wallets, txns, handovers, expenses, issues, clients, profiles] =
       await Promise.all([
         ctx.db.query("collections").collect(),
         ctx.db.query("wallets").collect(),
@@ -56,13 +56,11 @@ export const run = query({
         ctx.db.query("cashHandovers").collect(),
         ctx.db.query("expenses").collect(),
         ctx.db.query("cashIssues").collect(),
-        ctx.db.query("loans").collect(),
         ctx.db.query("clients").collect(),
         ctx.db.query("profiles").collect(),
       ]);
 
     const clientById = new Map(clients.map((c) => [c._id, c]));
-    const loanById = new Map(loans.map((l) => [l._id, l]));
     const profileById = new Map(profiles.map((p) => [p._id, p]));
 
     // Scope: staff → own, BM → branch, admin/accountant → org (or filters).
@@ -75,7 +73,6 @@ export const run = query({
       .filter((w) => (args.staffId ? w.profileId === args.staffId : true))
       .filter((w) => (args.branchId ? w.branchId === args.branchId : true));
     const walletIdSet = new Set(walletIds.map((w) => w._id));
-    const profileSet = new Set(walletIds.map((w) => w.profileId));
 
     const inRange = (t: number) => t >= from && t <= to;
     const scopeCollection = (c: Doc<"collections">) => {
@@ -1393,6 +1390,7 @@ export const statement = query({
             interest: r.interest,
             totalDue: r.totalDue,
             paid: r.paid,
+            principalBalance: r.principalBalance,
             waived: r.waived,
           })),
         collections: collections.map((c) => ({
