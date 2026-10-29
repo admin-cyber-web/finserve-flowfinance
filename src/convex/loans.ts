@@ -435,24 +435,113 @@ const BATCH_MAX_CLIENTS = 100;
 
 /** Centres the acting user may run a centre-wise batch against (branch
  * scope is enforced here AND again inside the batch mutation). */
-export const centerOptions = query({
-  args: {},
-  handler: async (ctx) => {
+/**
+ * Centre-wise SEARCH — the only entry into the centre-wise wizard.
+ *
+ * Nothing is listed by default: the caller must enter a Centre ID
+ * (e.g. BALLIA-001), a Client ID (e.g. 000137 / C-000137) or both. The
+ * filtering happens HERE on the server, so the browser never receives the
+ * full centre or client directory to merely hide. Both IDs together must
+ * BOTH match — and the client must belong to the named centre — or the
+ * search reports no match, so unrelated records can never appear.
+ */
+export const centerSearch = query({
+  args: {
+    /** Centre ID, e.g. BALLIA-001 (case / punctuation tolerant). */
+    code: v.optional(v.string()),
+    /** Client ID — numeric, prefixed or hyphen-less forms all resolve. */
+    clientCode: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
     const me = await requireProfile(ctx, { allowInactive: true });
     requirePermission(me, "create_loan");
-    const centers = (await ctx.db.query("centers").collect())
-      .filter(
-        (c) => me.role === "SUPER_ADMIN" || !me.branchId || c.branchId === me.branchId,
-      )
-      .sort((a, b) => a.name.localeCompare(b.name));
-    const clients = await ctx.db.query("clients").collect();
-    return centers.map((c) => ({
-      _id: c._id,
-      code: c.code,
-      name: c.name,
-      village: c.village,
-      clientCount: clients.filter((cl) => cl.centerId === c._id).length,
-    }));
+    const code = (args.code ?? "").trim();
+    const clientCode = (args.clientCode ?? "").trim();
+    if (!code && !clientCode) {
+      throw new AppError("Please enter a Center ID or Client ID to search.");
+    }
+
+    // Same branch scoping the old centre list and the roster enforce.
+    const inBranch = (branchId: Id<"branches">) =>
+      me.role === "SUPER_ADMIN" || !me.branchId || branchId === me.branchId;
+    const notFound = { matched: false as const, center: null, client: null };
+
+    const allClients = await ctx.db.query("clients").collect();
+
+    // 1 — the centre, by Centre ID.
+    let matchedCenter: Doc<"centers"> | null = null;
+    if (code) {
+      const norm = code.toUpperCase().replace(/[^A-Z0-9]/g, "");
+      matchedCenter =
+        (await ctx.db.query("centers")
+          .collect())
+          .filter((c) => inBranch(c.branchId))
+          .find(
+            (c) => c.code.toUpperCase().replace(/[^A-Z0-9]/g, "") === norm,
+          ) ?? null;
+      if (!matchedCenter) return notFound;
+    }
+
+    // 2 — the client, by Client ID (same matcher as the client list).
+    let matchedClient: Doc<"clients"> | null = null;
+    if (clientCode) {
+      matchedClient =
+        allClients.find(
+          (c) =>
+            c.status !== "INACTIVE" &&
+            inBranch(c.branchId) &&
+            idQueryMatches(c.code, clientCode),
+        ) ?? null;
+      if (!matchedClient) return notFound;
+      // Both IDs entered: the client must belong to the named centre —
+      // otherwise the two conditions do not both hold.
+      if (code && matchedClient.centerId !== matchedCenter!._id) {
+        return notFound;
+      }
+    }
+
+    // Client-only search: surface the client's own centre so the loan
+    // workflow (roster → batch) can run against it.
+    const centre =
+      matchedCenter ??
+      (matchedClient?.centerId
+        ? await ctx.db.get(matchedClient.centerId)
+        : null);
+
+    let activeLoans = 0;
+    if (matchedClient) {
+      activeLoans = (await ctx.db.query("loans").collect()).filter(
+        (l) =>
+          l.clientId === matchedClient!._id &&
+          ["ACTIVE", "OVERDUE"].includes(l.status),
+      ).length;
+    }
+
+    return {
+      matched: true as const,
+      center: centre
+        ? {
+            _id: centre._id,
+            code: centre.code,
+            name: centre.name,
+            village: centre.village,
+            clientCount: allClients.filter((cl) => cl.centerId === centre._id)
+              .length,
+          }
+        : null,
+      client: matchedClient
+        ? {
+            _id: matchedClient._id,
+            code: matchedClient.code,
+            name: matchedClient.name,
+            village: matchedClient.village,
+            kycStatus: matchedClient.kycStatus,
+            status: matchedClient.status,
+            activeLoans,
+            centerId: matchedClient.centerId,
+          }
+        : null,
+    };
   },
 });
 
@@ -467,7 +556,16 @@ export const centerOptions = query({
 export const centerRoster = query({
   args: {
     centerId: v.id("centers"),
-    amount: v.number(),
+    /**
+     * Optional principal. Without it the roster still lists the centre's
+     * members (so a Centre-ID search shows them immediately) but skips the
+     * income/obligation scoring — `scored: false` tells the wizard to hold
+     * selection until an amount is entered. Submission always re-checks the
+     * policy server-side with the real amount.
+     */
+    amount: v.optional(v.number()),
+    /** Narrow the roster to specific members (Client-ID search). */
+    onlyClientIds: v.optional(v.array(v.id("clients"))),
   },
   handler: async (ctx, args) => {
     const me = await requireProfile(ctx, { allowInactive: true });
@@ -479,13 +577,21 @@ export const centerRoster = query({
     }
     // One principal for the whole batch — terms come from the fixed backend
     // configuration, never from a product record or the client.
-    const amount = money(args.amount, "amount");
+    const amount =
+      args.amount !== undefined ? money(args.amount, "amount") : null;
+    const scored = amount !== null;
 
     const now = Date.now();
     const allLoans = await ctx.db.query("loans").collect();
     const applications = await ctx.db.query("loanApplications").collect();
-    const members = (await ctx.db.query("clients").collect())
-      .filter((c) => c.centerId === center._id)
+    let members = (await ctx.db.query("clients").collect()).filter(
+      (c) => c.centerId === center._id,
+    );
+    if (args.onlyClientIds) {
+      const only = new Set(args.onlyClientIds);
+      members = members.filter((c) => only.has(c._id));
+    }
+    members = members
       .sort((a, b) => a.code.localeCompare(b.code))
       .slice(0, BATCH_MAX_CLIENTS);
 
@@ -522,7 +628,7 @@ export const centerRoster = query({
       let charges: number | null = null;
       let netDisbursed: number | null = null;
       let installment: number | null = null;
-      {
+      if (amount !== null) {
         const existingObligations = round2(
           active.reduce(
             (s, l) => s + l.installment * (MONTH_FACTOR[l.frequency] ?? 1),
@@ -583,6 +689,8 @@ export const centerRoster = query({
         village: center.village,
       },
       amount,
+      /** False when no principal was supplied — policy scoring pending. */
+      scored,
       terms: FIXED_LOAN_TERMS,
       rows,
       eligibleCount: rows.filter((r) => r.eligible).length,
