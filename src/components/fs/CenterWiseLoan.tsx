@@ -24,6 +24,7 @@ export function CenterWiseLoan() {
   const navigate = useNavigate();
   const [productId, setProductId] = useState<Id<"loanProducts"> | null>(null);
   const [centerId, setCenterId] = useState<Id<"centers"> | null>(null);
+  const [centerSearch, setCenterSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirming, setConfirming] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -78,6 +79,19 @@ export function CenterWiseLoan() {
     setSelected(new Set(eligibleRows.map((r) => r.client._id)));
   };
   const clearSelection = () => setSelected(new Set());
+
+  // Centre-name lookup — type part of a centre's name (or its code / village)
+  // instead of scrolling a long list. Resolves against the actual centre
+  // records; no centre IDs are typed by hand.
+  const centreQuery = centerSearch.trim().toLowerCase();
+  const visibleCenters = centreQuery
+    ? (centers ?? []).filter(
+        (c) =>
+          c.name.toLowerCase().includes(centreQuery) ||
+          c.code.toLowerCase().includes(centreQuery) ||
+          (c.village ?? "").toLowerCase().includes(centreQuery),
+      )
+    : (centers ?? []);
 
   const onConfirm = async () => {
     if (!productId || !centerId) return;
@@ -174,30 +188,45 @@ export function CenterWiseLoan() {
             No centres yet — create one from the New Client form first.
           </p>
         ) : (
-          <div className="grid gap-2 sm:grid-cols-2">
-            {centers.map((c) => (
-              <button
-                key={c._id}
-                onClick={() => pickCenter(c._id)}
-                className={
-                  cardBase + " " + (centerId === c._id ? "bg-gold" : "bg-white")
-                }
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="min-w-0 truncate text-sm font-black">
-                    {c.name}
-                  </span>
-                  <span className="shrink-0 border-2 border-ink bg-navy px-2 py-0.5 font-mono text-[10px] font-black text-gold">
-                    {c.code}
-                  </span>
-                </div>
-                <div className="mt-1 text-[11px] font-semibold text-muted-foreground">
-                  {c.village || "—"} · {c.clientCount} member
-                  {c.clientCount === 1 ? "" : "s"}
-                </div>
-              </button>
-            ))}
-          </div>
+          <>
+            <input
+              value={centerSearch}
+              onChange={(e) => setCenterSearch(e.target.value)}
+              placeholder="Search centre by name…"
+              aria-label="Search centre by name"
+              className="h-11 w-full border-2 border-ink bg-white px-3 text-sm font-bold outline-none"
+            />
+            {visibleCenters.length === 0 ? (
+              <p className="border-2 border-dashed border-ink p-3 text-center text-xs font-bold text-muted-foreground">
+                No centre matches “{centerSearch.trim()}”.
+              </p>
+            ) : (
+              <div className="grid gap-2 sm:grid-cols-2">
+                {visibleCenters.map((c) => (
+                  <button
+                    key={c._id}
+                    onClick={() => pickCenter(c._id)}
+                    className={
+                      cardBase + " " + (centerId === c._id ? "bg-gold" : "bg-white")
+                    }
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="min-w-0 truncate text-sm font-black">
+                        {c.name}
+                      </span>
+                      <span className="shrink-0 border-2 border-ink bg-navy px-2 py-0.5 font-mono text-[10px] font-black text-gold">
+                        {c.code}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-[11px] font-semibold text-muted-foreground">
+                      {c.village || "—"} · {c.clientCount} member
+                      {c.clientCount === 1 ? "" : "s"}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </>
         )}
       </section>
 

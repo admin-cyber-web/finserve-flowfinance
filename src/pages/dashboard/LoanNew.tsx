@@ -24,11 +24,12 @@ export default function LoanNew() {
   const [clientId, setClientId] = useState<Id<"clients"> | null>(
     (params.get("client") as Id<"clients"> | null) ?? null,
   );
-  // Two paths in one workflow: centre-wise disbursement (primary, default)
-  // and the original single-client wizard. Arriving with a pre-selected
-  // client (Client 360° → "Give loan") opens the single-client path.
-  const [mode, setMode] = useState<"CENTER" | "SINGLE">(
-    params.get("client") ? "SINGLE" : "CENTER",
+  // Three states: the initial chooser shows ONLY the two options (no product
+  // cards, no centre list, no member panel), then either the centre-wise
+  // batch wizard or the original single-client wizard. Arriving with a
+  // pre-selected client (Client 360° → "Give loan") opens the single path.
+  const [mode, setMode] = useState<"CHOOSE" | "CENTER" | "SINGLE">(
+    params.get("client") ? "SINGLE" : "CHOOSE",
   );
   const [productId, setProductId] = useState<Id<"loanProducts"> | null>(null);
   const [amount, setAmount] = useState("");
@@ -36,10 +37,17 @@ export default function LoanNew() {
   const [clientSearch, setClientSearch] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  const products = useQuery(api.loans.products, {});
+  // Product cards and the client list belong to the single-client path only —
+  // they are never fetched (or shown) before an option has been chosen.
+  const single = mode === "SINGLE";
+  const products = useQuery(api.loans.products, single ? {} : "skip");
   const clients = useQuery(
     api.clients.list,
-    clientSearch.trim() ? { search: clientSearch.trim(), limit: 30 } : { limit: 30 },
+    single
+      ? clientSearch.trim()
+        ? { search: clientSearch.trim(), limit: 30 }
+        : { limit: 30 }
+      : "skip",
   );
 
   const numericAmount = Number(amount || 0);
@@ -128,6 +136,11 @@ export default function LoanNew() {
       </section>
     </>
   );
+
+  // Initial screen — and nothing else: exactly two choices.
+  if (mode === "CHOOSE") {
+    return <div className="space-y-4 pb-10">{modeSwitcher}</div>;
+  }
 
   // Centre-wise path — the batch wizard lives in its own component.
   if (mode === "CENTER") {

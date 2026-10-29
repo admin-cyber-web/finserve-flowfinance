@@ -361,7 +361,7 @@ export function MobileShell({ children }: { children: ReactNode }) {
             autoFocus
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Name, mobile, C-000128, LN-…, RCPT-…"
+            placeholder="Name, mobile, 000128, LN-…, RCPT-…"
             className="h-11 w-full bg-transparent px-3 text-sm font-bold outline-none"
           />
           {q && (

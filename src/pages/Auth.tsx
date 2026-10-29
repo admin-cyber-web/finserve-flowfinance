@@ -250,7 +250,7 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                         <CreditCard className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
                         <Input
                           name="systemId"
-                          placeholder="System ID (e.g. BM-10002)"
+                          placeholder="Staff ID (e.g. 0001)"
                           className="pl-9 h-12 uppercase"
                           autoCapitalize="characters"
                           autoComplete="username"

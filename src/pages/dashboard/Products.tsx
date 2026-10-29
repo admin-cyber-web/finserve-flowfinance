@@ -70,9 +70,11 @@ export default function Products() {
                       v={
                         <>
                           <Money value={charges} /> ·{" "}
-                          {p.chargePercent > 0
-                            ? `${p.chargePercent}% of principal + flat fee`
-                            : "one-time, flat"}
+                          {p.chargePercent > 0 && p.processingFee > 0
+                            ? `${p.chargePercent}% of principal + ₹${p.processingFee} flat`
+                            : p.chargePercent > 0
+                              ? `${p.chargePercent}% of principal`
+                              : "one-time, flat"}
                         </>
                       }
                     />

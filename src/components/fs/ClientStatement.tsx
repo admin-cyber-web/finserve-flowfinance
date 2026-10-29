@@ -367,7 +367,7 @@ ${upcoming}
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="C-000128 · LN-000123"
+              placeholder="000128 · LN-000123"
               className={cn(INPUT_CLS, "mt-1 font-mono")}
             />
           </label>

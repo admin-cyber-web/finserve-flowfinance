@@ -95,7 +95,10 @@ export const linkByEmail = mutation({
         email: email.toLowerCase(),
         role: "SUPER_ADMIN",
         status: "ACTIVE",
-        staffId: "SA-00001",
+        // Displayed IDs carry no role prefix or hyphen — the SUPER_ADMIN is
+        // 0001 and every later account continues 0002, 0003, ... from the
+        // shared staff sequence.
+        staffId: "0001",
         ...(branches.length > 0 ? { branchId: branches[0]._id } : {}),
         joiningDate: now,
         createdAt: now,
@@ -112,7 +115,7 @@ export const linkByEmail = mutation({
         role: "SUPER_ADMIN",
         action: "SUPER_ADMIN_BOOTSTRAP",
         entity: "profiles",
-        entityId: "SA-00001",
+        entityId: "0001",
         after: { email: email.toLowerCase(), created: true },
         device: "email-otp",
       });
