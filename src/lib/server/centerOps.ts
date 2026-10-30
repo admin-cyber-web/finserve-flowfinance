@@ -2,20 +2,61 @@ import type { Doc, Id } from "../../convex/_generated/dataModel";
 import {
   AppError,
   logAudit,
-  makeCode,
   type Mtx,
 } from "./convexHelpers";
 import { optionalString, requiredString } from "../finance/validate";
 
 /**
  * Shared centre (center) operations — the single source of truth for
- * creating centres, generating Centre IDs (e.g. BALLIA-001), linking
+ * creating centres, generating Centre IDs (six-digit, e.g. 257510), linking
  * clients to centres and building centre-wise reports.
  *
  * The Centre ID is generated ONCE, when the centre is created, and stored
  * permanently on the centre record. Clients only ever reference it — they
  * never generate their own.
  */
+
+/**
+ * Allocate the next globally unique six-digit Centre ID (e.g. 257510).
+ *
+ * ONE `counters` row (key "centers") drives the sequence for the whole
+ * application — not a counter per branch or per centre name — so IDs are
+ * unique across every branch, district and centre name. The first allocation
+ * seeds a random six-digit number; every later call increments from the
+ * stored value. Every candidate is checked against every existing centre
+ * code inside the same transaction, and Convex serialises mutation commits
+ * (OCC with automatic retry), so a duplicate can never be issued even by
+ * concurrent creations — a colliding candidate is skipped and the sequence
+ * advances. Users never type a Centre ID themselves.
+ */
+export async function nextCenterCode(ctx: Mtx): Promise<string> {
+  const counter = await ctx.db
+    .query("counters")
+    .withIndex("by_key", (q) => q.eq("key", "centers"))
+    .unique();
+  const used = new Set(
+    (await ctx.db.query("centers").collect()).map((c) => c.code),
+  );
+  let n = counter
+    ? counter.value + 1
+    : 100000 + Math.floor(Math.random() * 900000);
+  for (let i = 0; i < 900000; i += 1) {
+    if (n < 100000 || n > 999999) n = 100000;
+    const code = String(n).padStart(6, "0");
+    if (!used.has(code)) {
+      if (counter) {
+        if (counter.value !== n) await ctx.db.patch(counter._id, { value: n });
+      } else {
+        await ctx.db.insert("counters", { key: "centers", value: n });
+      }
+      return code;
+    }
+    n += 1;
+  }
+  throw new AppError(
+    "Could not allocate a unique six-digit Centre ID — please retry.",
+  );
+}
 
 /** Resolve the branch a staff actor operates in (mirrors clients.create). */
 export async function resolveBranchForActor(
@@ -64,21 +105,17 @@ export async function createCenterForActor(
     throw new AppError(`A centre named "${name}" already exists in this branch.`);
   }
 
-  // Centre ID prefix: first letters of the name, e.g. "Ballia" -> BALLIA.
-  const prefix = name.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 12);
-  if (prefix.length < 3) {
+  // A centre name must be meaningful — it drives duplicate prevention and
+  // the name search in the centre picker.
+  const letters = name.toUpperCase().replace(/[^A-Z]/g, "");
+  if (letters.length < 3) {
     throw new AppError("Centre name must contain at least 3 letters.");
   }
 
-  // Unique, stable ID generated once per centre: BALLIA-001, BALLIA-002, ...
-  // The counter key includes the branch so IDs stay globally unique while
-  // still following the existing NAME-001 convention.
-  const code = await makeCode(
-    ctx,
-    `center:${String(branchId)}:${prefix}`,
-    `${prefix}-`,
-    3,
-  );
+  // Unique, system-generated six-digit Centre ID (e.g. 257510): allocated on
+  // the backend, globally unique across the whole application, never typed
+  // or supplied by the frontend.
+  const code = await nextCenterCode(ctx);
 
   const now = Date.now();
   const centerId = await ctx.db.insert("centers", {

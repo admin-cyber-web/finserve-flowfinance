@@ -13,6 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { useQuery } from "convex/react";
 import { rowOutstanding } from "@/lib/finance/schedule";
+import { fmtId } from "@/lib/utils";
 import { ArrowLeft, Printer } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -154,7 +155,7 @@ export default function ReportClient({
             Client report — {client.name}
           </h1>
           <p className="truncate text-xs font-semibold text-muted-foreground">
-            {client.code} · generated {formatDateTime(now)}
+            {fmtId(client.code)} · generated {formatDateTime(now)}
           </p>
         </div>
         <Button
@@ -169,7 +170,7 @@ export default function ReportClient({
 
       {/* A · CLIENT PROFILE */}
       <Panel title="A · Client profile">
-        <KeyValue k="Client ID" v={<span className="font-mono">{client.code}</span>} />
+        <KeyValue k="Client ID" v={<span className="font-mono">{fmtId(client.code)}</span>} />
         <KeyValue k="Full name" v={client.name} />
         <KeyValue k="Registered mobile" v={<span className="font-mono">{client.mobile}</span>} />
         <KeyValue k="Address" v={client.address ?? NA} />
@@ -186,7 +187,7 @@ export default function ReportClient({
           k="Assigned field staff"
           v={
             assignedStaff
-              ? `${assignedStaff.name} (${assignedStaff.staffId})`
+              ? `${assignedStaff.name} (${fmtId(assignedStaff.staffId)})`
               : NA
           }
         />
@@ -236,7 +237,7 @@ export default function ReportClient({
           k="Created by"
           v={
             createdBy
-              ? `${createdBy.name} (${createdBy.staffId})`
+              ? `${createdBy.name} (${fmtId(createdBy.staffId)})`
               : NA
           }
         />
@@ -244,7 +245,7 @@ export default function ReportClient({
           k="Currently assigned to"
           v={
             assignedStaff
-              ? `${assignedStaff.name} (${assignedStaff.staffId})`
+              ? `${assignedStaff.name} (${fmtId(assignedStaff.staffId)})`
               : NA
           }
         />
@@ -298,7 +299,7 @@ export default function ReportClient({
               return (
                 <div key={loan._id} className="border-2 border-ink bg-white p-3">
                   <div className="mb-1 flex items-center justify-between gap-2">
-                    <span className="font-mono text-sm font-black">{loan.loanId}</span>
+                    <span className="font-mono text-sm font-black">{fmtId(loan.loanId)}</span>
                     <StatusChip status={loan.status} label={loan.status} />
                   </div>
                   <KeyValue
@@ -438,7 +439,7 @@ export default function ReportClient({
                               {own.map((p) => (
                                 <tr key={p._id}>
                                   <TD mono>{formatDateTime(p.createdAt)}</TD>
-                                  <TD mono>{p.receiptNumber ?? p.code}</TD>
+                                  <TD mono>{fmtId(p.receiptNumber ?? p.code)}</TD>
                                   <TD mono>{p.amount.toLocaleString("en-IN")}</TD>
                                   <TD>{p.mode}</TD>
                                   <TD>{p.staffName ?? "—"}</TD>
@@ -486,7 +487,7 @@ export default function ReportClient({
                   return (
                     <tr key={p._id}>
                       <TD mono>{formatDateTime(p.createdAt)}</TD>
-                      <TD mono>{p.receiptNumber ?? p.code}</TD>
+                      <TD mono>{fmtId(p.receiptNumber ?? p.code)}</TD>
                       <TD mono>{loan?.loan.loanId ?? "—"}</TD>
                       <TD mono>{row ? `#${row.index} · ${formatDate(row.dueDate)}` : NA}</TD>
                       <TD mono>{p.amount.toLocaleString("en-IN")}</TD>

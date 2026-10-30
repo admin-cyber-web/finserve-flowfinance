@@ -822,14 +822,25 @@ export const create = mutation({
       }
     }
 
-    const assignee = args.assignedTo ?? (me.role === "FIELD_STAFF" ? me._id : me._id);
+    const assignee = args.assignedTo ?? me._id;
     const assigneeProfile = await ctx.db.get(assignee);
     if (!assigneeProfile) throw new AppError("Assignee not found.");
+    if (assigneeProfile.role === "CLIENT") {
+      throw new AppError("A client profile cannot own a client assignment.");
+    }
+    // Server-side branch rule: except for the org-wide SUPER_ADMIN, the
+    // assignee must belong to the caller's own branch. A frontend-supplied
+    // `assignedTo` can therefore never push a client into another branch
+    // (which would hide it from the correct Branch Manager).
     if (
-      me.role === "BRANCH_MANAGER" &&
-      assigneeProfile.branchId !== me.branchId
+      me.role !== "SUPER_ADMIN" &&
+      assigneeProfile.branchId &&
+      branchId &&
+      assigneeProfile.branchId !== branchId
     ) {
-      throw new AppError("You can only assign within your branch.");
+      throw new AppError(
+        "You can only onboard clients for staff in your own branch.",
+      );
     }
     branchId = assigneeProfile.branchId ?? branchId;
 

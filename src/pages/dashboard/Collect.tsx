@@ -11,7 +11,7 @@ import {
 } from "@/components/fs/primitives";
 import { formatINR } from "@/lib/finance/money";
 import { newIdempotencyKey, enqueueCollection } from "@/lib/offline";
-import { cn } from "@/lib/utils";
+import { cn, fmtId } from "@/lib/utils";
 import { useMutation, useQuery } from "convex/react";
 import {
   ArrowLeft,
@@ -200,7 +200,7 @@ export default function Collect() {
                 <span className="min-w-0">
                   <span className="block truncate text-sm font-black">{d.name}</span>
                   <span className="block text-[11px] font-semibold text-muted-foreground">
-                    {d.code} · {d.village}
+                    {fmtId(d.code)} · {d.village}
                   </span>
                   <span className="mt-1 flex gap-1">
                     {d.kycStatus !== "VERIFIED" && (

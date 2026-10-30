@@ -16,6 +16,44 @@ import {
   requiredString,
 } from "../lib/finance/validate";
 import { idQueryMatches, staffIdMatches } from "../lib/server/idMatch";
+import {
+  migrateCenterIdsTx,
+  repairBranchLinksTx,
+} from "../lib/server/maintenanceOps";
+
+/* ----------------------- SUPER_ADMIN maintenance ---------------------------- */
+
+/**
+ * Migrate every legacy Centre ID (RAMPUR-001, BALLIA-001, …) to a unique
+ * six-digit numeric Centre ID, atomically rewriting every client reference.
+ * SUPER_ADMIN only — enforced here on the server, not in the frontend.
+ */
+export const migrateCenterIds = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const me = await requireProfile(ctx);
+    if (me.role !== "SUPER_ADMIN") {
+      throw new AppError("Only SUPER_ADMIN can migrate Centre IDs.");
+    }
+    return await migrateCenterIdsTx(ctx, me);
+  },
+});
+
+/**
+ * Repair missing / stale branch relationships (centres, clients, loan
+ * applications) so the correct Branch Manager sees the records created by
+ * their own staff. SUPER_ADMIN only — enforced on the server.
+ */
+export const repairBranchLinks = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const me = await requireProfile(ctx);
+    if (me.role !== "SUPER_ADMIN") {
+      throw new AppError("Only SUPER_ADMIN can repair branch links.");
+    }
+    return await repairBranchLinksTx(ctx, me);
+  },
+});
 
 /* ----------------------------- Dashboard ------------------------------------- */
 
@@ -245,13 +283,21 @@ export const pendingApprovals = query({
     }[] = [];
 
     for (const a of applications) {
-      if (a.status !== "SUBMITTED" || !branchOk(a.branchId)) continue;
+      if (
+        a.status !== "SUBMITTED" ||
+        !branchOk(
+          a.branchId ??
+            clientById.get(a.clientId)?.branchId ??
+            byId.get(a.staffId)?.branchId,
+        )
+      )
+        continue;
       const client = clientById.get(a.clientId);
       items.push({
         id: a._id,
         kind: "LOAN",
-        refId: a.appId,
-        title: `Loan application ${a.appId}`,
+        refId: fmtId(a.appId),
+        title: `Loan application ${fmtId(a.appId)}`,
         subtitle: `${client?.name ?? "—"} — ₹${a.amount.toLocaleString("en-IN")}`,
         amount: a.amount,
         at: a.submittedAt ?? a.createdAt,
@@ -260,12 +306,16 @@ export const pendingApprovals = query({
       });
     }
     for (const h of handovers) {
-      if (h.status !== "REQUESTED" || !branchOk(h.branchId)) continue;
+      if (
+        h.status !== "REQUESTED" ||
+        !branchOk(h.branchId ?? byId.get(h.staffId)?.branchId)
+      )
+        continue;
       items.push({
         id: h._id,
         kind: "HANDOVER",
-        refId: h.code,
-        title: `Cash handover ${h.code}`,
+        refId: fmtId(h.code),
+        title: `Cash handover ${fmtId(h.code)}`,
         subtitle: `${byId.get(h.staffId)?.name ?? "—"} → branch cash`,
         amount: h.amount,
         at: h.requestedAt,
@@ -274,7 +324,11 @@ export const pendingApprovals = query({
       });
     }
     for (const c of closings) {
-      if (c.status !== "PENDING" || !branchOk(c.branchId)) continue;
+      if (
+        c.status !== "PENDING" ||
+        !branchOk(c.branchId ?? byId.get(c.profileId)?.branchId)
+      )
+        continue;
       items.push({
         id: c._id,
         kind: "CLOSING",
@@ -288,11 +342,15 @@ export const pendingApprovals = query({
       });
     }
     for (const r of requests) {
-      if (r.status !== "PENDING" || !branchOk(r.branchId)) continue;
+      if (
+        r.status !== "PENDING" ||
+        !branchOk(r.branchId ?? byId.get(r.requestedBy)?.branchId)
+      )
+        continue;
       items.push({
         id: r._id,
         kind: r.kind,
-        refId: r.refId,
+        refId: fmtId(r.refId),
         title: `${r.kind} request`,
         subtitle: r.summary,
         amount: r.amount ?? null,
@@ -302,12 +360,16 @@ export const pendingApprovals = query({
       });
     }
     for (const e of expenses) {
-      if (e.status !== "PENDING" || !branchOk(e.branchId)) continue;
+      if (
+        e.status !== "PENDING" ||
+        !branchOk(e.branchId ?? byId.get(e.profileId)?.branchId)
+      )
+        continue;
       items.push({
         id: e._id,
         kind: "EXPENSE",
-        refId: e.code,
-        title: `Expense ${e.code}`,
+        refId: fmtId(e.code),
+        title: `Expense ${fmtId(e.code)}`,
         subtitle: `${e.category} — ₹${e.amount.toLocaleString("en-IN")}`,
         amount: e.amount,
         at: e.createdAt,
@@ -528,20 +590,24 @@ export const search = query({
           kind: "CLIENT",
           id: c._id,
           title: c.name,
-          subtitle: `${c.code} · ${c.mobile} · ${c.village}`,
+          subtitle: `${fmtId(c.code)} · ${c.mobile} · ${c.village}`,
           href: `/dashboard/clients/${c._id}`,
         });
       }
       if (results.length >= cap) break;
     }
     for (const l of loans) {
-      if (!branchOk(l.branchId) || !staffOk(l.staffId)) continue;
-      if (l.loanId.toLowerCase().includes(term)) {
+      const lBranch =
+        l.branchId ?? clients.find((c) => c._id === l.clientId)?.branchId;
+      if (!branchOk(lBranch) || !staffOk(l.staffId)) continue;
+      // Numeric / prefixed / hyphen-less Loan ID forms ("LN-000123",
+      // "LN000123", "000123") all resolve to the record.
+      if (l.loanId.toLowerCase().includes(term) || idQueryMatches(l.loanId, q)) {
         const client = clients.find((c) => c._id === l.clientId);
         results.push({
           kind: "LOAN",
           id: l._id,
-          title: l.loanId,
+          title: fmtId(l.loanId),
           subtitle: `${client?.name ?? "—"} · ₹${l.principal.toLocaleString("en-IN")} · ${l.status}`,
           href: `/dashboard/loans/${l._id}`,
         });
@@ -550,12 +616,12 @@ export const search = query({
     }
     for (const r of receipts) {
       if (!branchOk(r.branchId) || !staffOk(r.staffId)) continue;
-      if (r.number.toLowerCase().includes(term)) {
+      if (r.number.toLowerCase().includes(term) || idQueryMatches(r.number, q)) {
         const client = clients.find((c) => c._id === r.clientId);
         results.push({
           kind: "RECEIPT",
           id: r.number,
-          title: r.number,
+          title: fmtId(r.number),
           subtitle: `${client?.name ?? "—"} · ₹${r.amount.toLocaleString("en-IN")} · ${r.mode}`,
           href: `/dashboard/receipts/${r.number}`,
         });
@@ -576,7 +642,7 @@ export const search = query({
           kind: "STAFF",
           id: p._id,
           title: p.name,
-          subtitle: `${p.staffId} · ${p.role.replace("_", " ").toLowerCase()}`,
+          subtitle: `${fmtId(p.staffId)} · ${p.role.replace("_", " ").toLowerCase()}`,
           href: `/dashboard/staff/${p._id}`,
         });
       }
@@ -585,11 +651,11 @@ export const search = query({
     for (const c of collections) {
       if (results.length >= cap) break;
       if (!branchOk(c.branchId) || !staffOk(c.staffId)) continue;
-      if (c.code.toLowerCase().includes(term)) {
+      if (c.code.toLowerCase().includes(term) || idQueryMatches(c.code, q)) {
         results.push({
           kind: "TRANSACTION",
           id: c.code,
-          title: c.code,
+          title: fmtId(c.code),
           subtitle: `₹${c.amount.toLocaleString("en-IN")} · ${c.mode} · ${c.status}`,
           href: `/dashboard/transactions?q=${c.code}`,
         });

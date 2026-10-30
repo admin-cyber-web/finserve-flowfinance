@@ -8,7 +8,7 @@ import { EmptyState, PageHeader, RowSkeleton } from "@/components/fs/primitives"
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useProfile } from "@/hooks/use-profile";
-import { cn, sentenceCase } from "@/lib/utils";
+import { cn, fmtId, sentenceCase } from "@/lib/utils";
 import { useMutation, useQuery } from "convex/react";
 import {
   Briefcase,
@@ -424,7 +424,7 @@ export default function ClientNew() {
       setCenterName("");
       setCenterVillage("");
       setQ("");
-      toast.success(`Centre ${center.name} created — Centre ID ${center.code}`);
+      toast.success(`Centre ${center.name} created — Centre ID ${fmtId(center.code)}`);
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : "Centre creation failed.",
@@ -875,7 +875,7 @@ export default function ClientNew() {
       });
 
       toast.success(
-        `${result.code} joined ${selected.name} (${selected.code})`,
+        `${fmtId(result.code)} joined ${selected.name} (${fmtId(selected.code)})`,
       );
       navigate(`/dashboard/clients/${result.clientId}`);
     } catch (err) {
@@ -999,7 +999,7 @@ export default function ClientNew() {
                             </span>
                           </span>
                           <span className="shrink-0 border-2 border-ink bg-navy px-2 py-1 font-mono text-[10px] font-black text-gold">
-                            {c.code}
+                            {fmtId(c.code)}
                           </span>
                         </button>
                       ))}
@@ -1052,7 +1052,7 @@ export default function ClientNew() {
         <span className="flex shrink-0 items-center gap-1">
           <Lock className="size-3 text-gold" />
           <span className="border-2 border-gold px-2 py-1 font-mono text-xs font-black text-gold">
-            {selected.code}
+            {fmtId(selected.code)}
           </span>
         </span>
       </div>
@@ -1884,8 +1884,7 @@ export default function ClientNew() {
             <Loader2 className="animate-spin" />
           ) : (
             <UserPlus className="size-4" />
-          )}
-          Submit — join {selected.code}
+          )}            Submit — join {fmtId(selected.code)}
         </Button>
       </div>
 

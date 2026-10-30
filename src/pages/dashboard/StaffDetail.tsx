@@ -12,7 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { useProfile } from "@/hooks/use-profile";
 import { ROLE_LABELS, WALLET_TX_LABELS, type FsRole, type WalletTxType } from "@/lib/finance/types";
-import { cn } from "@/lib/utils";
+import { cn, fmtId } from "@/lib/utils";
 import { useMutation, useQuery } from "convex/react";
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router";
@@ -68,7 +68,7 @@ export default function StaffDetail() {
     <div className="space-y-5 pb-10">
       <PageHeader
         title={subject.name}
-        subtitle={`${subject.staffId} · ${ROLE_LABELS[subject.role as FsRole]} · ${branch?.name ?? "—"}`}
+        subtitle={`${fmtId(subject.staffId)} · ${ROLE_LABELS[subject.role as FsRole]} · ${branch?.name ?? "—"}`}
         back="/dashboard/staff"
         action={<StatusChip status={subject.status} />}
       />
@@ -250,7 +250,7 @@ export default function StaffDetail() {
                     {WALLET_TX_LABELS[t.type as WalletTxType] ?? t.type}
                   </p>
                   <p className="truncate text-[10px] font-semibold text-muted-foreground">
-                    {t.referenceId ?? t.txnId} · {timeAgo(t.createdAt)}
+                    {fmtId(t.referenceId ?? t.txnId)} · {timeAgo(t.createdAt)}
                   </p>
                 </div>
                 <div className="shrink-0 text-right">
@@ -284,8 +284,7 @@ export default function StaffDetail() {
               key={l._id}
               onClick={() => navigate(`/dashboard/loans/${l._id}`)}
               className="flex items-center justify-between gap-2 border-2 border-ink bg-card px-3 py-1.5 text-left shadow-hard-sm"
-            >
-              <span className="font-mono text-xs font-black">{l.loanId}</span>
+            >                <span className="font-mono text-xs font-black">{fmtId(l.loanId)}</span>
               <span className="flex items-center gap-2">
                 <StatusChip status={l.status} />
                 <Money value={l.outstanding} className="text-xs" />
@@ -307,7 +306,7 @@ export default function StaffDetail() {
                 key={h._id}
                 className="flex items-center justify-between gap-2 border-2 border-ink bg-card px-3 py-1.5 shadow-hard-sm"
               >
-                <span className="font-mono text-xs font-black">{h.code}</span>
+                <span className="font-mono text-xs font-black">{fmtId(h.code)}</span>
                 <span className="flex items-center gap-2">
                   <StatusChip status={h.status} />
                   <Money value={h.amount} className="text-xs" />
@@ -334,7 +333,7 @@ export default function StaffDetail() {
               </div>
               <p className="text-[11px] font-semibold text-muted-foreground">
                 {a.entity}
-                {a.entityId ? ` · ${a.entityId}` : ""}
+                {a.entityId ? ` · ${fmtId(a.entityId)}` : ""}
               </p>
             </div>
           ))}

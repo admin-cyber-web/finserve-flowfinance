@@ -14,7 +14,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useProfile } from "@/hooks/use-profile";
-import { cn } from "@/lib/utils";
+import { cn, fmtId } from "@/lib/utils";
 import { useMutation, useQuery } from "convex/react";
 import { HandCoins, PackageCheck, Receipt, Wallet } from "lucide-react";
 import { useState } from "react";
@@ -229,7 +229,7 @@ export default function Cash() {
               <div key={h._id} className="border-2 border-ink bg-card p-3 shadow-hard-sm">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="font-mono text-xs font-black">{h.code}</p>
+                    <p className="font-mono text-xs font-black">{fmtId(h.code)}</p>
                     <p className="text-[11px] font-semibold text-muted-foreground">
                       {h.staffName} ({h.staffIdCode}) · {formatDateTime(h.requestedAt)}
                     </p>
@@ -250,7 +250,7 @@ export default function Cash() {
                       onClick={() =>
                         void run(
                           () => decideHandover({ handoverId: h._id, action: "ACCEPTED" }),
-                          `Accepted ${h.code} — wallet debited in the ledger`,
+                          `Accepted ${fmtId(h.code)} — wallet debited in the ledger`,
                         )
                       }
                     >
@@ -268,7 +268,7 @@ export default function Cash() {
                               action: "REJECTED",
                               rejectReason: "Count mismatch at branch",
                             }),
-                          `Rejected ${h.code}`,
+                          `Rejected ${fmtId(h.code)}`,
                         )
                       }
                     >
@@ -451,7 +451,7 @@ export default function Cash() {
               <div key={e._id} className="border-2 border-ink bg-card p-3 shadow-hard-sm">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="font-mono text-xs font-black">{e.code}</p>
+                    <p className="font-mono text-xs font-black">{fmtId(e.code)}</p>
                     <p className="text-[11px] font-semibold text-muted-foreground">
                       {e.category} · {e.staffName} · {formatDateTime(e.createdAt)}
                     </p>
@@ -470,7 +470,7 @@ export default function Cash() {
                       onClick={() =>
                         void run(
                           () => decideExpense({ expenseId: e._id, action: "APPROVED" }),
-                          `Expense ${e.code} approved`,
+                          `Expense ${fmtId(e.code)} approved`,
                         )
                       }
                     >
@@ -488,7 +488,7 @@ export default function Cash() {
                               action: "REJECTED",
                               remark: "Not a valid business expense",
                             }),
-                          `Expense ${e.code} rejected`,
+                          `Expense ${fmtId(e.code)} rejected`,
                         )
                       }
                     >
@@ -555,8 +555,7 @@ export default function Cash() {
                 key={i._id}
                 className="flex items-center justify-between gap-3 border-2 border-ink bg-card px-3 py-2 shadow-hard-sm"
               >
-                <div className="min-w-0">
-                  <p className="font-mono text-xs font-black">{i.code}</p>
+                <div className="min-w-0">                    <p className="font-mono text-xs font-black">{fmtId(i.code)}</p>
                   <p className="text-[11px] font-semibold text-muted-foreground">
                     {i.staffName} · by {i.bmName} · {formatDateTime(i.createdAt)}
                   </p>

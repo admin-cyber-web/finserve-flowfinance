@@ -11,6 +11,7 @@ import {
 } from "@/components/fs/primitives";
 import { CenterWiseLoan } from "@/components/fs/CenterWiseLoan";
 import { Button } from "@/components/ui/button";
+import { fmtId } from "@/lib/utils";
 import { useMutation, useQuery } from "convex/react";
 import { CheckCircle2, HandCoins, TriangleAlert, Users } from "lucide-react";
 import { useState } from "react";
@@ -73,7 +74,7 @@ export default function LoanNew() {
         amount: numericAmount,
         device: navigator.userAgent.slice(0, 60),
       });
-      toast.success(`Application ${result.appId} submitted for approval`);
+      toast.success(`Application ${fmtId(result.appId)} submitted for approval`);
       navigate("/dashboard/loans");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Submission failed");
@@ -166,7 +167,7 @@ export default function LoanNew() {
             </span>
             {selectedClient && (
               <span className="block text-[11px] font-semibold text-muted-foreground">
-                {selectedClient.code} · {selectedClient.village} · household income ₹
+                {fmtId(selectedClient.code)} · {selectedClient.village} · household income ₹
                 {selectedClient.householdIncome.toLocaleString("en-IN")}
               </span>
             )}
@@ -342,7 +343,7 @@ export default function LoanNew() {
             >
               <span className="block text-sm font-black">{c.name}</span>
               <span className="block text-[11px] font-semibold text-muted-foreground">
-                {c.code} · {c.village} · {c.activeLoans} active loans
+                {fmtId(c.code)} · {c.village} · {c.activeLoans} active loans
               </span>
             </button>
           ))}

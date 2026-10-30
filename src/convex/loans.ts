@@ -150,6 +150,9 @@ export const list = query({
       enriched = enriched.filter(
         (e) =>
           e.loan.loanId.toLowerCase().includes(q) ||
+          // Numeric / prefixed / hyphen-less Loan ID forms
+          // ("LN-000123", "LN000123", "000123") all resolve.
+          idQueryMatches(e.loan.loanId, args.search ?? "") ||
           (e.client &&
             (e.client.name.toLowerCase().includes(q) ||
               e.client.code.toLowerCase().includes(q) ||
@@ -354,9 +357,10 @@ export const submit = mutation({
     }
 
     const now = Date.now();
-    const appId = `LA-${String(
+    const appId = `LA${String(
       (await ctx.db.query("loanApplications").collect()).reduce(
-        (max, a) => Math.max(max, Number(a.appId.split("-")[1] ?? 0)),
+        (max, a) =>
+          Math.max(max, Number(String(a.appId).replace(/\D/g, "") || 0)),
         0,
       ) + 1,
     ).padStart(6, "0")}`;
@@ -758,7 +762,8 @@ export const submitCenterBatch = mutation({
     }[] = [];
 
     let appSeq = (await ctx.db.query("loanApplications").collect()).reduce(
-      (max, a) => Math.max(max, Number(a.appId.split("-")[1] ?? 0)),
+      (max, a) =>
+        Math.max(max, Number(String(a.appId).replace(/\D/g, "") || 0)),
       0,
     );
     const loansAll = await ctx.db.query("loans").collect();
@@ -828,7 +833,7 @@ export const submitCenterBatch = mutation({
         }
 
         appSeq += 1;
-        const appId = `LA-${String(appSeq).padStart(6, "0")}`;
+        const appId = `LA${String(appSeq).padStart(6, "0")}`;
         const applicationId = await ctx.db.insert("loanApplications", {
           appId,
           clientId,
@@ -1009,10 +1014,11 @@ export const decide = mutation({
 
       const loanSeq =
         (await ctx.db.query("loans").collect()).reduce(
-          (max, l) => Math.max(max, Number(l.loanId.split("-")[1] ?? 0)),
+          (max, l) =>
+            Math.max(max, Number(String(l.loanId).replace(/\D/g, "") || 0)),
           0,
         ) + 1;
-      const loanId = `LN-${String(loanSeq).padStart(6, "0")}`;
+      const loanId = `LN${String(loanSeq).padStart(6, "0")}`;
 
       const previewRows = rowsPreview;
       // No separately authorized fee rule → no fee on this loan.

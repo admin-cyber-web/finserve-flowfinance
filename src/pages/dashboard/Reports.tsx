@@ -22,7 +22,7 @@ import {
   type DateReportPreset,
 } from "@/lib/finance/dateReport";
 import { formatINR } from "@/lib/finance/money";
-import { cn } from "@/lib/utils";
+import { cn, fmtId } from "@/lib/utils";
 import { useQuery } from "convex/react";
 import { Download, FileBarChart, Lock } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
@@ -85,11 +85,11 @@ function CommonCells({ row }: { row: CommonReportRow }) {
     <>
       <td className={cn(TD_CLS, "text-center font-black")}>{row.sr}</td>
       <td className={cn(TD_CLS, "font-mono whitespace-nowrap")}>
-        {row.clientCode}
+        {fmtId(row.clientCode)}
       </td>
-      <td className={cn(TD_CLS, "font-mono whitespace-nowrap")}>{row.loanId}</td>
+      <td className={cn(TD_CLS, "font-mono whitespace-nowrap")}>{fmtId(row.loanId)}</td>
       <td className={TD_CLS}>{row.groupName}</td>
-      <td className={cn(TD_CLS, "font-mono whitespace-nowrap")}>{row.groupId}</td>
+      <td className={cn(TD_CLS, "font-mono whitespace-nowrap")}>{fmtId(row.groupId)}</td>
       <td className={TD_CLS}>{row.customerName}</td>
       <td className={cn(TD_CLS, "whitespace-nowrap")}>
         {row.disbursedAt ? formatDate(row.disbursedAt) : "—"}
@@ -224,10 +224,10 @@ export default function Reports() {
         head = COMMON_HEAD;
         body = disbursement.map((r) => [
           r.sr,
-          r.clientCode,
-          r.loanId,
+          fmtId(r.clientCode),
+          fmtId(r.loanId),
           r.groupName,
-          r.groupId,
+          fmtId(r.groupId),
           r.customerName,
           r.disbursedAt ? formatDate(r.disbursedAt) : "—",
           r.loanAmount,
@@ -239,10 +239,10 @@ export default function Reports() {
         head = [...COMMON_HEAD, ...TAILS.collection];
         body = collection.map((r) => [
           r.sr,
-          r.clientCode,
-          r.loanId,
+          fmtId(r.clientCode),
+          fmtId(r.loanId),
           r.groupName,
-          r.groupId,
+          fmtId(r.groupId),
           r.customerName,
           r.disbursedAt ? formatDate(r.disbursedAt) : "—",
           r.loanAmount,
@@ -257,10 +257,10 @@ export default function Reports() {
         head = [...COMMON_HEAD, ...TAILS.due];
         body = dueRows.map((r) => [
           r.sr,
-          r.clientCode,
-          r.loanId,
+          fmtId(r.clientCode),
+          fmtId(r.loanId),
           r.groupName,
-          r.groupId,
+          fmtId(r.groupId),
           r.customerName,
           r.disbursedAt ? formatDate(r.disbursedAt) : "—",
           r.loanAmount,
@@ -276,10 +276,10 @@ export default function Reports() {
         head = [...COMMON_HEAD, ...TAILS.overdue];
         body = overdue.map((r) => [
           r.sr,
-          r.clientCode,
-          r.loanId,
+          fmtId(r.clientCode),
+          fmtId(r.loanId),
           r.groupName,
-          r.groupId,
+          fmtId(r.groupId),
           r.customerName,
           r.disbursedAt ? formatDate(r.disbursedAt) : "—",
           r.loanAmount,

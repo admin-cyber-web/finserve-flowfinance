@@ -413,7 +413,8 @@ export const createStaff = mutation({
             : "SA";
     const staffId =
       args.staffId?.trim() ||
-      `${prefix}-${String(10001 + seq.length).padStart(5, "0")}`;
+      // Business IDs never carry hyphens: BM10001, ST10001, AC10001…
+      `${prefix}${String(10001 + seq.length).padStart(5, "0")}`;
 
     const profileId = await ctx.db.insert("profiles", {
       name,

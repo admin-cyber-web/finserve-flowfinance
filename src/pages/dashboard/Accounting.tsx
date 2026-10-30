@@ -8,7 +8,7 @@ import {
   StatusChip,
   formatDate,
 } from "@/components/fs/primitives";
-import { cn } from "@/lib/utils";
+import { cn, fmtId } from "@/lib/utils";
 import { useQuery } from "convex/react";
 import { BookOpen } from "lucide-react";
 import { useState } from "react";
@@ -170,7 +170,7 @@ export default function Accounting() {
             <tbody>
               {(rows as unknown as TrialRow[]).map((r) => (
                 <tr key={r.account.code} className="border-b border-ink/15 last:border-0">
-                  <td className="px-2 py-1.5 font-mono font-black">{r.account.code}</td>
+                  <td className="px-2 py-1.5 font-mono font-black">{fmtId(r.account.code)}</td>
                   <td className="px-2 py-1.5 font-semibold">{r.account.name}</td>
                   <td className="px-2 py-1.5 text-right font-mono tabular-nums">
                     {r.debit.toLocaleString("en-IN")}
@@ -196,7 +196,7 @@ export default function Accounting() {
           {(rows as unknown as JournalRow[]).map((r) => (
             <div key={r.entryId} className="border-2 border-ink bg-card p-3 shadow-hard-sm">
               <div className="flex items-center justify-between gap-2">
-                <span className="font-mono text-xs font-black">{r.entryId}</span>
+                <span className="font-mono text-xs font-black">{fmtId(r.entryId)}</span>
                 <span className="text-[10px] font-black uppercase text-muted-foreground">
                   {formatDate(r.createdAt)}
                 </span>
@@ -209,7 +209,7 @@ export default function Accounting() {
                     className="flex justify-between border-b border-ink/10 py-0.5 text-[11px] font-bold last:border-0"
                   >
                     <span>
-                      {l.code} {l.name ? `· ${l.name}` : ""}
+                      {fmtId(l.code)} {l.name ? `· ${l.name}` : ""}
                       {l.debit > 0 ? " — Dr" : " — Cr"}
                     </span>
                     <span className="font-mono tabular-nums">

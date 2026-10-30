@@ -11,7 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { useProfile } from "@/hooks/use-profile";
 import { WALLET_TX_LABELS, type WalletTxType } from "@/lib/finance/types";
-import { cn } from "@/lib/utils";
+import { cn, fmtId } from "@/lib/utils";
 import { useMutation, useQuery } from "convex/react";
 import { IndianRupee, Undo2, Wallet } from "lucide-react";
 import { useState } from "react";
@@ -48,7 +48,7 @@ export default function Transactions() {
     setBusy(true);
     try {
       await reverse({ collectionId: reversing.id as never, reason: reason.trim() });
-      toast.success(`Reversed ${reversing.code} — compensating entry posted`);
+      toast.success(`Reversed ${fmtId(reversing.code)} — compensating entry posted`);
       setReversing(null);
       setReason("");
     } catch (err) {
@@ -114,7 +114,7 @@ export default function Transactions() {
                       </span>
                     </p>
                     <p className="truncate text-[11px] font-semibold text-muted-foreground">
-                      {c.clientName} ({c.clientCode}) · {c.loanId}
+                      {c.clientName} ({fmtId(c.clientCode)}) · {fmtId(c.loanId)}
                     </p>
                     <p className="text-[11px] font-semibold text-muted-foreground">
                       {formatDateTime(c.createdAt)} · by {c.staffName}
@@ -173,7 +173,7 @@ export default function Transactions() {
                     {WALLET_TX_LABELS[t.type as WalletTxType] ?? t.type.replace(/_/g, " ")}
                   </p>
                   <p className="truncate text-[11px] font-semibold text-muted-foreground">
-                    {t.referenceId ?? t.txnId} · {t.staffName} · {formatDateTime(t.createdAt)}
+                    {fmtId(t.referenceId ?? t.txnId)} · {t.staffName} · {formatDateTime(t.createdAt)}
                   </p>
                   {t.remarks && (
                     <p className="truncate text-[11px] font-semibold">{t.remarks}</p>

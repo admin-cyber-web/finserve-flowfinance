@@ -20,7 +20,7 @@ import { useProfile } from "@/hooks/use-profile";
 import { LOAN_STATUS_LABELS, RECOVERY_KINDS, RECOVERY_LABELS } from "@/lib/finance/types";
 import { round2 } from "@/lib/finance/money";
 import { rowOutstanding } from "@/lib/finance/schedule";
-import { cn } from "@/lib/utils";
+import { cn, fmtId } from "@/lib/utils";
 import { useMutation, useQuery } from "convex/react";
 import { FileText, HandCoins, IndianRupee, PhoneCall } from "lucide-react";
 import { useState } from "react";
@@ -106,7 +106,7 @@ export default function LoanDetail() {
   return (
     <div className="space-y-4 pb-10">
       <PageHeader
-        title={loan.loanId}
+        title={fmtId(loan.loanId)}
         subtitle={[
           client?.name ?? "—",
           product?.name,
@@ -364,7 +364,7 @@ export default function LoanDetail() {
                     </span>
                   </p>
                   <p className="text-[11px] font-semibold text-muted-foreground">
-                    {p.receiptNumber ?? p.code} · principal ₹
+                    {fmtId(p.receiptNumber ?? p.code)} · principal ₹
                     {p.principalPortion.toLocaleString("en-IN")} + interest ₹
                     {p.interestPortion.toLocaleString("en-IN")} · {formatDateTime(p.createdAt)}
                   </p>
@@ -454,7 +454,7 @@ export default function LoanDetail() {
         {/* BOOKS */}
         <TabsContent value="books" className="mt-4 space-y-4">
           <section className="border-2 border-ink bg-card p-4 shadow-hard-sm">
-            <KeyValue k="Loan ID" v={<span className="font-mono">{loan.loanId}</span>} mono />
+            <KeyValue k="Loan ID" v={<span className="font-mono">{fmtId(loan.loanId)}</span>} mono />
             <KeyValue k="Status" v={LOAN_STATUS_LABELS[loan.status] ?? loan.status} />
             <KeyValue k="Total payable" v={<Money value={loan.totalPayable} />} />
             <KeyValue k="Paid to date" v={<Money value={loan.paidTotal} />} />
@@ -472,8 +472,7 @@ export default function LoanDetail() {
               <div className="flex flex-col gap-2">
                 {journals.map((j) => (
                   <div key={j._id} className="border-2 border-ink bg-card p-3 shadow-hard-sm">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-mono text-xs font-black">{j.entryId}</span>
+                    <div className="flex items-center justify-between gap-2">                          <span className="font-mono text-xs font-black">{fmtId(j.entryId)}</span>
                       <span className="text-[10px] font-black uppercase text-muted-foreground">
                         {formatDate(j.createdAt)}
                       </span>
@@ -483,7 +482,7 @@ export default function LoanDetail() {
                       {j.lines.map((l, i) => (
                         <div key={i} className="flex justify-between border-b border-ink/10 py-0.5 last:border-0">
                           <span>
-                            {l.code} {l.debit > 0 ? "· Dr" : "· Cr"}
+                            {fmtId(l.code)} {l.debit > 0 ? "· Dr" : "· Cr"}
                           </span>
                           <span className="font-mono tabular-nums">
                             Dr ₹{l.debit.toLocaleString("en-IN")} / Cr ₹

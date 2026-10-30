@@ -15,7 +15,7 @@ import type { ReactNode } from "react";
 const SCROLL_ITEMS = [
   { label: "Wallet-led staff cash", value: "₹4,00,000 limit" },
   { label: "Loan ledger — no deletes", value: "Reversals only" },
-  { label: "Collections with receipts", value: "RCPT-YYYYMMDD-NNNN" },
+  { label: "Collections with receipts", value: "RCPTYYYYMMDDNNNN" },
   { label: "Cash handover to branch", value: "Full money trail" },
   { label: "Offline field mode", value: "Idempotent sync" },
   { label: "Role-based access", value: "Admin · BM · Staff · Accountant" },

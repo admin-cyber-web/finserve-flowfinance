@@ -429,8 +429,8 @@ export async function recordCollection(
 
   const allocation = allocatePayment(rows, args.amount);
 
-  // 1. Collection document (append-only).
-  const collectionCode = await makeCode(ctx, "collection", "PY-", 6);
+  // 1. Collection document (append-only). IDs carry no hyphens (PY000123).
+  const collectionCode = await makeCode(ctx, "collection", "PY", 6);
   const collectionId = await ctx.db.insert("collections", {
     code: collectionCode,
     loanId: loan._id,
@@ -482,7 +482,7 @@ export async function recordCollection(
 
   // 3. Receipt (unique per day, immediately shareable).
   const receiptSeq = await nextSeq(ctx, `receipt-${daySuffix(nowMs)}`);
-  const receiptNumber = `RCPT-${daySuffix(nowMs)}-${String(receiptSeq).padStart(4, "0")}`;
+  const receiptNumber = `RCPT${daySuffix(nowMs)}${String(receiptSeq).padStart(4, "0")}`;
   const receiptId = await ctx.db.insert("receipts", {
     number: receiptNumber,
     loanId: loan._id,
@@ -638,7 +638,7 @@ export async function reverseCollection(
   }
 
   // 1. Compensating collection row (original stays intact).
-  const reversalCode = await makeCode(ctx, "collection", "PY-", 6);
+  const reversalCode = await makeCode(ctx, "collection", "PY", 6);
   const reversalId = await ctx.db.insert("collections", {
     code: reversalCode,
     loanId: original.loanId,

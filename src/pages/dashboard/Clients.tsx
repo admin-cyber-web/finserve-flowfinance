@@ -15,7 +15,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { useProfile } from "@/hooks/use-profile";
 import { formatINR } from "@/lib/finance/money";
-import { cn } from "@/lib/utils";
+import { cn, fmtId } from "@/lib/utils";
 import { useMutation, useQuery } from "convex/react";
 import { Plus, Search, UserPlus } from "lucide-react";
 import { useState } from "react";
@@ -58,7 +58,7 @@ export default function Clients() {
         clientId: removeTarget._id,
         reason: "Removed by SUPER_ADMIN",
       });
-      toast.success(`${removeTarget.name} (${removeTarget.code}) removed`);
+      toast.success(`${removeTarget.name} (${fmtId(removeTarget.code)}) removed`);
       setRemoveTarget(null);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not remove client");
@@ -140,13 +140,13 @@ export default function Clients() {
               <span className="min-w-0">
                 <span className="block truncate text-sm font-black">{c.name}</span>
                 <span className="block text-[11px] font-semibold text-muted-foreground">
-                  {c.code} · {c.village} · {c.mobile}
+                  {fmtId(c.code)} · {c.village} · {c.mobile}
                 </span>
                 <span className="mt-1 flex flex-wrap gap-1">
                   <StatusChip status={c.kycStatus} label={`KYC ${c.kycStatus.toLowerCase()}`} />
                   {c.centerCode && (
                     <StatusChip
-                      label={`${c.centerCode}${c.centerName ? ` · ${c.centerName}` : ""}`}
+                      label={`${fmtId(c.centerCode)}${c.centerName ? ` · ${c.centerName}` : ""}`}
                     />
                   )}
                   {c.overdueLoans > 0 && (

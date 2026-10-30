@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { useProfile } from "@/hooks/use-profile";
 import { formatINR } from "@/lib/finance/money";
 import { newIdempotencyKey } from "@/lib/offline";
-import { cn } from "@/lib/utils";
+import { cn, fmtId } from "@/lib/utils";
 import { useMutation, useQuery } from "convex/react";
 import { Coins, IndianRupee, Loader2, Lock, Search } from "lucide-react";
 import { useRef, useState } from "react";
@@ -95,11 +95,11 @@ export default function Collection() {
       // Success is only shown once the backend has confirmed the write.
       if (result.duplicate) {
         toast.warning(
-          `Already recorded — receipt ${result.receiptNumber} (${formatINR(amount)}, ${row.loanId}).`,
+          `Already recorded — receipt ${fmtId(result.receiptNumber)} (${formatINR(amount)}, ${fmtId(row.loanId)}).`,
         );
       } else {
         toast.success(
-          `${formatINR(amount)} collected from ${row.customerName} (${row.loanId}) — receipt ${result.receiptNumber}.`,
+          `${formatINR(amount)} collected from ${row.customerName} (${fmtId(row.loanId)}) — receipt ${fmtId(result.receiptNumber)}.`,
         );
       }
     } catch (err) {
@@ -143,7 +143,7 @@ export default function Collection() {
             id="coll-search"
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Group name · GRP-MDG · LN-000123"
+            placeholder="Group name · GRPMDG · LN000123"
             className="h-11 w-full bg-transparent px-3 text-sm font-bold outline-none"
           />
         </div>
@@ -212,10 +212,10 @@ export default function Collection() {
                       {i + 1}
                     </td>
                     <td className={cn(TD_CLS, "font-mono whitespace-nowrap")}>
-                      {r.clientCode}
+                      {fmtId(r.clientCode)}
                     </td>
                     <td className={cn(TD_CLS, "font-mono whitespace-nowrap")}>
-                      {r.loanId}
+                      {fmtId(r.loanId)}
                     </td>
                     <td className={TD_CLS}>{r.customerName}</td>
                     <td
@@ -242,7 +242,7 @@ export default function Collection() {
                             }))
                           }
                           className="h-9 w-24 border-2 border-ink bg-white px-2 text-right text-xs font-black outline-none"
-                          aria-label={`Collect amount for ${r.loanId}`}
+                          aria-label={`Collect amount for ${fmtId(r.loanId)}`}
                         />
                         <Button
                           size="sm"

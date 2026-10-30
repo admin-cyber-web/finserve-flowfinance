@@ -207,7 +207,8 @@ export async function nextSeq(ctx: Mtx, key: string): Promise<number> {
   return next;
 }
 
-/** Human-readable, gap-free code generator: RCPT-261006-0007, WT-000123… */
+/** Human-readable, gap-free code generator WITHOUT hyphens: PY000123, WT000123…
+ *  (prefixes are passed by the caller — never include a hyphen.) */
 export async function makeCode(
   ctx: Mtx,
   key: string,
@@ -382,7 +383,7 @@ export async function writeWalletTx(
   }
 
   const id = await ctx.db.insert("walletTransactions", {
-    txnId: await makeCode(ctx, "walletTxn", "WT-", 6),
+    txnId: await makeCode(ctx, "walletTxn", "WT", 6),
     walletId: args.walletId,
     profileId: args.profileId,
     branchId: args.branchId,
@@ -421,7 +422,7 @@ export async function writeJournal(
     );
   }
   return await ctx.db.insert("journalEntries", {
-    entryId: await makeCode(ctx, "journal", "JE-", 6),
+    entryId: await makeCode(ctx, "journal", "JE", 6),
     dateKey: istDateKey(meta.createdAt ?? Date.now()),
     memo: spec.memo,
     refType: spec.refType,

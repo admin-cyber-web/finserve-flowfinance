@@ -10,6 +10,7 @@ import {
   formatDateTime,
 } from "@/components/fs/primitives";
 import { Button } from "@/components/ui/button";
+import { fmtId } from "@/lib/utils";
 import { useQuery } from "convex/react";
 import { FileText, HandCoins } from "lucide-react";
 import { useNavigate } from "react-router";
@@ -72,7 +73,7 @@ export default function ClientHome() {
                 className="w-full border-2 border-ink bg-card p-3 text-left shadow-hard-sm active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
               >
                 <div className="flex items-center justify-between gap-2">
-                  <span className="font-mono text-sm font-black">{loan.loanId}</span>
+                  <span className="font-mono text-sm font-black">{fmtId(loan.loanId)}</span>
                   <StatusChip status={view.displayStatus} />
                 </div>
                 <div className="mt-1 flex items-end justify-between">

@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { LoanActions } from "@/components/fs/LoanActions";
 import { useProfile } from "@/hooks/use-profile";
 import { LOAN_STATUS_LABELS } from "@/lib/finance/types";
-import { cn } from "@/lib/utils";
+import { cn, fmtId } from "@/lib/utils";
 import { useQuery } from "convex/react";
 import { Archive, HandCoins, Plus, Search } from "lucide-react";
 import { useState } from "react";
@@ -131,7 +131,7 @@ export default function Loans() {
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <span className="block font-mono text-sm font-black">{loan.loanId}</span>
+                  <span className="block font-mono text-sm font-black">{fmtId(loan.loanId)}</span>
                   <span className="block truncate text-[11px] font-semibold text-muted-foreground">
                     {client?.name ?? "—"} · {client?.code ?? ""}
                   </span>

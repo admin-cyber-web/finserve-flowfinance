@@ -1,7 +1,7 @@
 import { api } from "@/convex/_generated/api";
 import { StatusChip, timeAgo } from "@/components/fs/primitives";
 import { useOnline, useProfile } from "@/hooks/use-profile";
-import { cn } from "@/lib/utils";
+import { cn, fmtId } from "@/lib/utils";
 import {
   clearSynced,
   patchQueueItem,
@@ -226,7 +226,7 @@ export function MobileShell({ children }: { children: ReactNode }) {
               {profile?.name ?? "—"}
             </span>
             <span className="block truncate font-mono text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-              {profile?.staffId} · {profile?.branch?.name ?? "No branch"}
+              {fmtId(profile?.staffId)} · {profile?.branch?.name ?? "No branch"}
             </span>
           </span>
           <ChevronDown className="size-4 shrink-0" />
@@ -361,7 +361,7 @@ export function MobileShell({ children }: { children: ReactNode }) {
             autoFocus
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Name, mobile, 000128, LN-…, RCPT-…"
+            placeholder="Name, mobile, 000128, LN…, RCPT…"
             className="h-11 w-full bg-transparent px-3 text-sm font-bold outline-none"
           />
           {q && (
@@ -393,7 +393,7 @@ export function MobileShell({ children }: { children: ReactNode }) {
           ))}
           {(results ?? []).length === 0 && debounced.trim().length < 2 && (
             <p className="py-4 text-center text-xs font-semibold text-muted-foreground">
-              Try “Ramesh”, “000128”, “LN-000001” or a receipt number.
+              Try “Ramesh”, “000128”, “LN000001” or a receipt number.
             </p>
           )}
         </div>
@@ -404,7 +404,7 @@ export function MobileShell({ children }: { children: ReactNode }) {
         open={menuOpen}
         onOpenChange={setMenuOpen}
         title={profile?.name ?? "Account"}
-        subtitle={`${profile?.staffId ?? ""} · ${profile?.branch?.name ?? ""}`}
+        subtitle={`${fmtId(profile?.staffId ?? "")} · ${profile?.branch?.name ?? ""}`}
       >
         <div className="flex flex-col gap-2">
           <MenuLink to="/dashboard/profile" label="Profile & wallet" icon={Wallet} />

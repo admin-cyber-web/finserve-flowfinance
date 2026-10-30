@@ -13,7 +13,7 @@ import type {
   LoanRequestValue,
   NomineeValue,
 } from "@/lib/finance/validate";
-import { cn, sentenceCase } from "@/lib/utils";
+import { cn, fmtId, sentenceCase } from "@/lib/utils";
 import {
   Dialog,
   DialogContent,
@@ -116,7 +116,7 @@ export function StaffEditDialog({
             Edit {target?.name ?? "user"}
           </DialogTitle>
           <DialogDescription className="text-sm font-semibold">
-            System ID {target?.staffId} — the ID, sign-in credential and account
+            System ID {fmtId(target?.staffId)} — the ID, sign-in credential and account
             status are never changed by an edit.
           </DialogDescription>
         </DialogHeader>
@@ -256,7 +256,7 @@ function StaffEditForm({
             <option value="">No branch (organization-wide)</option>
             {branches.map((b) => (
               <option key={b._id} value={b._id}>
-                {b.code ? `${b.code} · ` : ""}
+                {b.code ? `${fmtId(b.code)} · ` : ""}
                 {b.name}
               </option>
             ))}
@@ -344,7 +344,7 @@ export function ClientEditDialog({
             Edit {target?.name ?? "client"}
           </DialogTitle>
           <DialogDescription className="text-sm font-semibold">
-            {target?.code} — KYC status, branch and loan history are untouched by
+            {fmtId(target?.code)} — KYC status, branch and loan history are untouched by
             an edit.
           </DialogDescription>
         </DialogHeader>

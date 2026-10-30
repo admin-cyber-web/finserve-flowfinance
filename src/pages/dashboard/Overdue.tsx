@@ -10,7 +10,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { useProfile } from "@/hooks/use-profile";
 import { BUCKET_LABELS, RECOVERY_KINDS, RECOVERY_LABELS, OVERDUE_BUCKETS } from "@/lib/finance/types";
-import { cn } from "@/lib/utils";
+import { cn, fmtId } from "@/lib/utils";
 import { useMutation, useQuery } from "convex/react";
 import { AlertTriangle, PhoneCall } from "lucide-react";
 import { useState } from "react";
@@ -41,7 +41,7 @@ export default function Overdue() {
         kind,
         notes: notes.trim() || undefined,
       });
-      toast.success(`Recovery activity logged on ${active.loanId}`);
+      toast.success(`Recovery activity logged on ${fmtId(active.loanId)}`);
       setActive(null);
       setNotes("");
     } catch (err) {
@@ -114,10 +114,10 @@ export default function Overdue() {
                     onClick={() => navigate(`/dashboard/loans/${r.loanDbId}`)}
                     className="text-left font-mono text-sm font-black underline decoration-2 underline-offset-2"
                   >
-                    {r.loanId}
+                    {fmtId(r.loanId)}
                   </button>
                   <p className="truncate text-[11px] font-semibold text-muted-foreground">
-                    {r.clientName} ({r.clientCode}) · {r.village} · {r.staffName}
+                    {r.clientName} ({fmtId(r.clientCode)}) · {r.village} · {r.staffName}
                   </p>
                   <p className="text-[11px] font-semibold text-muted-foreground">
                     {r.daysOverdue} days overdue · bucket {BUCKET_LABELS[r.bucket as keyof typeof BUCKET_LABELS]}
@@ -166,7 +166,7 @@ export default function Overdue() {
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4">
           <div className="w-full max-w-sm border-2 border-ink bg-card p-4 shadow-hard">
             <h3 className="text-lg font-black uppercase tracking-tight">
-              Recovery on {active.loanId}
+              Recovery on {fmtId(active.loanId)}
             </h3>
             <div className="mt-3 space-y-2">
               <select

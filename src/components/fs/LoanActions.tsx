@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { useProfile } from "@/hooks/use-profile";
 import { round2 } from "@/lib/finance/money";
-import { cn } from "@/lib/utils";
+import { cn, fmtId } from "@/lib/utils";
 import { useMutation } from "convex/react";
 import { Archive, BadgeCheck, Handshake, Trash2, Undo2 } from "lucide-react";
 import { useState } from "react";
@@ -126,7 +126,7 @@ export function LoanActions({
       if (action === "surrender") {
         const res = await surrender({ loanId: loan._id, reason: reason.trim(), device });
         toast.success(
-          `${res.loanId} surrendered — ${money(res.outstanding)} outstanding stays on record for recovery`,
+          `${fmtId(res.loanId)} surrendered — ${money(res.outstanding)} outstanding stays on record for recovery`,
         );
       } else if (action === "settle") {
         const res = await settle({
@@ -137,17 +137,17 @@ export function LoanActions({
           device,
         });
         toast.success(
-          `${res.loanId} settled — ${money(res.settlementPaid)} received` +
-            (res.receiptNumber ? ` (receipt ${res.receiptNumber})` : "") +
+          `${fmtId(res.loanId)} settled — ${money(res.settlementPaid)} received` +
+            (res.receiptNumber ? ` (receipt ${fmtId(res.receiptNumber)})` : "") +
             (res.waivedAmount > 0 ? `, ${money(res.waivedAmount)} waived` : ""),
         );
       } else if (action === "close") {
         const res = await close({ loanId: loan._id, reason: reason.trim() || undefined, device });
-        toast.success(`${res.loanId} closed — all dues verified cleared`);
+        toast.success(`${fmtId(res.loanId)} closed — all dues verified cleared`);
       } else if (action === "archive") {
         await archive({ loanId: loan._id, reason: reason.trim() || undefined, device });
         toast.success(
-          `${loan.loanId} archived — hidden from active loan screens, records preserved`,
+          `${fmtId(loan.loanId)} archived — hidden from active loan screens, records preserved`,
         );
       } else if (action === "delete") {
         const res = await deleteClosed({
@@ -156,7 +156,7 @@ export function LoanActions({
           device,
         });
         toast.success(
-          `${res.loanId} permanently deleted (${res.scheduleRowsRemoved} schedule projection(s) removed)`,
+          `${fmtId(res.loanId)} permanently deleted (${res.scheduleRowsRemoved} schedule projection(s) removed)`,
         );
       }
       setAction(null);
@@ -177,12 +177,12 @@ export function LoanActions({
 
   const messages: Record<Action, string> = {
     surrender:
-      `Terminates ${loan.loanId} before its normal completion. The remaining dues stay on record for recovery — nothing is waived or erased, and collections against this loan stop. ` +
+      `Terminates ${fmtId(loan.loanId)} before its normal completion. The remaining dues stay on record for recovery — nothing is waived or erased, and collections against this loan stop. ` +
       `Current outstanding: ${money(open)}. A mandatory reason is recorded in the audit log.`,
     settle:
-      `Settles ${loan.loanId} for an agreed amount. The paid amount is recorded as a real payment with a receipt; only the waived remainder closes the remaining dues, and waived dues are never counted as cash received.`,
+      `Settles ${fmtId(loan.loanId)} for an agreed amount. The paid amount is recorded as a real payment with a receipt; only the waived remainder closes the remaining dues, and waived dues are never counted as cash received.`,
     close:
-      `Marks ${loan.loanId} closed. The backend verifies every due is actually cleared — clicking Close can never mark an unpaid loan repaid.` +
+      `Marks ${fmtId(loan.loanId)} closed. The backend verifies every due is actually cleared — clicking Close can never mark an unpaid loan repaid.` +
       (open > 0
         ? ` WARNING: ${money(open)} is still outstanding — Close will be rejected; use Settle or Surrender instead.`
         : ""),
@@ -326,7 +326,7 @@ export function LoanActions({
 
               {clientName && (
                 <p className="text-xs font-bold text-muted-foreground">
-                  Client: {clientName} · {loan.loanId}
+                  Client: {clientName} · {fmtId(loan.loanId)}
                 </p>
               )}
 

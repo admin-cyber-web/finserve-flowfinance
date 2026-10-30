@@ -16,7 +16,7 @@ import {
 } from "@/components/fs/RecordEdits";
 import { useProfile } from "@/hooks/use-profile";
 import { ROLE_LABELS, type FsRole } from "@/lib/finance/types";
-import { cn } from "@/lib/utils";
+import { cn, fmtId } from "@/lib/utils";
 import { useMutation, useQuery } from "convex/react";
 import { Plus, UserCog } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -105,7 +105,7 @@ export default function Staff() {
         initialCredential: result.initialCredential,
       });
       setForm({ name: "", mobile: "", email: "", role: "FIELD_STAFF", branchId: "", walletLimit: "" });
-      toast.success(`${roleName} created — ${result.staffId}`);
+      toast.success(`${roleName} created — ${fmtId(result.staffId)}`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not create staff");
     } finally {
@@ -125,7 +125,7 @@ export default function Staff() {
         reason: "Removed by SUPER_ADMIN",
       });
       toast.success(
-        `${result.name} (${result.staffId}) removed — account deactivated, wallet and audit history preserved`,
+        `${result.name} (${fmtId(result.staffId)}) removed — account deactivated, wallet and audit history preserved`,
       );
       setRemoveTarget(null);
     } catch (err) {
@@ -182,7 +182,7 @@ export default function Staff() {
               <span className="min-w-0">
                 <span className="block truncate text-sm font-black">{r.profile.name}</span>
                 <span className="block text-[11px] font-semibold text-muted-foreground">
-                  {r.profile.staffId} · {ROLE_LABELS[r.profile.role as FsRole]} ·{" "}
+                  {fmtId(r.profile.staffId)} · {ROLE_LABELS[r.profile.role as FsRole]} ·{" "}
                   {r.branch?.name ?? "—"}
                 </span>
                 <span className="mt-1 flex gap-1">
@@ -305,7 +305,7 @@ export default function Staff() {
             <div className="border-2 border-ink bg-mint p-3">
               <p className="text-xs font-black uppercase tracking-wider">{created.name} · {created.role}</p>
               <p className="mt-2 text-[11px] font-black uppercase text-muted-foreground">System ID</p>
-              <p className="font-mono text-xl font-black tracking-wider">{created.staffId}</p>
+              <p className="font-mono text-xl font-black tracking-wider">{fmtId(created.staffId)}</p>
               {created.initialCredential ? (
                 <>
                   <p className="mt-2 text-[11px] font-black uppercase text-muted-foreground">Initial PIN</p>

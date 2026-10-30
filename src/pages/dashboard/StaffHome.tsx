@@ -11,6 +11,7 @@ import {
 import { useProfile } from "@/hooks/use-profile";
 import { formatINR } from "@/lib/finance/money";
 import { WALLET_TX_LABELS } from "@/lib/finance/types";
+import { fmtId } from "@/lib/utils";
 import { useQuery } from "convex/react";
 import {
   ArrowDownLeft,
@@ -213,7 +214,7 @@ export default function StaffHome() {
                     {d.name}
                   </span>
                   <span className="block text-[11px] font-semibold text-muted-foreground">
-                    {d.code} · {d.village}
+                    {fmtId(d.code)} · {d.village}
                     {d.overdue > 0 && (
                       <span className="ml-1 font-black text-destructive">
                         · {formatINR(d.overdue)} overdue
@@ -276,7 +277,7 @@ export default function StaffHome() {
                     {WALLET_TX_LABELS[t.type as keyof typeof WALLET_TX_LABELS] ?? t.type}
                   </span>
                   <span className="block truncate text-[11px] font-semibold text-muted-foreground">
-                    {t.txnId} · {timeAgo(t.createdAt)}
+                    {fmtId(t.txnId)} · {timeAgo(t.createdAt)}
                     {t.referenceId ? ` · ${t.referenceId}` : ""}
                   </span>
                 </span>

@@ -11,6 +11,7 @@ import {
   formatDateTime,
 } from "@/components/fs/primitives";
 import { Button } from "@/components/ui/button";
+import { fmtId } from "@/lib/utils";
 import { useQuery } from "convex/react";
 import { Download, Share2 } from "lucide-react";
 import { useNavigate, useParams } from "react-router";
@@ -50,7 +51,7 @@ export default function Receipt() {
   const { receipt, client, loan, staff, branch, nextDue, overdueAmount } = data;
 
   const share = async () => {
-    const text = `KIRAT MICRO CREDIT receipt ${receipt.number} — ₹${receipt.amount.toLocaleString("en-IN")} (${receipt.mode}) from ${client?.name ?? "client"} on ${formatDate(receipt.createdAt)}. Outstanding after payment: ₹${receipt.outstandingAfter.toLocaleString("en-IN")}.`;
+    const text = `KIRAT MICRO CREDIT receipt ${fmtId(receipt.number)} — ₹${receipt.amount.toLocaleString("en-IN")} (${receipt.mode}) from ${client?.name ?? "client"} on ${formatDate(receipt.createdAt)}. Outstanding after payment: ₹${receipt.outstandingAfter.toLocaleString("en-IN")}.`;
     try {
       if (navigator.share) await navigator.share({ text });
       else await navigator.clipboard.writeText(text);
@@ -64,7 +65,7 @@ export default function Receipt() {
     <div className="space-y-4 pb-6">
       <PageHeader
         title="Payment receipt"
-        subtitle={receipt.number}
+        subtitle={fmtId(receipt.number)}
         back
         action={<StatusChip status={receipt.mode === "CASH" ? "CASH" : receipt.mode} label={receipt.mode} tone="info" />}
       />
@@ -98,9 +99,9 @@ export default function Receipt() {
           </div>
 
           <div className="mt-4">
-            <KeyValue k="Receipt no." v={<span className="font-mono">{receipt.number}</span>} mono />
+            <KeyValue k="Receipt no." v={<span className="font-mono">{fmtId(receipt.number)}</span>} mono />
             <KeyValue k="Date" v={formatDateTime(receipt.createdAt)} />
-            <KeyValue k="Client" v={client ? `${client.name} (${client.code})` : "—"} />
+            <KeyValue k="Client" v={client ? `${client.name} (${fmtId(client.code)})` : "—"} />
             <KeyValue k="Loan" v={<span className="font-mono">{loan?.loanId ?? "—"}</span>} mono />
             <KeyValue k="Collected by" v={staff?.name ?? "—"} />
             <KeyValue
@@ -152,7 +153,7 @@ export default function Receipt() {
       </div>
 
       <div className="flex justify-center gap-2 print:hidden">
-        <CopyableCode value={receipt.number} />
+        <CopyableCode value={fmtId(receipt.number)} />
       </div>
     </div>
   );

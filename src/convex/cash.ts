@@ -357,9 +357,10 @@ export const requestHandover = mutation({
       .withIndex("by_profile", (q) => q.eq("profileId", me._id))
       .unique();
 
-    const code = `CH-${String(
+    const code = `CH${String(
       (await ctx.db.query("cashHandovers").collect()).reduce(
-        (max, h) => Math.max(max, Number(h.code.split("-")[1] ?? 0)),
+        (max, h) =>
+          Math.max(max, Number(String(h.code).replace(/\D/g, "") || 0)),
         0,
       ) + 1,
     ).padStart(5, "0")}`;
@@ -569,9 +570,10 @@ export const issueCash = mutation({
     const amount = money(args.amount, "amount");
     const now = Date.now();
 
-    const code = `CI-${String(
+    const code = `CI${String(
       (await ctx.db.query("cashIssues").collect()).reduce(
-        (max, i) => Math.max(max, Number(i.code.split("-")[1] ?? 0)),
+        (max, i) =>
+          Math.max(max, Number(String(i.code).replace(/\D/g, "") || 0)),
         0,
       ) + 1,
     ).padStart(5, "0")}`;
@@ -673,9 +675,10 @@ export const submitExpense = mutation({
       if (existing) return { ok: true, duplicate: true };
     }
 
-    const code = `EX-${String(
+    const code = `EX${String(
       (await ctx.db.query("expenses").collect()).reduce(
-        (max, e) => Math.max(max, Number(e.code.split("-")[1] ?? 0)),
+        (max, e) =>
+          Math.max(max, Number(String(e.code).replace(/\D/g, "") || 0)),
         0,
       ) + 1,
     ).padStart(5, "0")}`;

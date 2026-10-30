@@ -8,7 +8,7 @@ import {
   formatDateTime,
 } from "@/components/fs/primitives";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { cn, fmtId } from "@/lib/utils";
 import { useQuery } from "convex/react";
 import { ArrowRight, GitBranch, ShieldCheck } from "lucide-react";
 import React, { type ReactNode } from "react";
@@ -29,9 +29,9 @@ const ENTITIES = [
 ];
 
 const KINDS = [
-  { id: "collection", label: "Collection (code PY-…)" },
-  { id: "loan", label: "Loan (LN-…)" },
-  { id: "receipt", label: "Receipt (RCPT-…)" },
+  { id: "collection", label: "Collection (code PY…)" },
+  { id: "loan", label: "Loan (LN…)" },
+  { id: "receipt", label: "Receipt (RCPT…)" },
   { id: "walletTxn", label: "Wallet txn reference" },
 ];
 
@@ -184,7 +184,7 @@ export default function Audit() {
                       </span>
                       <span className="block truncate text-[11px] font-semibold text-muted-foreground">
                         {a.actorName} ({a.role}) · {a.entity}
-                        {a.entityId ? ` · ${a.entityId}` : ""}
+                        {a.entityId ? ` · ${fmtId(a.entityId)}` : ""}
                       </span>
                     </span>
                     <span className="shrink-0 text-[10px] font-black uppercase text-muted-foreground">
@@ -234,11 +234,11 @@ export default function Audit() {
                 onChange={(e) => setId(e.target.value)}
                 placeholder={
                   kind === "collection"
-                    ? "PY-000123"
+                    ? "PY000123"
                     : kind === "loan"
-                      ? "LN-000123"
+                      ? "LN000123"
                       : kind === "receipt"
-                        ? "RCPT-061026-0001"
+                        ? "RCPT0610260001"
                         : "wallet reference id"
                 }
                 className="h-11 w-full border-2 border-ink bg-white px-3 font-mono text-sm font-bold outline-none"
@@ -271,7 +271,7 @@ export default function Audit() {
               fallback={
                 <div className="border-2 border-ink bg-blush p-4 text-xs font-bold">
                   Could not trace that reference. Check the ID and try again —
-                  collection codes start with PY-, loans with LN-.
+                  collection codes start with PY, loans with LN.
                 </div>
               }
             >

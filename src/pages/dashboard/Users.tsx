@@ -19,7 +19,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { useProfile } from "@/hooks/use-profile";
 import { ROLE_LABELS, type FsRole } from "@/lib/finance/types";
-import { cn } from "@/lib/utils";
+import { cn, fmtId } from "@/lib/utils";
 import { useMutation, useQuery } from "convex/react";
 import { Ban, Lock, RotateCcw, Search, ShieldAlert, Trash2 } from "lucide-react";
 import { useState } from "react";
@@ -212,7 +212,7 @@ function UserManager() {
       const row = pending.target.row;
       void run(
         () => removeStaff({ profileId: row._id, reason: reason.trim() || undefined }),
-        `${row.name} (${row.staffId}) removed — sessions revoked`,
+        `${row.name} (${fmtId(row.staffId)}) removed — sessions revoked`,
       );
       return;
     }
@@ -220,7 +220,7 @@ function UserManager() {
       const row = pending.target.row;
       void run(
         () => removeClient({ clientId: row._id, reason: reason.trim() || undefined }),
-        `${row.name} (${row.code}) removed from the book`,
+        `${row.name} (${fmtId(row.code)}) removed from the book`,
       );
       return;
     }
@@ -233,7 +233,7 @@ function UserManager() {
             status: pending.next as string,
             reason: reason.trim(),
           }),
-        `${row.name} (${row.staffId}) is now ${pending.next.toLowerCase()}`,
+        `${row.name} (${fmtId(row.staffId)}) is now ${pending.next.toLowerCase()}`,
       );
     }
   };
@@ -366,7 +366,7 @@ function UserManager() {
                     {row.isSelf ? " · you" : ""}
                   </span>
                   <span className="block text-[11px] font-semibold text-muted-foreground">
-                    {row.staffId} · {ROLE_LABELS[row.role as FsRole] ?? row.role} ·{" "}
+                    {fmtId(row.staffId)} · {ROLE_LABELS[row.role as FsRole] ?? row.role} ·{" "}
                     {row.branch?.name ?? "All branches"}
                   </span>
                 </span>
@@ -414,7 +414,7 @@ function UserManager() {
               <span className="min-w-0">
                 <span className="block truncate text-sm font-black">{row.name}</span>
                 <span className="block text-[11px] font-semibold text-muted-foreground">
-                  {row.code} · {row.village} · {row.mobile}
+                  {fmtId(row.code)} · {row.village} · {row.mobile}
                 </span>
                 <span className="mt-1 flex flex-wrap gap-1">
                   <StatusChip status={row.kycStatus} label={`KYC ${row.kycStatus.toLowerCase()}`} />
@@ -459,8 +459,8 @@ function UserManager() {
         subtitle={
           selected
             ? selected.kind === "staff"
-              ? `${selected.row.staffId} · ${ROLE_LABELS[selected.row.role as FsRole] ?? selected.row.role}`
-              : `${selected.row.code} · client`
+              ? `${fmtId(selected.row.staffId)} · ${ROLE_LABELS[selected.row.role as FsRole] ?? selected.row.role}`
+              : `${fmtId(selected.row.code)} · client`
             : ""
         }
       >
@@ -471,7 +471,7 @@ function UserManager() {
               <StatusChip label={selected.row.role} />
             </div>
             <div>
-              <KeyValue k="System ID" v={selected.row.staffId} mono />
+              <KeyValue k="System ID" v={fmtId(selected.row.staffId)} mono />
               <KeyValue k="Branch" v={selected.row.branch?.name ?? "Organization-wide"} />
               <KeyValue k="Mobile" v={selected.row.mobile ?? "—"} mono />
               <KeyValue k="Email" v={selected.row.email ?? "—"} />
@@ -555,7 +555,7 @@ function UserManager() {
               <StatusChip status={selected.row.status} />
             </div>
             <div>
-              <KeyValue k="Client code" v={selected.row.code} mono />
+              <KeyValue k="Client code" v={fmtId(selected.row.code)} mono />
               <KeyValue k="Mobile" v={selected.row.mobile} mono />
               <KeyValue k="Village" v={`${selected.row.village}, ${selected.row.district}`} />
               <KeyValue k="Assigned to" v={selected.row.staffName} />

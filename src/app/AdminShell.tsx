@@ -6,7 +6,7 @@ import {
 } from "@/components/fs/primitives";
 import { BottomSheet } from "@/components/fs/primitives";
 import { useProfile } from "@/hooks/use-profile";
-import { cn } from "@/lib/utils";
+import { cn, fmtId } from "@/lib/utils";
 import { useMutation, useQuery } from "convex/react";
 import {
   AlertTriangle,
@@ -296,7 +296,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
               <DropdownMenuLabel className="px-3 py-2.5">
                 <p className="truncate text-sm font-black">{profile?.name}</p>
                 <p className="truncate font-mono text-[10px] font-bold uppercase text-muted-foreground">
-                  {profile?.staffId}
+                  {fmtId(profile?.staffId)}
                 </p>
                 <p className="truncate text-[11px] font-semibold text-muted-foreground">
                   {profile?.branch?.name ?? "Organization-wide"} ·{" "}
@@ -387,7 +387,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
           <input
             autoFocus
             value={q}
-            onChange={(e) => setQ(e.target.value)}             placeholder="000128, LN-000001, Rahul…"
+            onChange={(e) => setQ(e.target.value)}             placeholder="000128, LN000001, Rahul…"
             className="h-11 w-full bg-transparent px-3 text-sm font-bold outline-none"
           />
         </div>

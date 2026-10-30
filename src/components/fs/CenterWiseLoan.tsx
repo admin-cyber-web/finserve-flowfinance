@@ -8,6 +8,7 @@ import {
   StatusChip,
 } from "@/components/fs/primitives";
 import { Button } from "@/components/ui/button";
+import { fmtId } from "@/lib/utils";
 import { useMutation, useQuery } from "convex/react";
 import { Check, CheckCircle2, Search, Users } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -18,9 +19,11 @@ import { toast } from "sonner";
  * Centre-Wise Loan Disbursement — the PRIMARY path of the New Loan flow.
  *
  * SEARCH ONLY: the screen lists nothing by default — no centres, no member
- * counts, no client rows. The user enters a Center ID (BALLIA-001) and/or a
+ * counts, no client rows. The user enters a unique six-digit Center ID
+ * (e.g. 257510) and/or a
  * Client ID and presses Search; the BACKEND resolves and filters the records
- * (the browser never receives the full directory to hide). A search needs at
+ * (the browser never receives the full directory to hide). The Center ID is
+ * a unique six-digit number (e.g. 257510) and/or a Client ID; a search needs at
  * least one field, matches only what was asked for, and results appear only
  * after a successful search.
  *
@@ -173,7 +176,7 @@ export function CenterWiseLoan() {
             <input
               value={centerIdInput}
               onChange={(e) => setCenterIdInput(e.target.value)}
-              placeholder="e.g. BALLIA-001"
+              placeholder="e.g. 257510"
               aria-label="Center ID"
               className={inputCls}
             />
@@ -224,7 +227,7 @@ export function CenterWiseLoan() {
                   {results.center.name}
                 </span>
                 <span className="shrink-0 border-2 border-ink bg-navy px-2 py-0.5 font-mono text-[10px] font-black text-gold">
-                  {results.center.code}
+                  {fmtId(results.center.code)}
                 </span>
               </div>
               <div className="mt-1 text-[11px] font-semibold text-muted-foreground">
@@ -245,7 +248,7 @@ export function CenterWiseLoan() {
                   {results.client.name}
                 </span>
                 <span className="font-mono text-[11px] font-bold text-muted-foreground">
-                  {results.client.code}
+                  {fmtId(results.client.code)}
                 </span>
                 <StatusChip
                   label={results.client.kycStatus}
@@ -356,7 +359,7 @@ export function CenterWiseLoan() {
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="text-sm font-black">{r.client.name}</span>
                           <span className="font-mono text-[11px] font-bold text-muted-foreground">
-                            {r.client.code}
+                            {fmtId(r.client.code)}
                           </span>
                           <StatusChip
                             label={r.client.kycStatus}
@@ -370,7 +373,7 @@ export function CenterWiseLoan() {
                           />
                           {r.pendingApplication && (
                             <StatusChip
-                              label={`Pending ${r.pendingApplication.appId}`}
+                              label={`Pending ${fmtId(r.pendingApplication.appId)}`}
                               tone="warn"
                             />
                           )}
@@ -447,8 +450,7 @@ export function CenterWiseLoan() {
               <div className="text-[9px] font-black uppercase text-paper/60">
                 Centre
               </div>
-              <div className="text-sm font-black">
-                {roster.center.name} ({roster.center.code})
+              <div className="text-sm font-black">                  {roster.center.name} ({fmtId(roster.center.code)})
               </div>
             </div>
             <div className="border-2 border-paper/30 p-2">
@@ -495,7 +497,7 @@ export function CenterWiseLoan() {
                 <span className="min-w-0 truncate">
                   {r.client.name}{" "}
                   <span className="font-mono text-muted-foreground">
-                    {r.client.code}
+                    {fmtId(r.client.code)}
                   </span>
                 </span>
                 <span className="shrink-0 font-mono tabular-nums">
@@ -523,7 +525,7 @@ export function CenterWiseLoan() {
       {result && (
         <section className="space-y-3 border-2 border-ink bg-card p-4 shadow-hard-sm">
           <SectionTitle>
-            Batch report — {result.centerName} ({result.centerCode})
+            Batch report — {result.centerName} ({fmtId(result.centerCode)})
           </SectionTitle>
           {result.createdCount > 0 && (
             <div>
@@ -539,10 +541,10 @@ export function CenterWiseLoan() {
                     <span className="min-w-0 truncate">
                       {c.name}{" "}
                       <span className="font-mono text-muted-foreground">
-                        {c.code}
+                        {fmtId(c.code)}
                       </span>
                     </span>
-                    <span className="font-mono font-black">{c.appId}</span>
+                    <span className="font-mono font-black">{fmtId(c.appId)}</span>
                   </div>
                 ))}
               </div>
@@ -560,7 +562,7 @@ export function CenterWiseLoan() {
                     className="border-2 border-ink bg-blush px-2 py-1.5 text-[11px] font-bold"
                   >
                     <span className="font-black">{s.name}</span>{" "}
-                    <span className="font-mono">({s.code})</span> — {s.reason}
+                    <span className="font-mono">({fmtId(s.code)})</span> — {s.reason}
                   </div>
                 ))}
               </div>
@@ -599,7 +601,7 @@ export function CenterWiseLoan() {
                 </span>{" "}
                 each for members of{" "}
                 <span className="font-black">
-                  {roster.center.name} ({roster.center.code})
+                  {roster.center.name} ({fmtId(roster.center.code)})
                 </span>{" "}
                 at {roster.terms.interestRate}% reducing balance over{" "}
                 {roster.terms.tenure} weekly installments? Each request goes to

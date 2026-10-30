@@ -23,6 +23,7 @@ import {
 import { useProfile } from "@/hooks/use-profile";
 import { formatINR } from "@/lib/finance/money";
 import { LOAN_STATUS_LABELS, RECOVERY_LABELS } from "@/lib/finance/types";
+import { fmtId } from "@/lib/utils";
 import { useMutation, useQuery } from "convex/react";
 import {
   Camera,
@@ -94,7 +95,7 @@ export default function ClientDetail() {
     <div className="space-y-4">
       <PageHeader
         title={client.name}
-        subtitle={`${client.code} · ${client.village} · ${client.mobile}`}
+        subtitle={`${fmtId(client.code)} · ${client.village} · ${client.mobile}`}
         back="/dashboard/clients"
         action={<StatusChip status={client.kycStatus} label={`KYC ${client.kycStatus.toLowerCase()}`} />}
       />
@@ -190,7 +191,7 @@ export default function ClientDetail() {
             {data.center && (
               <KeyValue
                 k="Centre"
-                v={`${data.center.code} · ${data.center.name}`}
+                v={`${fmtId(data.center.code)} · ${data.center.name}`}
                 mono
               />
             )}
@@ -632,7 +633,7 @@ export default function ClientDetail() {
                   className="flex w-full items-center justify-between gap-3 border-2 border-ink bg-card p-3 text-left shadow-hard-sm active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
                 >
                   <span className="min-w-0">
-                    <span className="block font-mono text-sm font-black">{loan.loanId}</span>
+                    <span className="block font-mono text-sm font-black">{fmtId(loan.loanId)}</span>
                     <span className="block text-[11px] font-semibold text-muted-foreground">
                       {LOAN_STATUS_LABELS[loan.status] ?? loan.status} · {loan.frequency.toLowerCase()} ·{" "}
                       {loan.interestRate}% {loan.interestMethod.toLowerCase()}
@@ -671,7 +672,7 @@ export default function ClientDetail() {
                     </span>
                   </p>
                   <p className="text-[11px] font-semibold text-muted-foreground">
-                    {p.receiptNumber ?? p.code} · {formatDateTime(p.createdAt)}
+                    {fmtId(p.receiptNumber ?? p.code)} · {formatDateTime(p.createdAt)}
                   </p>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
@@ -819,7 +820,7 @@ export default function ClientDetail() {
       </Tabs>
 
       <div className="flex items-center justify-center gap-2 text-[11px] font-black uppercase text-muted-foreground">
-        Client ID <CopyableCode value={client.code} />
+        Client ID <CopyableCode value={fmtId(client.code)} />
       </div>
     </div>
   );

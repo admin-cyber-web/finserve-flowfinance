@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { useProfile } from "@/hooks/use-profile";
 import { PERMISSION_LABELS, type Permission } from "@/lib/finance/permissions";
 import { ROLE_LABELS, WALLET_TX_LABELS, type FsRole, type WalletTxType } from "@/lib/finance/types";
-import { cn } from "@/lib/utils";
+import { cn, fmtId } from "@/lib/utils";
 import { useMutation, useQuery } from "convex/react";
 import { LogOut, ShieldCheck, Smartphone, Wallet } from "lucide-react";
 import { useState } from "react";
@@ -49,7 +49,7 @@ export default function Profile() {
           <div className="min-w-0">
             <div className="truncate text-lg font-black leading-tight">{profile.name}</div>
             <div className="font-mono text-[11px] font-bold uppercase text-gold">
-              {profile.staffId}
+              {fmtId(profile.staffId)}
             </div>
             <div className="truncate text-[11px] font-semibold text-paper/70">
               {profile.branch?.name ?? "No branch"} · {user?.email ?? "signed-in session"}
@@ -137,7 +137,7 @@ export default function Profile() {
                       {WALLET_TX_LABELS[t.type as WalletTxType] ?? t.type}
                     </p>
                     <p className="truncate text-[10px] font-semibold text-muted-foreground">
-                      {t.referenceId ?? t.txnId} · {timeAgo(t.createdAt)}
+                      {fmtId(t.referenceId ?? t.txnId)} · {timeAgo(t.createdAt)}
                     </p>
                   </div>
                   <div className="text-right">

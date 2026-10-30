@@ -12,7 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { formatINR } from "@/lib/finance/money";
 import { LEDGER_TYPE_LABELS } from "@/lib/finance/statement";
-import { cn } from "@/lib/utils";
+import { cn, fmtId } from "@/lib/utils";
 import { useQuery } from "convex/react";
 import {
   Download,
@@ -183,7 +183,7 @@ export default function ClientStatement() {
     ]);
     const meta: (string | number)[][] = [
       ["Organisation", "KIRAT MICRO CREDIT"],
-      ["Client", `${data.client.code} — ${data.client.name}`],
+      ["Client", `${fmtId(data.client.code)} — ${data.client.name}`],
       ["Loan", data.selected?.loanId ?? "Combined (all loans)"],
       [
         "Period",
@@ -208,7 +208,7 @@ export default function ClientStatement() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `kirat-statement_${data.client.code}_${data.selected?.loanId ?? "all-loans"}_${data.period ? `${data.period.fromKey}_to_${data.period.toKey}` : "full"}.csv`;
+    a.download = `kirat-statement_${fmtId(data.client.code)}_${fmtId(data.selected?.loanId ?? "") || "all-loans"}_${data.period ? `${data.period.fromKey}_to_${data.period.toKey}` : "full"}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -301,9 +301,9 @@ export default function ClientStatement() {
   <div><span>PAN</span><br>${htmlEsc(data.revealAllowed && reveal && c.pan ? c.pan : orNA(c.panMasked))}</div>
   <div><span>Voter ID</span><br>${htmlEsc(data.revealAllowed && reveal && c.voter ? c.voter : orNA(c.voterMasked))}</div>
   <div><span>KYC status</span><br>${htmlEsc(c.kycStatus)}</div>
-  <div><span>Centre</span><br>${htmlEsc(c.center ? `${c.center.code} · ${orNA(c.center.name)}` : NA)}</div>
-  <div><span>Group</span><br>${htmlEsc(c.group ? `${c.group.code} · ${orNA(c.group.name)}` : NA)}</div>
-  <div><span>Branch</span><br>${htmlEsc(c.branch ? `${c.branch.code} · ${orNA(c.branch.name)}` : NA)}</div>
+  <div><span>Centre</span><br>${htmlEsc(c.center ? `${fmtId(c.center.code)} · ${orNA(c.center.name)}` : NA)}</div>
+  <div><span>Group</span><br>${htmlEsc(c.group ? `${fmtId(c.group.code)} · ${orNA(c.group.name)}` : NA)}</div>
+  <div><span>Branch</span><br>${htmlEsc(c.branch ? `${fmtId(c.branch.code)} · ${orNA(c.branch.name)}` : NA)}</div>
   <div><span>Account opened</span><br>${htmlEsc(formatDate(c.createdAt))}</div>
   <div><span>Registered by</span><br>${htmlEsc(c.registeredBy ? `${c.registeredBy.name} (${c.registeredBy.profileId})` : NA)}</div>
 </div>
@@ -367,7 +367,7 @@ ${upcoming}
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="000128 · LN-000123"
+              placeholder="000128 · LN000123"
               className={cn(INPUT_CLS, "mt-1 font-mono")}
             />
           </label>
@@ -396,7 +396,7 @@ ${upcoming}
                   clientId === m.clientId && "bg-sky",
                 )}
               >
-                <span className="font-mono text-xs font-black">{m.code}</span>
+                <span className="font-mono text-xs font-black">{fmtId(m.code)}</span>
                 <span className="min-w-0 flex-1 truncate text-sm font-bold">
                   {m.name}
                 </span>
@@ -417,7 +417,7 @@ ${upcoming}
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-2 border-ink bg-mint px-3 py-2">
             <span className="flex items-center gap-2 text-xs font-black uppercase">
               <UserRound className="size-4" />
-              {search.matches[0].code} · {search.matches[0].name}
+              {fmtId(search.matches[0].code)} · {search.matches[0].name}
             </span>
             <Button
               variant="outline"
@@ -600,7 +600,7 @@ ${upcoming}
                     {repayment.upcoming.map((u) => (
                       <tr key={`${u.loanId}-${u.index}`} className="hover:bg-sky/40">
                         <td className={cn(TD_CLS, "font-mono whitespace-nowrap")}>
-                          {u.loanId}
+                          {fmtId(u.loanId)}
                         </td>
                         <td className={cn(TD_CLS, "text-center font-black")}>
                           {u.index}
@@ -651,7 +651,7 @@ ${upcoming}
                     loanDbId === l._id ? "bg-navy text-paper" : "bg-white",
                   )}
                 >
-                  {l.loanId}
+                  {fmtId(l.loanId)}
                 </button>
               ))}
             </div>
@@ -674,7 +674,7 @@ ${upcoming}
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-mono text-sm font-black">
-                    {data.client.code}
+                    {fmtId(data.client.code)}
                   </span>
                   <span className="text-base font-black">
                     {data.client.name}
@@ -757,7 +757,7 @@ ${upcoming}
                     k="Centre"
                     v={
                       data.client.center
-                        ? `${data.client.center.code} · ${orNA(data.client.center.name)}`
+                        ? `${fmtId(data.client.center.code)} · ${orNA(data.client.center.name)}`
                         : NA
                     }
                   />
@@ -765,7 +765,7 @@ ${upcoming}
                     k="Group"
                     v={
                       data.client.group
-                        ? `${data.client.group.code} · ${orNA(data.client.group.name)}`
+                        ? `${fmtId(data.client.group.code)} · ${orNA(data.client.group.name)}`
                         : NA
                     }
                   />
@@ -773,7 +773,7 @@ ${upcoming}
                     k="Branch"
                     v={
                       data.client.branch
-                        ? `${data.client.branch.code} · ${orNA(data.client.branch.name)}`
+                        ? `${fmtId(data.client.branch.code)} · ${orNA(data.client.branch.name)}`
                         : NA
                     }
                   />
@@ -805,7 +805,7 @@ ${upcoming}
             <div className="space-y-3">
               <SectionTitle>Loan details</SectionTitle>
               {data.loans.map((l) => (
-                <Card key={l._id} title={`Loan ${l.loanId}`}>
+                <Card key={l._id} title={`Loan ${fmtId(l.loanId)}`}>
                   <div className="flex flex-wrap items-center gap-2">
                     <StatusChip status={l.displayStatus} />
                     {l.product && (
@@ -928,7 +928,7 @@ ${upcoming}
                           {formatDate(r.date)}
                         </td>
                         <td className={cn(TD_CLS, "font-mono whitespace-nowrap")}>
-                          {r.reference}
+                          {fmtId(r.reference)}
                         </td>
                         <td className={cn(TD_CLS, "whitespace-nowrap")}>
                           {LEDGER_TYPE_LABELS[r.type]}

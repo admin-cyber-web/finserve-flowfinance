@@ -615,7 +615,7 @@ const schema = defineSchema(
     }).index("by_branch", ["branchId"]),
 
     groups: defineTable({
-      code: v.string(), // GRP-MDG
+      code: v.string(), // GRPMDG
       name: v.string(),
       centerId: v.id("centers"),
       branchId: v.id("branches"),
