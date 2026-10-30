@@ -104,7 +104,7 @@ const schema = defineSchema(
     }).index("by_profile", ["profileId"]),
 
     walletTransactions: defineTable({
-      txnId: v.string(), // WT-000001
+      txnId: v.string(), // WT000001
       walletId: v.id("wallets"),
       profileId: v.id("profiles"),
       branchId: v.id("branches"),
@@ -131,7 +131,7 @@ const schema = defineSchema(
     /* -------------------------------- Clients ------------------------------ */
 
     clients: defineTable({
-      code: v.string(), // C-000128
+      code: v.string(), // 000128 (legacy C-000128 still matches)
       name: v.string(),
       fatherName: v.optional(v.string()),
       // Applicant's own father name — kept separate from the legacy
@@ -245,7 +245,7 @@ const schema = defineSchema(
       verifiedAt: v.optional(v.number()),
       centerCode: v.optional(v.string()),
       // Permanent database reference to the centre (set once when the client
-      // is linked; centerCode holds the generated ID e.g. BALLIA-001).
+      // is linked; centerCode holds the generated ID, e.g. 257510).
       centerId: v.optional(v.id("centers")),
       groupCode: v.optional(v.string()),
       status: v.string(), // ACTIVE | INACTIVE
@@ -349,7 +349,7 @@ const schema = defineSchema(
     }).index("by_code", ["code"]),
 
     loanApplications: defineTable({
-      appId: v.string(), // LA-000123
+      appId: v.string(), // LA000123
       clientId: v.id("clients"),
       // Loan products were removed; kept optional so historical documents
       // still validate while new applications carry none.
@@ -385,7 +385,7 @@ const schema = defineSchema(
     /* --------------------------------- Loans ------------------------------- */
 
     loans: defineTable({
-      loanId: v.string(), // LN-000123
+      loanId: v.string(), // LN000123
       applicationId: v.optional(v.id("loanApplications")),
       clientId: v.id("clients"),
       // Optional: loans created after the catalogue was removed store the
@@ -458,7 +458,7 @@ const schema = defineSchema(
     /* ------------------------------ Collections ---------------------------- */
 
     collections: defineTable({
-      code: v.string(), // PY-000123
+      code: v.string(), // PY000123
       loanId: v.id("loans"),
       scheduleId: v.optional(v.id("loanSchedules")),
       clientId: v.id("clients"),
@@ -486,7 +486,7 @@ const schema = defineSchema(
       .index("by_created", ["createdAt"]),
 
     receipts: defineTable({
-      number: v.string(), // RCPT-261006-0007
+      number: v.string(), // RCPT2610060007
       loanId: v.id("loans"),
       clientId: v.id("clients"),
       collectionId: v.id("collections"),
@@ -504,7 +504,7 @@ const schema = defineSchema(
     /* --------------------------- Cash management --------------------------- */
 
     cashHandovers: defineTable({
-      code: v.string(), // CH-0001
+      code: v.string(), // CH0001
       staffId: v.id("profiles"),
       branchId: v.id("branches"),
       amount: v.number(),
@@ -522,7 +522,7 @@ const schema = defineSchema(
       .index("by_branch", ["branchId"]),
 
     cashIssues: defineTable({
-      code: v.string(), // CI-0001
+      code: v.string(), // CI0001
       staffId: v.id("profiles"),
       branchId: v.id("branches"),
       bmId: v.id("profiles"),
@@ -558,7 +558,7 @@ const schema = defineSchema(
       .index("by_status", ["status"]),
 
     expenses: defineTable({
-      code: v.string(), // EX-0001
+      code: v.string(), // EX0001
       profileId: v.id("profiles"),
       branchId: v.id("branches"),
       amount: v.number(),
@@ -583,7 +583,7 @@ const schema = defineSchema(
     }).index("by_code", ["code"]),
 
     journalEntries: defineTable({
-      entryId: v.string(), // JE-000001
+      entryId: v.string(), // JE000001
       dateKey: v.string(),
       memo: v.string(),
       refType: v.string(),

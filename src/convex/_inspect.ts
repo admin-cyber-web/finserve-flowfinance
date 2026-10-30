@@ -1,6 +1,10 @@
 import { v } from "convex/values";
 import { query, mutation, internalMutation } from "./_generated/server";
-import type { Doc, TableNames } from "./_generated/dataModel";
+import type { Doc, Id, TableNames } from "./_generated/dataModel";
+import { nextCenterCode } from "../lib/server/centerOps";
+import { idQueryMatches } from "../lib/server/idMatch";
+import { nextStaffNumber } from "../lib/server/convexHelpers";
+import { hashCredential } from "../lib/server/credentials";
 
 const TABLES: TableNames[] = [
   "users",
@@ -180,7 +184,8 @@ export const walletTxSample = query({
 
 /**
  * One-off test harness: create a client AS the BM-10002 profile.
- * Creates a centre first (BALLIA-001) via the same centre-creation logic,
+ * Creates a centre first (unique six-digit Centre ID, e.g. 257510) via the
+ * same centre-creation logic,
  * then creates a client linked to it. Used to verify the centre→client flow
  * runs end-to-end with the BM's permissions. Delete after the test.
  */
@@ -217,19 +222,7 @@ export const testCreateClientAsBm = internalMutation({
     );
     if (dup) throw new Error("Centre already exists.");
 
-    const prefix = args.centerName.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 12);
-    const centerSeq = await ctx.db
-      .query("counters")
-      .withIndex("by_key", (q) => q.eq("key", `center:${knp._id}:${prefix}`))
-      .unique();
-    const centerSeqNum = centerSeq
-      ? centerSeq.value + 1
-      : 1;
-    await ctx.db.patch(
-      centerSeq?._id ?? (await ctx.db.insert("counters", { key: `center:${knp._id}:${prefix}`, value: 0 })),
-      { value: centerSeqNum },
-    );
-    const centerCode = `${prefix}-${String(centerSeqNum).padStart(3, "0")}`;
+    const centerCode = await nextCenterCode(ctx);
     const centerId = await ctx.db.insert("centers", {
       code: centerCode,
       name: args.centerName,
@@ -242,10 +235,10 @@ export const testCreateClientAsBm = internalMutation({
     // ---- create client ----
     const existingClients = await ctx.db.query("clients").collect();
     const maxCode = existingClients.reduce((max, c) => {
-      const n = Number(c.code.split("-")[1] ?? 0);
+      const n = Number(c.code.replace(/\D/g, "") || 0);
       return Number.isFinite(n) && n > max ? n : max;
     }, 0);
-    const clientCode = `C-${String(maxCode + 1).padStart(6, "0")}`;
+    const clientCode = String(maxCode + 1).padStart(6, "0");
 
     const clientId = await ctx.db.insert("clients", {
       code: clientCode,
@@ -328,7 +321,8 @@ export const runAsBm10002 = internalMutation({
             (c) =>
               c.searchText.includes(qterm) ||
               (digits.length >= 3 && c.mobile.includes(digits)) ||
-              c.code.toLowerCase().startsWith(qterm),
+              c.code.toLowerCase().startsWith(qterm) ||
+              idQueryMatches(c.code, q.search ?? ""),
           )
           .sort((a, b) => b.createdAt - a.createdAt)
           .map((c) => ({
@@ -456,6 +450,158 @@ export const runAsBm10002 = internalMutation({
  * (SA-00001) profile, so we can verify SUPER_ADMIN-only mutations via CLI.
  * Delete after the test.
  */
+/**
+ * One-off verification harness for the branch-visibility + ID-format task.
+ * Provisions the test staff (a FIELD_STAFF and a cross-branch BM),
+ * optionally grants the SUPER_ADMIN a temporary sign-in PIN (revocable via
+ * `clearSaPin`), seeds a legacy centre/client fixture for the migration and
+ * branch-repair tests, and can force the centre counter into a collision to
+ * prove the allocator skips used IDs. Delete after the test.
+ */
+export const setupVerification = internalMutation({
+  args: {
+    saPin: v.optional(v.string()),
+    clearSaPin: v.optional(v.boolean()),
+    seedLegacy: v.optional(v.boolean()),
+    forceCenterCounter: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const out: Record<string, unknown> = {};
+
+    const branches = await ctx.db.query("branches").collect();
+    const blw = branches.find((b) => b.code === "BLW");
+    const lko = branches.find((b) => b.code === "LKO");
+    if (!blw) throw new Error("BLW branch not found.");
+
+    const sa = await ctx.db
+      .query("profiles")
+      .withIndex("by_staffId", (q) => q.eq("staffId", "0001"))
+      .unique();
+    if (!sa) throw new Error("SUPER_ADMIN 0001 not found.");
+
+    // Temporary SUPER_ADMIN sign-in PIN for verification only.
+    if (args.clearSaPin) {
+      await ctx.db.patch(sa._id, { credentialHash: undefined });
+      out.saCredential = "cleared";
+    } else if (args.saPin) {
+      await ctx.db.patch(sa._id, {
+        credentialHash: await hashCredential(args.saPin.trim()),
+        failedLoginAttempts: 0,
+      });
+      out.saCredential = "set";
+    }
+
+    const ensureStaff = async (
+      name: string,
+      role: "FIELD_STAFF" | "BRANCH_MANAGER",
+      branchId: Id<"branches">,
+      pin: string,
+      mobile: string,
+    ) => {
+      const all = await ctx.db.query("profiles").collect();
+      const existing = all.find((p) => p.name === name && p.role === role);
+      if (existing) return { profileId: existing._id, staffId: existing.staffId };
+      const staffId = await nextStaffNumber(ctx);
+      const profileId = await ctx.db.insert("profiles", {
+        name,
+        mobile,
+        role,
+        branchId,
+        status: "ACTIVE",
+        staffId,
+        credentialHash: await hashCredential(pin),
+        joiningDate: now,
+        createdBy: sa._id,
+        createdAt: now,
+        failedLoginAttempts: 0,
+      });
+      return { profileId, staffId };
+    };
+
+    const fs = await ensureStaff(
+      "Raushan Mishra",
+      "FIELD_STAFF",
+      blw._id,
+      "448193",
+      "9000000001",
+    );
+    out.raushan = { ...fs, pin: "448193" };
+
+    if (lko) {
+      const cross = await ensureStaff(
+        "Meera Sharma",
+        "BRANCH_MANAGER",
+        lko._id,
+        "771142",
+        "9000000002",
+      );
+      out.crossBm = { ...cross, pin: "771142", branch: "LKO" };
+    }
+
+    // Legacy fixture: pre-migration centre ID + a client whose branch is
+    // deliberately wrong (LKO) while assigned to the BLW field staff, so the
+    // repair pass has something reliable to fix.
+    if (args.seedLegacy && lko) {
+      const centers = await ctx.db.query("centers").collect();
+      let legacy = centers.find((c) => c.code === "RAMNAGAR-001");
+      if (!legacy) {
+        const centerId = await ctx.db.insert("centers", {
+          code: "RAMNAGAR-001",
+          name: "Ramnagar Test Centre",
+          branchId: blw._id,
+          village: "Ramnagar",
+          staffId: fs.profileId,
+          createdAt: now,
+        });
+        legacy = (await ctx.db.get(centerId))!;
+        const clientId = await ctx.db.insert("clients", {
+          code: "C-000456",
+          name: "Legacy Devi",
+          age: 34,
+          gender: "FEMALE",
+          mobile: "9000000050",
+          village: "Ramnagar",
+          district: "Ballia",
+          state: "Uttar Pradesh",
+          pin: "277001",
+          occupation: "Agriculture",
+          monthlyIncome: 9000,
+          householdIncome: 14000,
+          familyMembers: 4,
+          branchId: lko._id,
+          assignedTo: fs.profileId,
+          createdBy: fs.profileId,
+          kycStatus: "PENDING",
+          status: "ACTIVE",
+          centerCode: "RAMNAGAR-001",
+          centerId,
+          searchText: "legacy devi 9000000050 c-000456 ramnagar",
+          createdAt: now,
+        });
+        out.legacy = { centerId, clientId, centerCode: "RAMNAGAR-001" };
+      } else {
+        out.legacy = { centerId: legacy._id, centerCode: legacy.code };
+      }
+    }
+
+    // Collision test: rewind the centre counter onto an already-used number.
+    if (args.forceCenterCounter) {
+      const n = Number(args.forceCenterCounter);
+      if (!Number.isFinite(n)) throw new Error("forceCenterCounter must be a number");
+      const counter = await ctx.db
+        .query("counters")
+        .withIndex("by_key", (q) => q.eq("key", "centers"))
+        .unique();
+      if (counter) await ctx.db.patch(counter._id, { value: n });
+      else await ctx.db.insert("counters", { key: "centers", value: n });
+      out.forcedCenterCounter = n;
+    }
+
+    return out;
+  },
+});
+
 export const runAsSuperAdmin = internalMutation({
   args: {
     mutationName: v.string(),

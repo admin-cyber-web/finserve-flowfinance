@@ -14,6 +14,7 @@ import {
   fixedScheduleInput,
 } from "../lib/server/loanTerms";
 import { idQueryMatches } from "../lib/server/idMatch";
+import { fmtId } from "../lib/utils";
 import {
   archiveLoan,
   baseScheduleRows,
@@ -775,17 +776,17 @@ export const submitCenterBatch = mutation({
       try {
         if (!client) throw new AppError("Client not found.");
         if (client.centerId !== center._id) {
-          throw new AppError(`${client.code} does not belong to this centre.`);
+          throw new AppError(`${fmtId(client.code)} does not belong to this centre.`);
         }
         if (me.role === "FIELD_STAFF" && client.assignedTo !== me._id) {
           throw new AppError("You can only apply for your own assigned clients.");
         }
         if (client.status !== "ACTIVE") {
-          throw new AppError(`${client.code} is ${client.status.toLowerCase()}.`);
+          throw new AppError(`${fmtId(client.code)} is ${client.status.toLowerCase()}.`);
         }
         if (client.kycStatus === "REJECTED") {
           throw new AppError(
-            `${client.code} — KYC rejected; re-verify before lending.`,
+            `${fmtId(client.code)} — KYC rejected; re-verify before lending.`,
           );
         }
         if (
@@ -796,7 +797,7 @@ export const submitCenterBatch = mutation({
           )
         ) {
           throw new AppError(
-            `${client.code} already has a pending loan application.`,
+            `${fmtId(client.code)} already has a pending loan application.`,
           );
         }
 
@@ -848,7 +849,7 @@ export const submitCenterBatch = mutation({
               actorName: me.name,
               role: me.role,
               action: "SUBMITTED",
-              remark: `Centre-wise disbursement — ${center.code} · ${center.name}${remark ? ` — ${remark}` : ""}`,
+              remark: `Centre-wise disbursement — ${fmtId(center.code)} · ${center.name}${remark ? ` — ${remark}` : ""}`,
               at: now,
             },
           ],
@@ -901,7 +902,7 @@ export const submitCenterBatch = mutation({
         ) {
           await notify(ctx, p._id, {
             title: "Centre-wise loan batch submitted",
-            body: `${created.length} loan request(s) at ₹${amount.toLocaleString("en-IN")} each — ${center.name} (${center.code}) from ${me.name}.`,
+            body: `${created.length} loan request(s) at ₹${amount.toLocaleString("en-IN")} each — ${center.name} (${fmtId(center.code)}) from ${me.name}.`,
             kind: "APPROVAL",
             link: `/dashboard/approvals`,
           });

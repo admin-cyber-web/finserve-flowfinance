@@ -18,6 +18,7 @@ import {
   issueEntry,
 } from "../lib/finance/journal";
 import { evaluateClosing } from "../lib/finance/cash";
+import { fmtId } from "../lib/utils";
 import { money, requiredString, optionalString, oneOf } from "../lib/finance/validate";
 
 const DAY = 86_400_000;
@@ -442,7 +443,7 @@ export const decideHandover = mutation({
       });
       await notify(ctx, handover.staffId, {
         title: "Handover rejected",
-        body: `${handover.code}: ${rejectReason ?? "no reason provided"}`,
+        body: `${fmtId(handover.code)}: ${rejectReason ?? "no reason provided"}`,
         kind: "HANDOVER",
       });
       return { ok: true, status: "REJECTED" };
@@ -475,7 +476,7 @@ export const decideHandover = mutation({
       ctx,
       handoverEntry({
         amount: handover.amount,
-        memo: `Cash handover ${handover.code} — accepted by ${me.name}`,
+        memo: `Cash handover ${fmtId(handover.code)} — accepted by ${me.name}`,
         refId: handover.code,
       }),
       { branchId: handover.branchId, createdBy: me._id, createdAt: now },
@@ -770,7 +771,7 @@ export const decideExpense = mutation({
         ctx,
         expenseEntry({
           amount: expense.amount,
-          memo: `Approved expense ${expense.code} — ${expense.category}`,
+          memo: `Approved expense ${fmtId(expense.code)} — ${expense.category}`,
           refId: expense.code,
         }),
         { branchId: expense.branchId, createdBy: me._id, createdAt: now },
@@ -789,8 +790,7 @@ export const decideExpense = mutation({
       branchId: expense.branchId,
     });
     await notify(ctx, expense.profileId, {
-      title: `Expense ${next.toLowerCase()}`,
-      body: `${expense.code} — ₹${expense.amount.toLocaleString("en-IN")}: ${next.toLowerCase()} by ${me.name}.`,
+      title: `Expense ${next.toLowerCase()}`,          body: `${fmtId(expense.code)} — ₹${expense.amount.toLocaleString("en-IN")}: ${next.toLowerCase()} by ${me.name}.`,
       kind: "SYSTEM",
     });
 

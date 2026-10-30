@@ -278,7 +278,7 @@ export default function StaffHome() {
                   </span>
                   <span className="block truncate text-[11px] font-semibold text-muted-foreground">
                     {fmtId(t.txnId)} · {timeAgo(t.createdAt)}
-                    {t.referenceId ? ` · ${t.referenceId}` : ""}
+                    {t.referenceId ? ` · ${fmtId(t.referenceId)}` : ""}
                   </span>
                 </span>
                 <span className="text-right">

@@ -16,7 +16,18 @@ export function cn(...inputs: ClassValue[]) {
  * must stay untouched.
  */
 export function fmtId(value: string | null | undefined): string {
-  return (value ?? "").replace(/-/g, "");
+  if (!value) return "";
+  // A bare institution-local date (YYYY-MM-DD) is a date, not an ID.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  // Compound references such as "CLOSING:ST-10008:2026-10-30" — de-hyphenate
+  // the ID segments only; date segments keep their hyphens.
+  if (value.includes(":")) {
+    return value
+      .split(":")
+      .map((seg) => (/^\d{4}-\d{2}-\d{2}/.test(seg) ? seg : seg.replace(/-/g, "")))
+      .join(":");
+  }
+  return value.replace(/-/g, "");
 }
 
 /**

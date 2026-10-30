@@ -939,7 +939,7 @@ export default function ClientNew() {
                   />
                 </label>
                 <p className="border-2 border-ink bg-sky p-2 text-[11px] font-bold">
-                  A unique Centre ID (e.g. BALLIA-001) is generated and saved
+                  A unique six-digit Centre ID (e.g. 257510) is generated and saved
                   with the centre.
                 </p>
                 <div className="flex gap-2">

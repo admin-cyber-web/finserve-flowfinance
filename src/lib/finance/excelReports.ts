@@ -16,6 +16,7 @@
 
 import { DAY_MS, IST_OFFSET_MS } from "./dateReport";
 import { rowOutstanding } from "./schedule";
+import { idQueryMatches } from "../server/idMatch";
 
 export interface DateBounds {
   from: number; // start of the From date (IST), inclusive
@@ -294,7 +295,9 @@ export function matchCollectionSearch(
     if (
       row.groupName.toLowerCase().includes(needle) ||
       row.groupId.toLowerCase().includes(needle) ||
-      row.loanId.toLowerCase().includes(needle)
+      row.loanId.toLowerCase().includes(needle) ||
+      // "LN-000123", "LN000123" and "000123" all resolve to the loan.
+      idQueryMatches(row.loanId, q ?? "")
     )
       out.push(row);
   }

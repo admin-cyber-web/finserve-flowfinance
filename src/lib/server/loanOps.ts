@@ -9,6 +9,7 @@
 import type { Doc, Id } from "../../convex/_generated/dataModel";
 import { collectionEntry, disbursementEntry } from "../finance/journal";
 import { round2 } from "../finance/money";
+import { fmtId } from "../utils";
 import {
   generateSchedule,
   rowOutstanding,
@@ -287,7 +288,7 @@ export async function disburseLoan(
       referenceId: loan.loanId,
       idempotencyKey: `disburse:${loan.loanId}`,
       createdBy: actor._id,
-      remarks: `Disbursed to ${client.name} (${client.code})`,
+      remarks: `Disbursed to ${client.name} (${fmtId(client.code)})`,
       createdAt: nowMs,
     });
   }
@@ -303,7 +304,7 @@ export async function disburseLoan(
       principal: loan.principal,
       fee: loan.charges,
       cashSource: "staff",
-      memo: `Loan disbursal ${loan.loanId} — ${client.name}`,
+      memo: `Loan disbursal ${fmtId(loan.loanId)} — ${client.name}`,
       refId: loan.loanId,
     }),
     { branchId: loan.branchId, createdBy: actor._id, createdAt: nowMs },
@@ -337,7 +338,7 @@ export async function disburseLoan(
 
   await notify(ctx, staff._id, {
     title: "Loan disbursed",
-    body: `${loan.loanId} — ₹${loan.principal.toLocaleString("en-IN")} disbursed to ${client.name}.`,
+    body: `${fmtId(loan.loanId)} — ₹${loan.principal.toLocaleString("en-IN")} disbursed to ${client.name}.`,
     kind: "LOAN",
     link: `/dashboard/loans/${loan._id}`,
   });
@@ -348,7 +349,7 @@ export async function disburseLoan(
     if (clientProfile) {
       await notify(ctx, clientProfile._id, {
         title: "Loan approved & disbursed",
-        body: `Your loan ${loan.loanId} has been disbursed. First installment ₹${rows[0]?.totalDue ?? 0} due ${new Date(rows[0]?.dueDate ?? nowMs).toLocaleDateString("en-IN")}.`,
+        body: `Your loan ${fmtId(loan.loanId)} has been disbursed. First installment ₹${rows[0]?.totalDue ?? 0} due ${new Date(rows[0]?.dueDate ?? nowMs).toLocaleDateString("en-IN")}.`,
         kind: "LOAN",
         link: `/dashboard/loans/${loan._id}`,
       });
@@ -419,7 +420,7 @@ export async function recordCollection(
   const loan = await ctx.db.get(args.loanId);
   if (!loan) throw new AppError("Loan not found.");
   if (!["ACTIVE", "OVERDUE", "DISBURSED"].includes(loan.status)) {
-    throw new AppError(`Loan ${loan.loanId} is ${loan.status} — no collections accepted.`);
+    throw new AppError(`Loan ${fmtId(loan.loanId)} is ${loan.status} — no collections accepted.`);
   }
 
   const rows = await ctx.db
@@ -475,7 +476,7 @@ export async function recordCollection(
         ? `wallet:${args.idempotencyKey}`
         : undefined,
       createdBy: args.actor._id,
-      remarks: `${args.mode} collection — ${loan.loanId}`,
+      remarks: `${args.mode} collection — ${fmtId(loan.loanId)}`,
       createdAt: nowMs,
     });
   }
@@ -504,7 +505,7 @@ export async function recordCollection(
       principal: allocation.principalPortion,
       interest: allocation.interestPortion,
       mode: args.mode,
-      memo: `Repayment ${collectionCode} — ${loan.loanId}`,
+      memo: `Repayment ${collectionCode} — ${fmtId(loan.loanId)}`,
       refId: collectionCode,
     }),
     { branchId: loan.branchId, createdBy: args.actor._id, createdAt: nowMs },
@@ -633,7 +634,7 @@ export async function reverseCollection(
   if (!loan) throw new AppError("Loan not found.");
   if (["CLOSED", "SETTLED", "SURRENDERED", "WRITTEN_OFF"].includes(loan.status)) {
     throw new AppError(
-      `Loan ${loan.loanId} is ${loan.status.toLowerCase()} — a resolved loan cannot be reopened by reversing a payment.`,
+      `Loan ${fmtId(loan.loanId)} is ${loan.status.toLowerCase()} — a resolved loan cannot be reopened by reversing a payment.`,
     );
   }
 
@@ -650,7 +651,7 @@ export async function reverseCollection(
     principalPortion: original.principalPortion,
     interestPortion: original.interestPortion,
     mode: original.mode,
-    remarks: `REVERSAL of ${original.code}: ${reason}`,
+    remarks: `REVERSAL of ${fmtId(original.code)}: ${reason}`,
     status: "REVERSAL",
     reversalOfId: original._id,
     createdAt: nowMs,
@@ -672,7 +673,7 @@ export async function reverseCollection(
       referenceType: "COLLECTION",
       referenceId: reversalCode,
       createdBy: actor._id,
-      remarks: `Reversal of ${original.code} — ${reason}`,
+      remarks: `Reversal of ${fmtId(original.code)} — ${reason}`,
       createdAt: nowMs,
     });
   }
@@ -705,7 +706,7 @@ export async function reverseCollection(
   await writeJournal(
     ctx,
     {
-      memo: `Reversal of ${original.code} — ${reason}`,
+      memo: `Reversal of ${fmtId(original.code)} — ${reason}`,
       refType: "REVERSAL",
       refId: reversalCode,
       lines: [
@@ -760,7 +761,7 @@ export async function reverseCollection(
 
   await notify(ctx, original.staffId, {
     title: "Payment reversed",
-    body: `${original.code} (₹${original.amount.toLocaleString("en-IN")}) was reversed: ${reason}`,
+    body: `${fmtId(original.code)} (₹${original.amount.toLocaleString("en-IN")}) was reversed: ${reason}`,
     kind: "SYSTEM",
   });
 
@@ -814,7 +815,7 @@ export async function surrenderLoan(
   if (!loan) throw new AppError("Loan not found.");
   if (!OPERABLE_LOAN_STATUSES.includes(loan.status)) {
     throw new AppError(
-      `Loan ${loan.loanId} is ${loan.status.toLowerCase()} — only a disbursed loan can be surrendered.`,
+      `Loan ${fmtId(loan.loanId)} is ${loan.status.toLowerCase()} — only a disbursed loan can be surrendered.`,
     );
   }
   const outstanding = await loanOpenBalance(ctx, loan._id);
@@ -842,7 +843,7 @@ export async function surrenderLoan(
   });
   await notify(ctx, loan.staffId, {
     title: "Loan surrendered",
-    body: `${loan.loanId} was surrendered by administration. Outstanding ₹${outstanding.toLocaleString("en-IN")} stays on record.`,
+    body: `${fmtId(loan.loanId)} was surrendered by administration. Outstanding ₹${outstanding.toLocaleString("en-IN")} stays on record.`,
     kind: "LOAN",
   });
   return {
@@ -869,7 +870,7 @@ export async function settleLoan(
   if (!loan) throw new AppError("Loan not found.");
   if (!OPERABLE_LOAN_STATUSES.includes(loan.status)) {
     throw new AppError(
-      `Loan ${loan.loanId} is ${loan.status.toLowerCase()} — only a disbursed loan can be settled.`,
+      `Loan ${fmtId(loan.loanId)} is ${loan.status.toLowerCase()} — only a disbursed loan can be settled.`,
     );
   }
   const outstanding = await loanOpenBalance(ctx, loan._id);
@@ -896,7 +897,7 @@ export async function settleLoan(
       actor: args.actor,
       amount,
       mode,
-      remarks: `Settlement of ${loan.loanId}: ${args.reason}`,
+      remarks: `Settlement of ${fmtId(loan.loanId)}: ${args.reason}`,
       now: nowMs,
     });
     receiptNumber = paid.receiptNumber;
@@ -952,7 +953,7 @@ export async function settleLoan(
   });
   await notify(ctx, loan.staffId, {
     title: "Loan settled",
-    body: `${loan.loanId} settled: ₹${amount.toLocaleString("en-IN")} received${waivedTotal > 0 ? `, ₹${waivedTotal.toLocaleString("en-IN")} waived` : ""}.`,
+    body: `${fmtId(loan.loanId)} settled: ₹${amount.toLocaleString("en-IN")} received${waivedTotal > 0 ? `, ₹${waivedTotal.toLocaleString("en-IN")} waived` : ""}.`,
     kind: "LOAN",
   });
   return {
@@ -986,7 +987,7 @@ export async function closeLoan(ctx: Mtx, args: LoanOpArgs) {
     const openNow = await loanOpenBalance(ctx, loan._id);
     if (openNow > 0) {
       throw new AppError(
-        `Loan ${loan.loanId} is closed but ₹${openNow.toLocaleString("en-IN")} is still open on its schedule — resolve it with Settle or Surrender first.`,
+        `Loan ${fmtId(loan.loanId)} is closed but ₹${openNow.toLocaleString("en-IN")} is still open on its schedule — resolve it with Settle or Surrender first.`,
       );
     }
     const closureKind = loan.closureKind ?? "REPAYMENT";
@@ -1029,7 +1030,7 @@ export async function closeLoan(ctx: Mtx, args: LoanOpArgs) {
   }
   if (!["APPROVED", "DISBURSED", "ACTIVE", "OVERDUE", "SURRENDERED"].includes(loan.status)) {
     throw new AppError(
-      `Loan ${loan.loanId} is ${loan.status.toLowerCase()} — it cannot be closed.`,
+      `Loan ${fmtId(loan.loanId)} is ${loan.status.toLowerCase()} — it cannot be closed.`,
     );
   }
   const outstanding = await loanOpenBalance(ctx, loan._id);
@@ -1122,7 +1123,7 @@ export async function deleteLoanRecord(
   if (!loan) throw new AppError("Loan not found.");
   if (!["CLOSED", "SETTLED"].includes(loan.status)) {
     throw new AppError(
-      `Loan ${loan.loanId} is ${loan.status.toLowerCase()} — only a closed or settled loan can be deleted.`,
+      `Loan ${fmtId(loan.loanId)} is ${loan.status.toLowerCase()} — only a closed or settled loan can be deleted.`,
     );
   }
   const outstanding = await loanOpenBalance(ctx, loan._id);
@@ -1153,7 +1154,7 @@ export async function deleteLoanRecord(
   if (walletTxns.length) blockers.push(`${walletTxns.length} wallet transaction(s)`);
   if (blockers.length) {
     throw new AppError(
-      `Cannot permanently delete ${loan.loanId}: ${blockers.join(", ")} reference it and the financial ledger is immutable. Archive the loan instead — it disappears from active screens while the audit trail and financial records stay intact.`,
+      `Cannot permanently delete ${fmtId(loan.loanId)}: ${blockers.join(", ")} reference it and the financial ledger is immutable. Archive the loan instead — it disappears from active screens while the audit trail and financial records stay intact.`,
     );
   }
 

@@ -10,6 +10,7 @@ import {
   requireRole,
 } from "../lib/server/convexHelpers";
 import { idQueryMatches } from "../lib/server/idMatch";
+import { fmtId } from "../lib/utils";
 import {
   centerReportRows,
   createCenterForActor,
@@ -144,6 +145,11 @@ export const get = query({
     if (me.role === "FIELD_STAFF" && client.assignedTo !== me._id) {
       // Staff may still open a client reassigned away — allow within branch.
       if (client.branchId !== me.branchId) throw new AppError("Not your client.");
+    }
+    // A Branch Manager may only open clients of their own branch — server-side,
+    // from the trusted profile record, never from anything the frontend sends.
+    if (me.role === "BRANCH_MANAGER" && client.branchId !== me.branchId) {
+      throw new AppError("This client belongs to another branch.");
     }
     if (me.role === "CLIENT" && me.clientId !== clientId) {
       throw new AppError("You can only view your own profile.");
@@ -873,7 +879,7 @@ export const create = mutation({
     // Centre linkage: the centre selected in the joining form is re-verified
     // against the database here (exists + same branch) so a direct backend
     // call cannot attach a client to an unknown or foreign centre. The
-    // centre's permanent generated ID (e.g. BALLIA-001) is stored on the
+    // centre's permanent generated ID (unique six-digit, e.g. 257510) is stored on the
     // client — clients never generate their own centre IDs.
     const resolvedCenter = await resolveCenterForClient(
       ctx,
@@ -1526,6 +1532,9 @@ export const verifyKyc = mutation({
     requireRole(me, "SUPER_ADMIN", "BRANCH_MANAGER");
     const client = await ctx.db.get(clientId);
     if (!client) throw new AppError("Client not found.");
+    if (me.role === "BRANCH_MANAGER" && client.branchId !== me.branchId) {
+      throw new AppError("This client belongs to another branch.");
+    }
     const next = oneOf(status, KYC_STATUS, "kycStatus");
 
     await ctx.db.patch(clientId, {
@@ -1584,6 +1593,9 @@ export const updateOfficeUse = mutation({
     requireRole(me, "SUPER_ADMIN", "BRANCH_MANAGER");
     const client = await ctx.db.get(args.clientId);
     if (!client) throw new AppError("Client not found.");
+    if (me.role === "BRANCH_MANAGER" && client.branchId !== me.branchId) {
+      throw new AppError("This client belongs to another branch.");
+    }
     const prev = client.officeUse;
 
     const next: NonNullable<Doc<"clients">["officeUse"]> = {
@@ -1646,6 +1658,9 @@ export const assign = mutation({
     const client = await ctx.db.get(clientId);
     const target = await ctx.db.get(toStaffId);
     if (!client || !target) throw new AppError("Client or staff not found.");
+    if (me.role === "BRANCH_MANAGER" && client.branchId !== me.branchId) {
+      throw new AppError("This client belongs to another branch.");
+    }
     if (target.branchId !== client.branchId) {
       throw new AppError("Target staff belongs to a different branch.");
     }
@@ -1675,7 +1690,7 @@ export const assign = mutation({
     });
     await notify(ctx, toStaffId, {
       title: "Client reassigned",
-      body: `${client.name} (${client.code}) is now assigned to you. ${why}`,
+      body: `${client.name} (${fmtId(client.code)}) is now assigned to you. ${why}`,
       kind: "SYSTEM",
       link: `/dashboard/clients/${clientId}`,
     });
@@ -1760,6 +1775,10 @@ export const decideDocument = mutation({
     requireRole(me, "SUPER_ADMIN", "BRANCH_MANAGER");
     const doc = await ctx.db.get(documentId);
     if (!doc) throw new AppError("Document not found.");
+    const owning = await ctx.db.get(doc.clientId);
+    if (me.role === "BRANCH_MANAGER" && owning && owning.branchId !== me.branchId) {
+      throw new AppError("This client belongs to another branch.");
+    }
     const next = oneOf(status, ["VERIFIED", "REJECTED", "PENDING_VERIFICATION"], "status");
     await ctx.db.patch(documentId, {
       status: next,
@@ -1786,8 +1805,8 @@ export const decideDocument = mutation({
 
 /**
  * Create a centre from the New Client popup ("+ Create New Center").
- * Generates the unique Centre ID (e.g. BALLIA-001) ONCE, saves it on the
- * centre record permanently, and returns it so the joining form can
+ * Generates the unique six-digit Centre ID (e.g. 257510) ONCE, saves it on
+ * the centre record permanently, and returns it so the joining form can
  * preselect the new centre immediately.
  */
 export const createCenter = mutation({
