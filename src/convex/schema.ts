@@ -267,17 +267,25 @@ const schema = defineSchema(
       fileName: v.string(),
       sizeBytes: v.number(),
       mimeType: v.string(),
-      latitude: v.number(),
-      longitude: v.number(),
-      accuracyMeters: v.number(),
-      capturedAt: v.number(), // device-reported GPS FIX time
+      // How the image was obtained:
+      //   GEO_TAGGING  — captured with the device camera + live GPS fix
+      //   PHOTO_UPLOAD — a photograph selected/uploaded by staff (NO GPS)
+      // Optional only for legacy rows written before the method existed;
+      // those always carry coordinates, so they read back as GEO_TAGGING.
+      captureMethod: v.optional(v.string()),
+      // GPS is only ever present for a genuine GEO_TAGGING capture. A manually
+      // uploaded photo stores NO coordinates at all (never fabricated).
+      latitude: v.optional(v.number()),
+      longitude: v.optional(v.number()),
+      accuracyMeters: v.optional(v.number()),
+      capturedAt: v.optional(v.number()), // device-reported GPS FIX time
       photoCapturedAt: v.optional(v.number()), // photo frame time (kept separate)
       uploadedAt: v.number(), // server receipt time
       uploadedBy: v.id("profiles"),
       branchId: v.id("branches"),
       permissionStatus: v.optional(v.string()), // geolocation permission at capture
       device: v.optional(v.string()),
-      status: v.string(), // GEO_TAGGED
+      status: v.string(), // GEO_TAGGED | PHOTO_UPLOADED
       // Marks a co-applicant capture so the applicant's own geo photo stays
       // the one surfaced by `clients.geoPhoto` (the co-applicant photo is
       // shown in the co-applicant card on the client page).

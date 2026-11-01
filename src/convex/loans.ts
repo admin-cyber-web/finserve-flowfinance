@@ -28,6 +28,10 @@ import {
   type LoanView,
 } from "../lib/server/loanOps";
 import { resolveBranchForActor } from "../lib/server/centerOps";
+import {
+  assertClientImageAvailable,
+  clientImageState,
+} from "../lib/server/clientImageOps";
 import { round2, completedMonthsBetween } from "../lib/finance/money";
 import { rowOutstanding } from "../lib/finance/schedule";
 import {
@@ -220,6 +224,9 @@ export const get = query({
       loan,
       view,
       client,
+      // Actual saved-image status — drives the disbursement block banner and
+      // clears reactively the moment the photo is saved in the Clients section.
+      clientImage: client ? await clientImageState(ctx, loan.clientId) : null,
       product,
       staff,
       rows,
@@ -329,6 +336,11 @@ export const submit = mutation({
     if (me.role === "FIELD_STAFF" && client.assignedTo !== me._id) {
       throw new AppError("You can only apply for your own assigned clients.");
     }
+    // Loan processing requires the client's saved photograph — enforced HERE
+    // from the real backend record, so a direct API call cannot skip it.
+    // Optional at onboarding and at BM client approval; mandatory from the
+    // moment the client enters the loan section.
+    await assertClientImageAvailable(ctx, args.clientId);
 
     // Server-side policy check — configurable policy is never bypassed.
     const loans = (await ctx.db.query("loans").collect()).filter(
@@ -789,6 +801,9 @@ export const submitCenterBatch = mutation({
             `${fmtId(client.code)} — KYC rejected; re-verify before lending.`,
           );
         }
+        // Every member of a centre-wise batch needs a saved client image —
+        // reported per member (skipped, never silently created).
+        await assertClientImageAvailable(ctx, clientId);
         if (
           appsAll.some(
             (a) =>
@@ -982,6 +997,13 @@ export const decide = mutation({
       return { ok: true, status: "REJECTED" };
     }
 
+    // LOAN approval requires the client's saved image. This is deliberately
+    // separate from BM client approval (clients.verifyKyc), which never needs
+    // a photograph. A blocked application is left SUBMITTED/pending — it is
+    // never rejected, cancelled or deleted, so approving again after the photo
+    // is saved simply continues the workflow.
+    await assertClientImageAvailable(ctx, app.clientId);
+
     // Re-run policy AND re-derive the schedule on the server at approval
     // time — approval never trusts a stored or client-supplied figure.
     if (client) {
@@ -1106,6 +1128,9 @@ export const disburse = mutation({
     if (me.role === "BRANCH_MANAGER" && loan.branchId !== me.branchId) {
       throw new AppError("Outside your branch.");
     }
+
+    // No cash leaves the branch until the client's photograph is on record.
+    await assertClientImageAvailable(ctx, loan.clientId);
 
     const { walletDebit } = await disburseLoan(ctx, { loanId, actor: me, device });
 

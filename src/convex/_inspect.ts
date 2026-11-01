@@ -602,6 +602,24 @@ export const setupVerification = internalMutation({
   },
 });
 
+/**
+ * TEST HARNESS ONLY — drop every saved image row for one client, so the loan
+ * image gate can be verified end-to-end (application/loan created while the
+ * client had a photo, then the photo removed). Internal function: it cannot be
+ * called from the browser, only by the deployment operator.
+ */
+export const clearClientImages = internalMutation({
+  args: { clientId: v.id("clients") },
+  handler: async (ctx, { clientId }) => {
+    const rows = await ctx.db
+      .query("clientGeoPhotos")
+      .withIndex("by_client", (q) => q.eq("clientId", clientId))
+      .collect();
+    for (const r of rows) await ctx.db.delete(r._id);
+    return { removed: rows.length };
+  },
+});
+
 export const runAsSuperAdmin = internalMutation({
   args: {
     mutationName: v.string(),

@@ -11,9 +11,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { useProfile } from "@/hooks/use-profile";
 import { cn } from "@/lib/utils";
+import { CLIENT_IMAGE_REQUIRED_MESSAGE } from "@/lib/clientImage";
 import { useMutation, useQuery } from "convex/react";
-import { Stamp } from "lucide-react";
+import { Stamp, UserRound } from "lucide-react";
 import { useState } from "react";
+import { useNavigate } from "react-router";
 import { toast } from "sonner";
 
 const KIND_TONE: Record<string, string> = {
@@ -23,8 +25,21 @@ const KIND_TONE: Record<string, string> = {
   EXPENSE: "bg-clay",
 };
 
+type ApprovalItem = {
+  id: string;
+  kind: string;
+  clientId?: string;
+  clientImageAvailable?: boolean;
+};
+
+/** A LOAN row is blocked until its client has a valid saved image. */
+function blockedByImage(item: ApprovalItem): boolean {
+  return item.kind === "LOAN" && item.clientImageAvailable === false;
+}
+
 export default function Approvals() {
   const { profile } = useProfile();
+  const navigate = useNavigate();
   const items = useQuery(api.admin.pendingApprovals);
 
   const decideLoan = useMutation(api.loans.decide);
@@ -139,11 +154,32 @@ export default function Approvals() {
                 )}
               </div>
 
+              {/* LOAN approval needs the client's saved image. The application
+                  stays pending (never rejected) until it is saved. Client
+                  approval itself — in the Clients section — never needs one. */}
+              {blockedByImage(item) && (
+                <div className="mt-2 space-y-2 border-2 border-ink bg-blush p-2">
+                  <p className="text-[11px] font-black">
+                    {CLIENT_IMAGE_REQUIRED_MESSAGE}
+                  </p>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="w-full"
+                    onClick={() =>
+                      navigate(`/dashboard/clients/${item.clientId}#client-image`)
+                    }
+                  >
+                    <UserRound className="size-3.5" /> Open Client Profile
+                  </Button>
+                </div>
+              )}
+
               {canDecide && (
                 <div className="mt-2 grid grid-cols-2 gap-2">
                   <Button
                     size="sm"
-                    disabled={busy === item.id}
+                    disabled={busy === item.id || blockedByImage(item)}
                     onClick={() => void decide(item.id, item.kind, "APPROVED")}
                   >
                     {busy === item.id ? "Working…" : "Approve"}

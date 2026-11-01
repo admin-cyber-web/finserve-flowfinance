@@ -22,7 +22,16 @@ import { round2 } from "@/lib/finance/money";
 import { rowOutstanding } from "@/lib/finance/schedule";
 import { cn, fmtId } from "@/lib/utils";
 import { useMutation, useQuery } from "convex/react";
-import { FileText, HandCoins, IndianRupee, PhoneCall } from "lucide-react";
+import {
+  CheckCircle2,
+  FileText,
+  HandCoins,
+  IndianRupee,
+  PhoneCall,
+  TriangleAlert,
+  UserRound,
+} from "lucide-react";
+import { CLIENT_IMAGE_REQUIRED_MESSAGE } from "@/lib/clientImage";
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
@@ -53,11 +62,15 @@ export default function LoanDetail() {
 
   }
 
-  const { loan, view, client, product, staff, rows, payments, recovery, journals } =
+  const { loan, view, client, clientImage, product, staff, rows, payments, recovery, journals } =
     data;
 
   void profile;
-  const canDisburse = can("disburse_loan") && loan.status === "APPROVED";
+  // A loan awaiting disbursement is blocked while the client has no saved
+  // image. Reactive: saving the photo in the Clients section clears this
+  // instantly (the backend blocks the mutation as well).
+  const imageBlocked = loan.status === "APPROVED" && clientImage !== null && !clientImage.available;
+  const canDisburse = can("disburse_loan") && loan.status === "APPROVED" && !imageBlocked;
 
   const onDisburse = async () => {
     setBusy(true);
@@ -154,6 +167,29 @@ export default function LoanDetail() {
           </span>
         </div>
       </section>
+
+      {/* Disbursement gate — reports the backend status only; the photo is
+          captured in the Clients section, never here. */}
+      {imageBlocked && (
+        <section className="space-y-2 border-2 border-ink bg-blush p-3 shadow-hard-sm">
+          <p className="flex items-start gap-2 text-[11px] font-black">
+            <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+            {CLIENT_IMAGE_REQUIRED_MESSAGE}
+          </p>
+          <Button
+            variant="outline"
+            className="w-full"
+            onClick={() => navigate(`/dashboard/clients/${loan.clientId}#client-image`)}
+          >
+            <UserRound className="size-4" /> Open Client Profile
+          </Button>
+        </section>
+      )}
+      {loan.status === "APPROVED" && clientImage?.available && (
+        <div className="flex items-center gap-2 border-2 border-ink bg-mint p-2 text-[11px] font-black uppercase">
+          <CheckCircle2 className="size-4" /> Client Image Available — Proceed to Loan.
+        </div>
+      )}
 
       {/* Actions */}
       <div className="grid grid-cols-2 gap-2">

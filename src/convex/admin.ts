@@ -21,6 +21,7 @@ import {
   migrateCenterIdsTx,
   repairBranchLinksTx,
 } from "../lib/server/maintenanceOps";
+import { isClientImageAvailable } from "../lib/server/clientImageOps";
 
 /* ----------------------- SUPER_ADMIN maintenance ---------------------------- */
 
@@ -281,6 +282,14 @@ export const pendingApprovals = query({
       requestedBy: string;
       refId?: string;
       link: string;
+      /** LOAN items only: the client this application belongs to. */
+      clientId?: Id<"clients">;
+      /**
+       * LOAN items only: whether that client's saved image exists. A missing
+       * image blocks LOAN approval (never client approval) — the row stays
+       * pending until the photograph is saved in the Clients section.
+       */
+      clientImageAvailable?: boolean;
     }[] = [];
 
     for (const a of applications) {
@@ -304,6 +313,8 @@ export const pendingApprovals = query({
         at: a.submittedAt ?? a.createdAt,
         requestedBy: byId.get(a.staffId)?.name ?? "—",
         link: "/dashboard/approvals",
+        clientId: a.clientId,
+        clientImageAvailable: await isClientImageAvailable(ctx, a.clientId),
       });
     }
     for (const h of handovers) {

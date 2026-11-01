@@ -13,7 +13,8 @@ import { CenterWiseLoan } from "@/components/fs/CenterWiseLoan";
 import { Button } from "@/components/ui/button";
 import { fmtId } from "@/lib/utils";
 import { useMutation, useQuery } from "convex/react";
-import { CheckCircle2, HandCoins, TriangleAlert, Users } from "lucide-react";
+import { CLIENT_IMAGE_REQUIRED_MESSAGE } from "@/lib/clientImage";
+import { CheckCircle2, HandCoins, TriangleAlert, UserRound, Users } from "lucide-react";
 import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
@@ -50,8 +51,17 @@ export default function LoanNew() {
       : "skip",
   );
 
+  // Actual saved-image status for the selected client. Reactive: the moment a
+  // photograph is saved from the client's profile, this flips and the block
+  // below disappears — no reload, no re-created application.
+  const imageStatus = useQuery(
+    api.clients.imageStatus,
+    single && clientId ? { clientId } : "skip",
+  );
+  const imageBlocked = !!clientId && imageStatus !== undefined && imageStatus.available === false;
+
   const numericAmount = Number(amount || 0);
-  const previewReady = !!clientId && numericAmount > 0;
+  const previewReady = !!clientId && numericAmount > 0 && !imageBlocked;
   const preview = useQuery(
     api.loans.preview,
     previewReady ? { clientId: clientId!, amount: numericAmount } : "skip",
@@ -61,6 +71,11 @@ export default function LoanNew() {
   const selectedClient = clients?.find((c) => c._id === clientId);
 
   const onSubmit = async () => {
+    if (imageBlocked) {
+      // The backend enforces this too — the message is shown verbatim.
+      toast.error(CLIENT_IMAGE_REQUIRED_MESSAGE);
+      return;
+    }
     if (!previewReady || !preview) return;
     if (!preview.eligibility.eligible) {
       const blocker = preview.eligibility.issues.find((i) => i.level === "BLOCKER");
@@ -176,6 +191,31 @@ export default function LoanNew() {
             Change
           </span>
         </button>
+
+        {/* Image gate — no camera, no upload field, no geo dropdown here:
+            this section only REPORTS the backend status and links to the
+            client's profile, where the image is captured. */}
+        {clientId && imageStatus === undefined && <RowSkeleton rows={1} />}
+        {imageBlocked && (
+          <div className="space-y-2 border-2 border-ink bg-blush p-3">
+            <p className="flex items-start gap-2 text-[11px] font-black">
+              <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+              {CLIENT_IMAGE_REQUIRED_MESSAGE}
+            </p>
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={() => navigate(`/dashboard/clients/${clientId}#client-image`)}
+            >
+              <UserRound className="size-4" /> Open Client Profile
+            </Button>
+          </div>
+        )}
+        {clientId && imageStatus?.available && (
+          <div className="flex items-center gap-2 border-2 border-ink bg-mint p-2 text-[11px] font-black uppercase">
+            <CheckCircle2 className="size-4" /> Client Image Available — Proceed to Loan.
+          </div>
+        )}
       </section>
 
       {/* Step 2 — amount. Terms are fixed by the backend (79% reducing
@@ -310,7 +350,14 @@ export default function LoanNew() {
         <Button
           size="lg"
           className="flex-[2]"
-          disabled={!previewReady || !preview || preview === undefined || !preview.eligibility.eligible || submitting}
+          disabled={
+            imageBlocked ||
+            !previewReady ||
+            !preview ||
+            preview === undefined ||
+            !preview.eligibility.eligible ||
+            submitting
+          }
           onClick={() => void onSubmit()}
         >
           {submitting ? "Submitting…" : "Submit for approval"}

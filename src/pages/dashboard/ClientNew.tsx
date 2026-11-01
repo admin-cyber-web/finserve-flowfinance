@@ -21,10 +21,11 @@ import {
   Landmark,
   Loader2,
   Lock,
-  MapPin,
+  Camera,
   Phone,
   Plus,
   Search,
+  Trash2,
   Users,
   UserPlus,
 } from "lucide-react";
@@ -368,9 +369,19 @@ export default function ClientNew() {
   const [officeCredit, setOfficeCredit] = useState("");
   const [officeApproved, setOfficeApproved] = useState("");
 
-  // Applicant photo (geo-tagged) / KYC documents (normal)
+  // Applicant image — OPTIONAL at onboarding. Staff pick how it is captured
+  // (Photo Upload or Geo Tagging); leaving it blank is allowed and the client
+  // profile then shows "Image Not Available" until one is saved.
+  const [photoMethod, setPhotoMethod] = useState<"" | "PHOTO_UPLOAD" | "GEO_TAGGING">("");
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [applicantPhoto, setApplicantPhoto] = useState<CapturedClientPhoto | null>(null);
   const [applicantDocs, setApplicantDocs] = useState<DocItem[]>([]);
+  // Co-applicant image — same OPTIONAL rule as the applicant's: Photo Upload,
+  // Geo Tagging, or nothing at all.
+  const [coPhotoMethod, setCoPhotoMethod] = useState<"" | "PHOTO_UPLOAD" | "GEO_TAGGING">("");
+  const [coPhotoFile, setCoPhotoFile] = useState<File | null>(null);
+  const [coPhotoPreview, setCoPhotoPreview] = useState<string | null>(null);
   const [coApplicantPhoto, setCoApplicantPhoto] = useState<CapturedClientPhoto | null>(null);
   const [coApplicantDocs, setCoApplicantDocs] = useState<DocItem[]>([]);
   const [declaration, setDeclaration] = useState(false);
@@ -479,9 +490,9 @@ export default function ClientNew() {
     if (voter && !/^[A-Z]{3}[0-9]{7}$/.test(voter)) {
       return toast.error("Voter ID must look like ABC1234567.");
     }
-    if (!applicantPhoto) {
-      return toast.error("Capture the geo-tagged applicant photo to continue.");
-    }
+    // The client image is OPTIONAL here: no photo, a chosen-but-unfinished
+    // Photo Upload, or an abandoned Geo Tagging capture must all still let the
+    // client be created (it simply has no image yet).
 
     // Co-applicant block (form section 2) — name, relationship and the
     // geo-tagged photograph are mandatory, exactly as the form states.
@@ -522,11 +533,7 @@ export default function ClientNew() {
     if (coVoterValue && !/^[A-Z]{3}[0-9]{7}$/.test(coVoterValue)) {
       return toast.error("Co-applicant Voter ID must look like ABC1234567.");
     }
-    if (!coApplicantPhoto) {
-      return toast.error(
-        "Capture the geo-tagged co-applicant photo to continue.",
-      );
-    }
+    // The co-applicant photograph is optional too — it never gates anything.
 
     /* ---------------- Restored sections 1–5 + family ------------------ */
 
@@ -751,18 +758,52 @@ export default function ClientNew() {
 
     setSubmitting(true);
     try {
-      // 1) Upload the stamped photo to private storage (upload URL is
-      // server-issued and self-authenticating — same pattern as DocCapture).
-      const uploadUrl = await getUploadUrl({});
-      const resp = await fetch(uploadUrl, {
-        method: "POST",
-        headers: { "Content-Type": applicantPhoto.blob.type || "image/jpeg" },
-        body: applicantPhoto.blob,
-      });
-      if (!resp.ok) throw new Error("Photo upload failed — please retry.");
-      const { storageId: photoStorageId } = (await resp.json()) as {
-        storageId: Id<"_storage">;
-      };
+      // 1) OPTIONAL client image. Only a genuinely completed capture is
+      // uploaded: a chosen method with nothing captured sends NOTHING, so the
+      // client is still created and its image status stays "not available"
+      // until the photograph is actually saved from the profile.
+      let photoStorageId: Id<"_storage"> | undefined;
+      let photoGeo:
+        | {
+            latitude: number;
+            longitude: number;
+            accuracyMeters: number;
+            capturedAt: number;
+            photoCapturedAt: number;
+            permissionStatus: string;
+          }
+        | undefined;
+      let sentMethod: "PHOTO_UPLOAD" | "GEO_TAGGING" | undefined;
+
+      if (photoMethod === "GEO_TAGGING" && applicantPhoto) {
+        sentMethod = "GEO_TAGGING";
+        photoGeo = {
+          latitude: applicantPhoto.geo.latitude,
+          longitude: applicantPhoto.geo.longitude,
+          accuracyMeters: applicantPhoto.geo.accuracyMeters,
+          capturedAt: applicantPhoto.geo.capturedAt,
+          photoCapturedAt: applicantPhoto.frameAt,
+          permissionStatus: applicantPhoto.geo.permissionStatus,
+        };
+      } else if (photoMethod === "PHOTO_UPLOAD" && photoFile) {
+        sentMethod = "PHOTO_UPLOAD";
+      }
+
+      if (sentMethod) {
+        const blob =
+          sentMethod === "GEO_TAGGING" ? applicantPhoto!.blob : photoFile!;
+        // Upload URL is server-issued and self-authenticating — same pattern
+        // as DocCapture. The backend re-validates the stored file.
+        const uploadUrl = await getUploadUrl({});
+        const resp = await fetch(uploadUrl, {
+          method: "POST",
+          headers: { "Content-Type": blob.type || "image/jpeg" },
+          body: blob,
+        });
+        if (!resp.ok) throw new Error("Photo upload failed — please retry.");
+        const json = (await resp.json()) as { storageId: Id<"_storage"> };
+        photoStorageId = json.storageId;
+      }
 
       // Applicant KYC documents were uploaded the moment they were picked —
       // they only need collecting here (the guard above ensures storageId).
@@ -772,18 +813,48 @@ export default function ClientNew() {
         storageId: d.storageId as Id<"_storage">,
       }));
 
-      // Co-applicant geo photo — stamped by the same geo-tagging camera,
-      // uploaded to private storage; the GPS fix travels with it and is
-      // re-validated server-side with the same rules as the applicant's.
-      const capUrl = await getUploadUrl({});
-      const capResp = await fetch(capUrl, {
-        method: "POST",
-        headers: { "Content-Type": coApplicantPhoto.blob.type || "image/jpeg" },
-        body: coApplicantPhoto.blob,
-      });
-      if (!capResp.ok) throw new Error("Co-applicant photo upload failed — please retry.");
-      const capJson = (await capResp.json()) as { storageId: Id<"_storage"> };
-      const coPhotoStorageId = capJson.storageId;
+      // Co-applicant image — uploaded only when actually captured. The GPS fix
+      // travels with a Geo Tagging capture only, and is re-validated
+      // server-side with the same rules as the applicant's photo.
+      let coPhotoStorageId: Id<"_storage"> | undefined;
+      let coPhotoGeo:
+        | {
+            latitude: number;
+            longitude: number;
+            accuracyMeters: number;
+            capturedAt: number;
+            photoCapturedAt: number;
+            permissionStatus: string;
+          }
+        | undefined;
+      const coBlob =
+        coPhotoMethod === "GEO_TAGGING"
+          ? coApplicantPhoto?.blob
+          : coPhotoMethod === "PHOTO_UPLOAD"
+            ? coPhotoFile
+            : null;
+      if (coBlob) {
+        const capUrl = await getUploadUrl({});
+        const capResp = await fetch(capUrl, {
+          method: "POST",
+          headers: { "Content-Type": coBlob.type || "image/jpeg" },
+          body: coBlob,
+        });
+        if (!capResp.ok)
+          throw new Error("Co-applicant photo upload failed — please retry.");
+        const capJson = (await capResp.json()) as { storageId: Id<"_storage"> };
+        coPhotoStorageId = capJson.storageId;
+      }
+      if (coPhotoMethod === "GEO_TAGGING" && coApplicantPhoto) {
+        coPhotoGeo = {
+          latitude: coApplicantPhoto.geo.latitude,
+          longitude: coApplicantPhoto.geo.longitude,
+          accuracyMeters: coApplicantPhoto.geo.accuracyMeters,
+          capturedAt: coApplicantPhoto.geo.capturedAt,
+          photoCapturedAt: coApplicantPhoto.frameAt,
+          permissionStatus: coApplicantPhoto.geo.permissionStatus,
+        };
+      }
 
       const coDocsPayload = coApplicantDocs.map((d) => ({
         docKind: d.kind,
@@ -811,15 +882,11 @@ export default function ClientNew() {
         kycDocType: "AADHAAR",
         kycDocRef: kycDocRef.trim(),
         centerCode: selected.code,
+        // Optional image — omitted entirely when nothing was captured, so the
+        // backend stores no image row (and never invents one).
         photoStorageId,
-        geo: {
-          latitude: applicantPhoto.geo.latitude,
-          longitude: applicantPhoto.geo.longitude,
-          accuracyMeters: applicantPhoto.geo.accuracyMeters,
-          capturedAt: applicantPhoto.geo.capturedAt,
-          photoCapturedAt: applicantPhoto.frameAt,
-          permissionStatus: applicantPhoto.geo.permissionStatus,
-        },
+        photoMethod: sentMethod,
+        geo: photoGeo,
         // Applicant KYC document photos — normal captures, no geo-tagging,
         // saved against THIS applicant's side of the application.
         documents: applicantDocsPayload,
@@ -838,15 +905,11 @@ export default function ClientNew() {
           panNumber: coPanValue || undefined,
           voterId: coVoterValue || undefined,
           kycDocuments: coKycDocs.length > 0 ? coKycDocs : undefined,
-          coGpsStorageId: coPhotoStorageId,
-          coGpsGeo: {
-            latitude: coApplicantPhoto.geo.latitude,
-            longitude: coApplicantPhoto.geo.longitude,
-            accuracyMeters: coApplicantPhoto.geo.accuracyMeters,
-            capturedAt: coApplicantPhoto.geo.capturedAt,
-            photoCapturedAt: coApplicantPhoto.frameAt,
-            permissionStatus: coApplicantPhoto.geo.permissionStatus,
-          },
+          // Geo capture → stamped file + its real fix; plain upload → the file
+          // only (the backend stores no coordinates for it).
+          coGpsStorageId: coPhotoGeo ? coPhotoStorageId : undefined,
+          coGpsGeo: coPhotoGeo,
+          photoStorageId: coPhotoGeo ? undefined : coPhotoStorageId,
           documents: coDocsPayload,
         },
         // Restored application sections 1–5 + family members. Every value
@@ -1211,12 +1274,102 @@ export default function ClientNew() {
         </div>
       </div>
 
-      {/* Applicant photo — geo-tagged camera */}
+      {/* Client Photo / Geo Tagging — OPTIONAL at onboarding */}
       <div className="border-2 border-ink bg-card p-3 shadow-hard">
         <div className="mb-2 flex items-center gap-2 text-xs font-black uppercase">
-          <MapPin className="size-4 text-destructive" /> Applicant photo * — geo-tagged
+          <Camera className="size-4" /> Client Photo / Geo Tagging
         </div>
-        <ClientPhotoCapture value={applicantPhoto} onChange={setApplicantPhoto} />
+        <label className="block">
+          <span className={label}>Capture method (optional)</span>
+          <select
+            className={cn(field, "h-[42px]")}
+            value={photoMethod}
+            onChange={(e) => {
+              const next = e.target.value as "" | "PHOTO_UPLOAD" | "GEO_TAGGING";
+              setPhotoMethod(next);
+              // Switching methods discards the other path's pending capture so
+              // only ONE real image can ever be submitted.
+              if (next !== "GEO_TAGGING") setApplicantPhoto(null);
+              if (next !== "PHOTO_UPLOAD") {
+                setPhotoFile(null);
+                if (photoPreview) URL.revokeObjectURL(photoPreview);
+                setPhotoPreview(null);
+              }
+            }}
+          >
+            <option value="">Not now — image can be added later</option>
+            <option value="PHOTO_UPLOAD">Photo Upload</option>
+            <option value="GEO_TAGGING">Geo Tagging</option>
+          </select>
+        </label>
+
+        {photoMethod === "PHOTO_UPLOAD" && (
+          <div className="mt-3 space-y-2">
+            <p className="text-[11px] font-bold text-muted-foreground">
+              Select a client photograph from the device. No GPS is recorded
+              for a manually uploaded photo.
+            </p>
+            <label className="flex w-full cursor-pointer items-center justify-center gap-2 border-2 border-ink bg-white px-3 py-2.5 text-xs font-black uppercase shadow-hard-sm">
+              <Camera className="size-4" />
+              {photoFile ? "Choose a different photo" : "Select photo"}
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0] ?? null;
+                  if (!file) return;
+                  if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+                    toast.error("Choose a JPEG, PNG or WebP image.");
+                    return;
+                  }
+                  if (file.size <= 0 || file.size > 5 * 1024 * 1024) {
+                    toast.error("Photo must be smaller than 5 MB.");
+                    return;
+                  }
+                  if (photoPreview) URL.revokeObjectURL(photoPreview);
+                  setPhotoFile(file);
+                  setPhotoPreview(URL.createObjectURL(file));
+                }}
+              />
+            </label>
+            {photoPreview && (
+              <div className="space-y-2">
+                <img
+                  src={photoPreview}
+                  alt="Selected client photo"
+                  className="block w-full border-2 border-ink object-cover"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => {
+                    if (photoPreview) URL.revokeObjectURL(photoPreview);
+                    setPhotoFile(null);
+                    setPhotoPreview(null);
+                  }}
+                >
+                  <Trash2 className="size-4" /> Remove photo
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {photoMethod === "GEO_TAGGING" && (
+          <div className="mt-3">
+            <ClientPhotoCapture value={applicantPhoto} onChange={setApplicantPhoto} />
+          </div>
+        )}
+
+        {photoMethod === "" && (
+          <p className="mt-2 text-[11px] font-bold text-muted-foreground">
+            No image will be saved. The client profile will show "Image Not
+            Available" and a photograph becomes compulsory only when this client
+            enters loan processing.
+          </p>
+        )}
       </div>
 
       {/* Applicant KYC documents — normal photos/PDFs, no geo */}
@@ -1351,12 +1504,74 @@ export default function ClientNew() {
         </div>
       </div>
 
-      {/* Co-applicant photo — geo-tagged camera */}
+      {/* Co-applicant Photo / Geo Tagging — also OPTIONAL */}
       <div className="border-2 border-ink bg-card p-3 shadow-hard">
         <div className="mb-2 flex items-center gap-2 text-xs font-black uppercase">
-          <MapPin className="size-4 text-destructive" /> Co-applicant photo * — geo-tagged
+          <Camera className="size-4" /> Co-applicant Photo / Geo Tagging
         </div>
-        <ClientPhotoCapture value={coApplicantPhoto} onChange={setCoApplicantPhoto} />
+        <label className="block">
+          <span className={label}>Capture method (optional)</span>
+          <select
+            className={cn(field, "h-[42px]")}
+            value={coPhotoMethod}
+            onChange={(e) => {
+              const next = e.target.value as "" | "PHOTO_UPLOAD" | "GEO_TAGGING";
+              setCoPhotoMethod(next);
+              if (next !== "GEO_TAGGING") setCoApplicantPhoto(null);
+              if (next !== "PHOTO_UPLOAD") {
+                setCoPhotoFile(null);
+                if (coPhotoPreview) URL.revokeObjectURL(coPhotoPreview);
+                setCoPhotoPreview(null);
+              }
+            }}
+          >
+            <option value="">Not now — image can be added later</option>
+            <option value="PHOTO_UPLOAD">Photo Upload</option>
+            <option value="GEO_TAGGING">Geo Tagging</option>
+          </select>
+        </label>
+
+        {coPhotoMethod === "PHOTO_UPLOAD" && (
+          <div className="mt-3 space-y-2">
+            <label className="flex w-full cursor-pointer items-center justify-center gap-2 border-2 border-ink bg-white px-3 py-2.5 text-xs font-black uppercase shadow-hard-sm">
+              <Camera className="size-4" />
+              {coPhotoFile ? "Choose a different photo" : "Select photo"}
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0] ?? null;
+                  if (!file) return;
+                  if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+                    toast.error("Choose a JPEG, PNG or WebP image.");
+                    return;
+                  }
+                  if (file.size <= 0 || file.size > 5 * 1024 * 1024) {
+                    toast.error("Photo must be smaller than 5 MB.");
+                    return;
+                  }
+                  if (coPhotoPreview) URL.revokeObjectURL(coPhotoPreview);
+                  setCoPhotoFile(file);
+                  setCoPhotoPreview(URL.createObjectURL(file));
+                }}
+              />
+            </label>
+            {coPhotoPreview && (
+              <img
+                src={coPhotoPreview}
+                alt="Selected co-applicant photo"
+                className="block w-full border-2 border-ink object-cover"
+              />
+            )}
+          </div>
+        )}
+
+        {coPhotoMethod === "GEO_TAGGING" && (
+          <div className="mt-3">
+            <ClientPhotoCapture value={coApplicantPhoto} onChange={setCoApplicantPhoto} />
+          </div>
+        )}
       </div>
 
       {/* Co-applicant KYC documents — normal photos/PDFs, no geo */}

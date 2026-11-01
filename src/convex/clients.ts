@@ -42,6 +42,12 @@ import {
   MAX_CLIENT_PHOTO_BYTES,
   type GeoFix,
 } from "../lib/geo";
+import {
+  CLIENT_IMAGE_METHODS,
+  clientImageState,
+  prepareClientImageRow,
+  type ClientImageMethod,
+} from "../lib/server/clientImageOps";
 
 /** Scope the client list to what this viewer is allowed to see. */
 async function visibleClients(
@@ -584,23 +590,31 @@ export const create = mutation({
     centerCode: v.optional(v.string()),
     groupCode: v.optional(v.string()),
     device: v.optional(v.string()),
-    // Mandatory geo-tagged client photo: the stamped JPEG the capture widget
-    // uploaded to Convex storage (via a server-issued upload URL) plus the
-    // device-reported GPS fix it was stamped with.
-    photoStorageId: v.id("_storage"),
+    // OPTIONAL client image — either a manually uploaded photograph or a
+    // geo-tagged capture. Both are uploaded to Convex storage (via a
+    // server-issued upload URL) before this mutation runs and re-validated
+    // here. A client is created successfully with NO image at all; the loan
+    // workflow is where an image becomes mandatory.
+    photoStorageId: v.optional(v.id("_storage")),
+    // Capture method for the image above: PHOTO_UPLOAD | GEO_TAGGING.
+    // Omitted by older callers, inferred from whether `geo` is present.
+    photoMethod: v.optional(v.string()),
     // Mandatory stamp document (uploaded to private Convex storage via a
     // server-issued upload URL before this mutation runs). Optional for the
     // new application form (which has no stamp field) but validated whenever
     // provided.
     stampStorageId: v.optional(v.id("_storage")),
-    geo: v.object({
-      latitude: v.number(),
-      longitude: v.number(),
-      accuracyMeters: v.number(),
-      capturedAt: v.number(), // GPS fix timestamp
-      photoCapturedAt: v.optional(v.number()), // photo frame timestamp (separate)
-      permissionStatus: v.optional(v.string()),
-    }),
+    // Device-reported GPS fix — present ONLY for a Geo Tagging capture.
+    geo: v.optional(
+      v.object({
+        latitude: v.number(),
+        longitude: v.number(),
+        accuracyMeters: v.number(),
+        capturedAt: v.number(), // GPS fix timestamp
+        photoCapturedAt: v.optional(v.number()), // photo frame timestamp (separate)
+        permissionStatus: v.optional(v.string()),
+      }),
+    ),
   },
   handler: async (ctx, args) => {
     const me = await requireProfile(ctx);
@@ -979,41 +993,68 @@ export const create = mutation({
       });
     }
 
-    // ---- Mandatory geo-tagged client photo --------------------------------
-    // Server-side re-validation: the browser's capture UI already blocks
-    // stale/poor fixes, but the client is untrusted — the SAME rules run here
-    // so fabricated coordinates, (0, 0) or stale timestamps can never be
-    // stored. The photo was uploaded before this mutation ran, so every
-    // rejection path deletes the uploaded file first (no orphaned photos),
-    // and a thrown error rolls the whole mutation back (no half-created
-    // client, so a retry can never duplicate the client).
-    const geoFix: GeoFix = {
-      latitude: args.geo.latitude,
-      longitude: args.geo.longitude,
-      accuracyMeters: args.geo.accuracyMeters,
-      capturedAt: args.geo.capturedAt,
-      permissionStatus: args.geo.permissionStatus ?? "granted",
-    };
-    const photoCapturedAt = args.geo.photoCapturedAt ?? args.geo.capturedAt;
-    const geoError = geoValidationError(geoFix, now);
-    if (geoError) {
-      await ctx.storage.delete(args.photoStorageId);
-      throw new AppError(`Client photo location rejected: ${geoError}`);
-    }
-
-    const meta = await ctx.db.system.get("_storage", args.photoStorageId);
-    if (!meta) {
-      throw new AppError("Uploaded client photo not found — capture and upload it again.");
-    }
-    const allowedTypes = ["image/jpeg", "image/png", "image/webp"];
-    if (!meta.contentType || !allowedTypes.includes(meta.contentType)) {
-      await ctx.storage.delete(args.photoStorageId);
-      throw new AppError("Client photo must be a JPEG, PNG or WebP image.");
-    }
-    if (meta.size <= 0 || meta.size > MAX_CLIENT_PHOTO_BYTES) {
-      await ctx.storage.delete(args.photoStorageId);
+    // ---- OPTIONAL client image (Photo Upload or Geo Tagging) --------------
+    // The client image is optional at onboarding: client creation succeeds
+    // with no image, and the profile then reports "Image Not Available" until
+    // one is saved. When an image IS provided it is re-validated here — the
+    // browser's capture UI is untrusted, so fabricated/absent coordinates,
+    // (0, 0), stale timestamps and non-image files can never be stored. The
+    // file was uploaded before this mutation ran, so every rejection path
+    // deletes it again (no orphaned photos) and the throw rolls the whole
+    // mutation back (no half-created client, so a retry cannot duplicate it).
+    if (args.photoStorageId) {
+      const method = oneOf(
+        args.photoMethod ?? (args.geo ? "GEO_TAGGING" : "PHOTO_UPLOAD"),
+        CLIENT_IMAGE_METHODS,
+        "photoMethod",
+      ) as ClientImageMethod;
+      const geoFix: GeoFix | null = args.geo
+        ? {
+            latitude: args.geo.latitude,
+            longitude: args.geo.longitude,
+            accuracyMeters: args.geo.accuracyMeters,
+            capturedAt: args.geo.capturedAt,
+            permissionStatus: args.geo.permissionStatus ?? "granted",
+          }
+        : null;
+      const imageRow = await prepareClientImageRow(ctx, {
+        clientId,
+        code,
+        storageId: args.photoStorageId,
+        method,
+        geo: method === "GEO_TAGGING" ? geoFix : null,
+        photoCapturedAt: args.geo?.photoCapturedAt,
+        uploadedBy: me._id,
+        branchId,
+        device: args.device,
+        now,
+      });
+      await ctx.db.insert("clientGeoPhotos", imageRow);
+      await logAudit(ctx, {
+        actorId: me._id,
+        actorName: me.name,
+        role: me.role,
+        action: "CLIENT_PHOTO_CAPTURED",
+        entity: "clients",
+        entityId: code,
+        after: {
+          method,
+          fileName: imageRow.fileName,
+          sizeBytes: imageRow.sizeBytes,
+          // Present only for a genuine Geo Tagging capture.
+          latitude: imageRow.latitude,
+          longitude: imageRow.longitude,
+          accuracyMeters: imageRow.accuracyMeters,
+          capturedAt: imageRow.capturedAt,
+          source: method === "GEO_TAGGING" ? "device-reported" : "manual-upload",
+        },
+        referenceId: code,
+        branchId,
+        device: args.device,
+      });
+    } else if (args.geo) {
       throw new AppError(
-        `Client photo must be between 1 byte and ${Math.round(MAX_CLIENT_PHOTO_BYTES / 1024 / 1024)} MB.`,
+        "The client photo upload did not arrive — upload or capture it again.",
       );
     }
 
@@ -1045,26 +1086,6 @@ export const create = mutation({
         );
       }
     }
-
-    const fileName = `client-photo-${code}.jpg`;
-    await ctx.db.insert("clientGeoPhotos", {
-      clientId,
-      storageId: args.photoStorageId,
-      fileName,
-      sizeBytes: meta.size,
-      mimeType: meta.contentType,
-      latitude: geoFix.latitude,
-      longitude: geoFix.longitude,
-      accuracyMeters: Math.round(geoFix.accuracyMeters * 100) / 100,
-      capturedAt: geoFix.capturedAt,
-      photoCapturedAt,
-      uploadedAt: now,
-      uploadedBy: me._id,
-      branchId,
-      permissionStatus: geoFix.permissionStatus,
-      device: args.device,
-      status: "GEO_TAGGED",
-    });
 
     let stampFileName: string | undefined;
     if (args.stampStorageId) {
@@ -1236,28 +1257,6 @@ export const create = mutation({
       actorId: me._id,
       actorName: me.name,
       role: me.role,
-      action: "CLIENT_PHOTO_CAPTURED",
-      entity: "clients",
-      entityId: code,
-      after: {
-        fileName,
-        sizeBytes: meta.size,
-        latitude: geoFix.latitude,
-        longitude: geoFix.longitude,
-        accuracyMeters: geoFix.accuracyMeters,
-        capturedAt: geoFix.capturedAt,
-        photoCapturedAt,
-        source: "device-reported",
-      },
-      referenceId: code,
-      branchId,
-      device: args.device,
-    });
-
-    await logAudit(ctx, {
-      actorId: me._id,
-      actorName: me.name,
-      role: me.role,
       action: "CLIENT_CREATED",
       entity: "clients",
       entityId: code,
@@ -1352,6 +1351,130 @@ export const geoPhoto = query({
     const url = await ctx.storage.getUrl(photo.storageId);
     const { storageId: _storageId, ...rest } = photo;
     return { ...rest, url };
+  },
+});
+
+/**
+ * Actual saved-image status for one client — the single source of truth for
+ * both the client profile (Image Available / Not Available) and the Loan
+ * section gate. Read access mirrors `clients.get` scoping, so image status and
+ * location never reach an unauthorized viewer.
+ *
+ * Deliberately reactive: because the Loan screens subscribe to this query, a
+ * photo saved from the Clients section clears the loan block immediately — no
+ * reload, no re-creation, no admin intervention.
+ */
+export const imageStatus = query({
+  args: { clientId: v.id("clients") },
+  handler: async (ctx, { clientId }) => {
+    const me = await requireProfile(ctx, { allowInactive: true });
+    requirePermission(me, "view_clients");
+    const client = await ctx.db.get(clientId);
+    if (!client) throw new AppError("Client not found.");
+    if (me.role === "FIELD_STAFF" && client.assignedTo !== me._id) {
+      if (client.branchId !== me.branchId) throw new AppError("Not your client.");
+    }
+    if (me.role === "BRANCH_MANAGER" && client.branchId !== me.branchId) {
+      throw new AppError("This client belongs to another branch.");
+    }
+    if (me.role === "CLIENT" && me.clientId !== clientId) {
+      throw new AppError("You can only view your own profile.");
+    }
+    return await clientImageState(ctx, clientId);
+  },
+});
+
+/**
+ * Save the client photograph for an EXISTING client — either a manually
+ * uploaded image (no GPS) or a Geo Tagging capture (photo + real GPS fix).
+ *
+ * This is the ONLY place a client image can be added after onboarding, and it
+ * lives in the Clients section: the Loan section never captures photos. Every
+ * upload is re-validated server-side (belongs to this client, real image file,
+ * sane size, and for Geo Tagging a genuine fix) before the row is written.
+ */
+export const attachPhoto = mutation({
+  args: {
+    clientId: v.id("clients"),
+    photoStorageId: v.id("_storage"),
+    photoMethod: v.string(),
+    device: v.optional(v.string()),
+    geo: v.optional(
+      v.object({
+        latitude: v.number(),
+        longitude: v.number(),
+        accuracyMeters: v.number(),
+        capturedAt: v.number(),
+        photoCapturedAt: v.optional(v.number()),
+        permissionStatus: v.optional(v.string()),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx);
+    requirePermission(me, "edit_client");
+    const client = await ctx.db.get(args.clientId);
+    if (!client) throw new AppError("Client not found.");
+    if (me.role === "FIELD_STAFF" && client.assignedTo !== me._id) {
+      if (client.branchId !== me.branchId) throw new AppError("Not your client.");
+    }
+    if (me.role === "BRANCH_MANAGER" && client.branchId !== me.branchId) {
+      throw new AppError("This client belongs to another branch.");
+    }
+
+    const method = oneOf(
+      args.photoMethod,
+      CLIENT_IMAGE_METHODS,
+      "photoMethod",
+    ) as ClientImageMethod;
+    const now = Date.now();
+    const geoFix: GeoFix | null = args.geo
+      ? {
+          latitude: args.geo.latitude,
+          longitude: args.geo.longitude,
+          accuracyMeters: args.geo.accuracyMeters,
+          capturedAt: args.geo.capturedAt,
+          permissionStatus: args.geo.permissionStatus ?? "granted",
+        }
+      : null;
+
+    const imageRow = await prepareClientImageRow(ctx, {
+      clientId: args.clientId,
+      code: client.code,
+      storageId: args.photoStorageId,
+      method,
+      geo: method === "GEO_TAGGING" ? geoFix : null,
+      photoCapturedAt: args.geo?.photoCapturedAt,
+      uploadedBy: me._id,
+      branchId: client.branchId,
+      device: args.device,
+      now,
+    });
+    await ctx.db.insert("clientGeoPhotos", imageRow);
+
+    await logAudit(ctx, {
+      actorId: me._id,
+      actorName: me.name,
+      role: me.role,
+      action: "CLIENT_PHOTO_CAPTURED",
+      entity: "clients",
+      entityId: client.code,
+      after: {
+        method,
+        fileName: imageRow.fileName,
+        sizeBytes: imageRow.sizeBytes,
+        latitude: imageRow.latitude,
+        longitude: imageRow.longitude,
+        accuracyMeters: imageRow.accuracyMeters,
+        capturedAt: imageRow.capturedAt,
+        source: method === "GEO_TAGGING" ? "device-reported" : "manual-upload",
+      },
+      referenceId: client.code,
+      branchId: client.branchId,
+      device: args.device,
+    });
+
+    return { ok: true, captureMethod: method };
   },
 });
 
