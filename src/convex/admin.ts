@@ -1914,3 +1914,119 @@ export const deleteStaff = mutation({
     };
   },
 });
+
+/**
+ * SUPER_ADMIN: permanently delete a loan and ALL its associated records.
+ * Use only for dummy/test loans that must be removed entirely.
+ * This bypasses the normal deleteClosed restrictions (status, financial records)
+ * because the caller is explicitly authorized to clean up test data.
+ */
+export const deleteLoan = mutation({
+  args: {
+    loanId: v.id("loans"),
+    reason: v.string(),
+    device: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx);
+    if (me.role !== "SUPER_ADMIN") {
+      throw new AppError("Only SUPER_ADMIN can permanently delete loans.");
+    }
+    if (me.status !== "ACTIVE") {
+      throw new AppError(
+        `Your account is ${me.status.toLowerCase()} — this operation is blocked.`,
+      );
+    }
+
+    const loan = await ctx.db.get(args.loanId);
+    if (!loan) throw new AppError("Loan not found.");
+
+    // Collect all associated records
+    const [collections, receipts, schedules, walletTxns, journals, recoveries] =
+      await Promise.all([
+        ctx
+          .db
+          .query("collections")
+          .withIndex("by_loan", (q) => q.eq("loanId", loan._id))
+          .collect(),
+        ctx
+          .db
+          .query("receipts")
+          .collect()
+          .then((r) => r.filter((rec) => rec.loanId === loan._id)),
+        ctx
+          .db
+          .query("loanSchedules")
+          .withIndex("by_loan", (q) => q.eq("loanId", loan._id))
+          .collect(),
+        ctx
+          .db
+          .query("walletTransactions")
+          .withIndex("by_ref", (q) => q.eq("referenceId", loan.loanId))
+          .collect(),
+        ctx
+          .db
+          .query("journalEntries")
+          .collect()
+          .then((j) => j.filter((je) => je.refId === loan.loanId)),
+        ctx
+          .db
+          .query("recoveryActivities")
+          .withIndex("by_loan", (q) => q.eq("loanId", loan._id))
+          .collect(),
+      ]);
+
+    // Delete all associated records
+    for (const col of collections) await ctx.db.delete(col._id);
+    for (const rec of receipts) await ctx.db.delete(rec._id);
+    for (const sched of schedules) await ctx.db.delete(sched._id);
+    for (const txn of walletTxns) await ctx.db.delete(txn._id);
+    for (const je of journals) await ctx.db.delete(je._id);
+    for (const rec of recoveries) await ctx.db.delete(rec._id);
+
+    // Unlink application if it exists
+    if (loan.applicationId) {
+      const app = await ctx.db.get(loan.applicationId);
+      if (app && app.loanId === loan._id) {
+        await ctx.db.patch(app._id, { loanId: undefined });
+      }
+    }
+
+    // Log audit
+    await logAudit(ctx, {
+      actorId: me._id,
+      actorName: me.name,
+      role: me.role,
+      action: "LOAN_DELETED",
+      entity: "loans",
+      entityId: loan.loanId,
+      before: {
+        status: loan.status,
+        principal: loan.principal,
+        clientId: loan.clientId,
+        loanId: loan.loanId,
+      },
+      after: { deleted: true, reason: args.reason },
+      referenceId: loan.loanId,
+      branchId: loan.branchId,
+      device: args.device,
+    });
+
+    // Delete the loan
+    await ctx.db.delete(loan._id);
+
+    return {
+      ok: true,
+      loanId: loan.loanId,
+      deleted: true,
+      recordsRemoved: {
+        collections: collections.length,
+        receipts: receipts.length,
+        schedules: schedules.length,
+        walletTxns: walletTxns.length,
+        journals: journals.length,
+        recoveries: recoveries.length,
+      },
+    };
+  },
+});
