@@ -20,6 +20,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { PageHeader } from "@/components/fs/primitives";
+import { toast } from "sonner";
 
 export default function Centres() {
   const navigate = useNavigate();
@@ -38,8 +39,12 @@ export default function Centres() {
     setSaving(true);
     try {
       await deleteCenter({ centerId: deleteTarget._id });
+      toast.success(`Centre "${deleteTarget.name}" deleted`);
       setDeleteTarget(null);
       setConfirmingDelete(false);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete centre");
+      throw err;
     } finally {
       setSaving(false);
     }

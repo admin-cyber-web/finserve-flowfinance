@@ -19,6 +19,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { toast } from "sonner";
 
 export default function Branches() {
   const navigate = useNavigate();
@@ -53,7 +54,7 @@ export default function Branches() {
     }
     setSaving(true);
     try {
-      await createBranch({
+      const result = await createBranch({
         name: form.name.trim(),
         city: form.city.trim(),
         state: form.state.trim(),
@@ -61,8 +62,12 @@ export default function Branches() {
         address: form.address.trim() || undefined,
         contactNumber: form.contactNumber.trim() || undefined,
       });
+      toast.success(`Branch "${form.name.trim()}" created — ID ${fmtId(String(result.branchIdCode))}`);
       setCreating(false);
       setForm({ name: "", city: "", state: "", status: "ACTIVE", address: "", contactNumber: "" });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to create branch");
+      throw err;
     } finally {
       setSaving(false);
     }
@@ -95,8 +100,12 @@ export default function Branches() {
     setSaving(true);
     try {
       await deleteBranch({ branchId: deleteTarget._id });
+      toast.success(`Branch "${deleteTarget.name}" deleted`);
       setDeleteTarget(null);
       setConfirmingDelete(false);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete branch");
+      throw err;
     } finally {
       setSaving(false);
     }
