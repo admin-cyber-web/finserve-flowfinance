@@ -1649,6 +1649,134 @@ export const deactivateClient = mutation({
 });
 
 /**
+ * SUPER_ADMIN-only: permanently delete a client and all their dependent rows.
+ *
+ * Unlike deactivateClient (which soft-deletes and preserves financial history),
+ * this removes the client and all non-financial dependent rows so the centre
+ * can be deleted afterwards. Financial records (loans, collections, wallet txns)
+ * are preserved as immutable history.
+ *
+ * Use only when cleaning up test data or when a client was created by mistake
+ * and has no financial activity.
+ */
+export const deleteClient = mutation({
+  args: {
+    clientId: v.id("clients"),
+  },
+  handler: async (ctx, { clientId }) => {
+    const me = await requireProfile(ctx);
+    if (me.role !== "SUPER_ADMIN") {
+      throw new AppError("Only SUPER_ADMIN can permanently delete clients.");
+    }
+
+    const client = await ctx.db.get(clientId);
+    if (!client) throw new AppError("Client not found.");
+
+    // Delete all non-financial dependent rows.
+    const clientNotes = await ctx.db
+      .query("clientNotes")
+      .withIndex("by_client", (q) => q.eq("clientId", clientId))
+      .collect();
+    for (const r of clientNotes) await ctx.db.delete(r._id);
+
+    const clientDocuments = await ctx.db
+      .query("clientDocuments")
+      .withIndex("by_client", (q) => q.eq("clientId", clientId))
+      .collect();
+    for (const r of clientDocuments) await ctx.db.delete(r._id);
+
+    const clientFamilyMembers = await ctx.db
+      .query("clientFamilyMembers")
+      .withIndex("by_client", (q) => q.eq("clientId", clientId))
+      .collect();
+    for (const r of clientFamilyMembers) await ctx.db.delete(r._id);
+
+    const clientStaffHistory = await ctx.db
+      .query("clientStaffHistory")
+      .withIndex("by_client", (q) => q.eq("clientId", clientId))
+      .collect();
+    for (const r of clientStaffHistory) await ctx.db.delete(r._id);
+
+    const clientGeoPhotos = await ctx.db
+      .query("clientGeoPhotos")
+      .withIndex("by_client", (q) => q.eq("clientId", clientId))
+      .collect();
+    for (const r of clientGeoPhotos) await ctx.db.delete(r._id);
+
+    // Group memberships for this client: remove so the client leaves all groups.
+    const groupMembers = await ctx.db.query("groupMembers").collect();
+    for (const row of groupMembers.filter((r) => r.clientId === clientId)) {
+      await ctx.db.delete(row._id);
+    }
+
+    // Delete the client.
+    await ctx.db.delete(clientId);
+
+    await logAudit(ctx, {
+      actorId: me._id,
+      actorName: me.name,
+      role: me.role,
+      action: "CLIENT_DELETED",
+      entity: "clients",
+      entityId: client.code,
+      before: { name: client.name, status: client.status },
+      after: null,
+      branchId: client.branchId,
+    });
+
+    return { ok: true, code: client.code };
+  },
+});
+
+/**
+ * SUPER_ADMIN-only: permanently remove a client's centerId linkage.
+ *
+ * This clears the centerId field so the client is no longer linked to any
+ * centre, allowing the centre to be deleted. Use only when cleaning up test
+ * data or removing incorrect centre assignments.
+ */
+export const unlinkClientFromCenter = mutation({
+  args: {
+    clientId: v.id("clients"),
+  },
+  handler: async (ctx, { clientId }) => {
+    const me = await requireProfile(ctx);
+    if (me.role !== "SUPER_ADMIN") {
+      throw new AppError("Only SUPER_ADMIN can unlink clients from centres.");
+    }
+
+    const client = await ctx.db.get(clientId);
+    if (!client) throw new AppError("Client not found.");
+
+    if (!client.centerId) {
+      throw new AppError("Client is not linked to any centre.");
+    }
+
+    const centerCode = client.centerCode;
+    const centerId = client.centerId;
+
+    await ctx.db.patch(clientId, {
+      centerId: undefined,
+      centerCode: undefined,
+    });
+
+    await logAudit(ctx, {
+      actorId: me._id,
+      actorName: me.name,
+      role: me.role,
+      action: "CLIENT_UNLINKED_FROM_CENTER",
+      entity: "clients",
+      entityId: client.code,
+      before: { centerId, centerCode },
+      after: { centerId: null, centerCode: null },
+      branchId: client.branchId,
+    });
+
+    return { ok: true, code: client.code };
+  },
+});
+
+/**
  * SUPER_ADMIN-only: permanently remove a staff/BM/accountant profile.
  *
  * Access revocation: the profile's linked user + any devices are revoked so
