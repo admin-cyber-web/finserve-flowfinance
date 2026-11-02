@@ -7,10 +7,18 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Building, MapPin, Phone, Briefcase } from "lucide-react";
+import { Plus, Building, MapPin, Phone, Briefcase, Trash2, AlertTriangle } from "lucide-react";
 import { can, type Permission } from "@/lib/finance/permissions";
 import { useProfile } from "@/hooks/use-profile";
 import { fmtId } from "@/lib/utils";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 export default function Branches() {
   const navigate = useNavigate();
@@ -18,6 +26,8 @@ export default function Branches() {
   const branches = useQuery(api.admin.branches);
   const createBranch = useMutation(api.admin.createBranch);
   const updateBranch = useMutation(api.admin.updateBranch);
+  const deleteBranch = useMutation(api.admin.deleteBranch);
+  const isSuperAdmin = profile?.role === "SUPER_ADMIN";
 
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState({
@@ -31,6 +41,8 @@ export default function Branches() {
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<any>(null);
+  const [deleteTarget, setDeleteTarget] = useState<any>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const set = (k: keyof typeof form) => (e: { target: { value: string } }) =>
     setForm((s) => ({ ...s, [k]: e.target.value }));
@@ -76,6 +88,18 @@ export default function Branches() {
       contactNumber: b.contactNumber || "",
     });
     setEditing(b._id);
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    setSaving(true);
+    try {
+      await deleteBranch({ branchId: deleteTarget._id });
+      setDeleteTarget(null);
+      setConfirmingDelete(false);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -193,9 +217,21 @@ export default function Branches() {
                   </div>
                 </div>
               ) : (
-                <Button variant="outline" size="sm" className="w-full" onClick={() => startEdit(b)}>
-                  Edit
-                </Button>
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" className="flex-1" onClick={() => startEdit(b)}>
+                    Edit
+                  </Button>
+                  {isSuperAdmin && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setDeleteTarget(b)}
+                      disabled={saving}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </Button>
+                  )}
+                </div>
               )}
             </CardContent>
           </Card>
@@ -209,6 +245,31 @@ export default function Branches() {
           <p className="text-sm text-muted-foreground">Create your first branch to get started.</p>
         </div>
       )}
+
+      {/* Delete confirmation dialog */}
+      <Dialog open={confirmingDelete} onOpenChange={setConfirmingDelete}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="size-4 text-destructive" />
+              Delete Branch
+            </DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete the branch &quot;{deleteTarget?.name}&quot;?
+              <br />
+              <span className="text-[11px]">This action cannot be undone.</span>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmingDelete(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleDelete} disabled={saving}>
+              {saving ? "Deleting..." : "Delete Branch"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -100,6 +100,7 @@ const NAV: NavItem[] = [
   { to: "/dashboard/loans", label: "Loans", icon: Banknote, permission: "view_loans" },
   { to: "/dashboard/approvals", label: "Approvals", icon: Stamp },
   { to: "/dashboard/collection", label: "Collection", icon: Coins, permission: "collect_payment" },
+  { to: "/dashboard/centres", label: "Centres", icon: Building, permission: "create_client" },
   { to: "/dashboard/staff", label: "Staff & Wallets", icon: UserCog, permission: "staff_management" },
   { to: "/dashboard/branches", label: "Branches", icon: Building, permission: "staff_management" },
   {
@@ -122,6 +123,7 @@ const TITLES: Record<string, string> = {
   "/dashboard/loans": "Loans",
   "/dashboard/approvals": "Approvals",
   "/dashboard/collection": "Collection",
+  "/dashboard/centres": "Centres",
   "/dashboard/staff": "Staff & Wallets",
   "/dashboard/branches": "Branches",
   "/dashboard/users": "User Management",

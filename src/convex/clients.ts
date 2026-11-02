@@ -1937,13 +1937,20 @@ export const createCenter = mutation({
   },
 });
 
-/** Lightweight centre picker for the New Client popup (ID or name search). */
+/** Lightweight centre picker for the New Client popup (ID or name search).
+ * Returns no centres until a search query is entered — Centre Name or Centre ID.
+ * Supports partial and complete matching.
+ */
 export const centerSearch = query({
-  args: { q: v.optional(v.string()) },
+  args: { q: v.string() },
   handler: async (ctx, args) => {
     const me = await requireProfile(ctx, { allowInactive: true });
     requirePermission(me, "create_client");
-    const q = (args.q ?? "").trim().toLowerCase();
+    const query = (args.q ?? "").trim();
+    if (!query) {
+      throw new Error("Please enter a Centre Name or Centre ID to search.");
+    }
+    const q = query.toLowerCase();
     const centers = (await ctx.db.query("centers").collect())
       .filter(
         (c) =>
@@ -1951,7 +1958,7 @@ export const centerSearch = query({
       )
       .filter(
         (c) =>
-          !q || c.code.toLowerCase().includes(q) || c.name.toLowerCase().includes(q),
+          c.code.toLowerCase().includes(q) || c.name.toLowerCase().includes(q),
       )
       .sort((a, b) => a.name.localeCompare(b.name));
     return centers.map((c) => ({

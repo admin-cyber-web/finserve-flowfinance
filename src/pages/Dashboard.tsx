@@ -30,6 +30,7 @@ import StaffHome from "./dashboard/StaffHome";
 import Transactions from "./dashboard/Transactions";
 import Users from "./dashboard/Users";
 import Branches from "./dashboard/Branches";
+import Centres from "./dashboard/Centres";
 
 function BootScreen({ label }: { label: string }) {
   return (
@@ -140,6 +141,7 @@ export default function Dashboard() {
       <Route path="accounting" element={<Accounting />} />
       <Route path="audit" element={<Audit />} />
       <Route path="branches" element={<Branches />} />
+      <Route path="centres" element={<Centres />} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
   );

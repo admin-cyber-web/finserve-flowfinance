@@ -64,6 +64,66 @@ export const repairBranchLinks = mutation({
   },
 });
 
+/**
+ * Delete a centre. SUPER_ADMIN only.
+ * Prevents deletion if the centre has linked clients or other dependent records.
+ */
+export const deleteCenter = mutation({
+  args: {
+    centerId: v.id("centers"),
+  },
+  handler: async (ctx, { centerId }) => {
+    const me = await requireProfile(ctx);
+    if (me.role !== "SUPER_ADMIN") {
+      throw new AppError("Only SUPER_ADMIN can delete centres.");
+    }
+
+    const center = await ctx.db.get(centerId);
+    if (!center) throw new AppError("Centre not found.");
+
+    // Safety check: prevent deletion if there are linked clients.
+    const clients = await ctx.db.query("clients").collect();
+    const linkedClients = clients.filter((c) => c.centerId === centerId);
+    if (linkedClients.length > 0) {
+      throw new AppError(
+        `Cannot delete centre with ${linkedClients.length} linked client(s). Remove or reassign clients first.`,
+      );
+    }
+
+    // Safety check: prevent deletion if there are linked groups.
+    const groups = await ctx.db.query("groups").collect();
+    const linkedGroups = groups.filter((g) => g.centerId === centerId);
+    if (linkedGroups.length > 0) {
+      throw new AppError(
+        `Cannot delete centre with ${linkedGroups.length} linked group(s). Remove groups first.`,
+      );
+    }
+
+    const before = {
+      code: center.code,
+      name: center.name,
+      village: center.village,
+      branchId: center.branchId,
+    };
+
+    await ctx.db.delete(centerId);
+
+    await logAudit(ctx, {
+      actorId: me._id,
+      actorName: me.name,
+      role: me.role,
+      action: "CENTER_DELETED",
+      entity: "centers",
+      entityId: center.code,
+      before,
+      after: null,
+      branchId: center.branchId,
+    });
+
+    return { ok: true, deletedCode: center.code };
+  },
+});
+
 /* ----------------------------- Dashboard ------------------------------------- */
 
 export const dashboard = query({
@@ -797,6 +857,18 @@ export const grievanceList = query({
  *
  * Requires `staff_management`, the same permission that guards staff creation.
  */
+// Old branch names/codes to be hidden from active Branch Management.
+// These were part of an earlier setup; they are not "deleted" (historical
+// client/loan/collection/financial records are preserved), but removed from
+// the active management view. SUPER_ADMIN delete handles removal when safe.
+const OLD_BRANCH_NAMES = new Set([
+  "Ballia",
+  "KNP",
+  "Lucknow — Hazratganj Main",
+  "Varanasi — Lanka",
+]);
+const OLD_BRANCH_CODES = new Set(["LKO", "VNS"]);
+
 export const branches = query({
   args: {},
   handler: async (ctx) => {
@@ -805,6 +877,10 @@ export const branches = query({
     const rows = await ctx.db.query("branches").collect();
     const enriched: any[] = [];
     for (const b of rows) {
+      // Hide old branches from the active management list.
+      if (OLD_BRANCH_NAMES.has(b.name) || OLD_BRANCH_CODES.has(b.code)) {
+        continue;
+      }
       let managerName: string | undefined;
       if (b.managerId) {
         const m = await ctx.db.get(b.managerId);
@@ -959,10 +1035,99 @@ export const updateBranch = mutation({
 
     return { ok: true };
   },
+});/**
+ * SUPER_ADMIN-only: delete a branch.
+ * Prevents deletion if the branch has linked centres, clients, loans or other
+ * dependent records. Historical records are preserved; only the branch entry is removed.
+ */
+export const deleteBranch = mutation({
+  args: {
+    branchId: v.id("branches"),
+  },
+  handler: async (ctx, { branchId }) => {
+    const me = await requireProfile(ctx);
+    if (me.role !== "SUPER_ADMIN") {
+      throw new AppError("Only SUPER_ADMIN can delete branches.");
+    }
+
+    const branch = await ctx.db.get(branchId);
+    if (!branch) throw new AppError("Branch not found.");
+
+    // Safety checks: prevent deletion if there are linked records.
+    // Centres linked to this branch.
+    const centers = await ctx.db.query("centers").collect();
+    const linkedCenters = centers.filter((c) => c.branchId === branchId);
+    if (linkedCenters.length > 0) {
+      throw new AppError(
+        `Cannot delete branch with ${linkedCenters.length} linked centre(s). Remove or reassign centres first.`,
+      );
+    }
+
+    // Clients linked to this branch.
+    const clients = await ctx.db.query("clients").collect();
+    const linkedClients = clients.filter((c) => c.branchId === branchId);
+    if (linkedClients.length > 0) {
+      throw new AppError(
+        `Cannot delete branch with ${linkedClients.length} linked client(s). Reassign clients first.`,
+      );
+    }
+
+    // Loans linked to this branch.
+    const loans = await ctx.db.query("loans").collect();
+    const linkedLoans = loans.filter((l) => l.branchId === branchId);
+    if (linkedLoans.length > 0) {
+      throw new AppError(
+        `Cannot delete branch with ${linkedLoans.length} linked loan(s). Reassign loans first.`,
+      );
+    }
+
+    // Loan applications linked to this branch.
+    const applications = await ctx.db.query("loanApplications").collect();
+    const linkedApplications = applications.filter((a) => a.branchId === branchId);
+    if (linkedApplications.length > 0) {
+      throw new AppError(
+        `Cannot delete branch with ${linkedApplications.length} linked loan application(s). Reassign applications first.`,
+      );
+    }
+
+    // Staff linked to this branch.
+    const profiles = await ctx.db.query("profiles").collect();
+    const linkedStaff = profiles.filter((p) => p.branchId === branchId && p.role !== "CLIENT");
+    if (linkedStaff.length > 0) {
+      throw new AppError(
+        `Cannot delete branch with ${linkedStaff.length} linked staff member(s). Reassign staff first.`,
+      );
+    }
+
+    const before = {
+      code: branch.code,
+      name: branch.name,
+      city: branch.city,
+      state: branch.state,
+      status: branch.status,
+      branchIdCode: branch.branchIdCode,
+      managerId: branch.managerId,
+    };
+
+    await ctx.db.delete(branchId);
+
+    await logAudit(ctx, {
+      actorId: me._id,
+      actorName: me.name,
+      role: me.role,
+      action: "BRANCH_DELETED",
+      entity: "branches",
+      entityId: String(branch.branchIdCode ?? ""),
+      before,
+      after: null,
+      branchId,
+    });
+
+    return { ok: true, deletedCode: branch.code };
+  },
 });
 
 /* --------------------------- Data integrity ------------------------------ */
-
 export interface BranchIntegrityReport {
   staffWithoutBranch: { staffId: string | null; name: string; role: string }[];
   /** Branch-less SUPER_ADMIN accounts are expected (organisation-wide). */

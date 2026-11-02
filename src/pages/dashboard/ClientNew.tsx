@@ -392,8 +392,11 @@ export default function ClientNew() {
   const createClient = useMutation(api.clients.create);
   const centers = useQuery(
     api.clients.centerSearch,
-    selected ? "skip" : { q: q.trim() || undefined },
+    selected ? "skip" : (q.trim() ? { q: q.trim() } : "skip"),
   );
+
+  // Show empty state when no query is entered
+  const showNoResults = !selected && q.trim() && (!centers || centers.length === 0);
 
   // Ages are calculated live from the DOB pickers — both Age fields are
   // read-only displays and can never disagree with the chosen date.
@@ -1039,13 +1042,18 @@ export default function ClientNew() {
                 <div className="max-h-64 overflow-y-auto">
                   {centers === undefined ? (
                     <RowSkeleton rows={3} />
-                  ) : centers.length === 0 ? (
+                  ) : !q.trim() ? (
+                    // No search query entered — show nothing (search-only behavior)
                     <p className="border-2 border-dashed border-ink p-3 text-center text-xs font-bold text-muted-foreground">
-                      {q
-                        ? `No centre matches “${q}”.`
-                        : "No centres yet — create the first one below."}
+                      Enter a Centre Name or Centre ID to search.
+                    </p>
+                  ) : centers.length === 0 ? (
+                    // Search query entered but no matches found
+                    <p className="border-2 border-dashed border-ink p-3 text-center text-xs font-bold text-muted-foreground">
+                      No matching centre found.
                     </p>
                   ) : (
+                    // Query entered and matches found
                     <div className="flex flex-col gap-2">
                       {centers.map((c) => (
                         <button
