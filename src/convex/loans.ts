@@ -32,6 +32,10 @@ import {
   assertClientImageAvailable,
   clientImageState,
 } from "../lib/server/clientImageOps";
+import {
+  allocateLoanSerial,
+  buildLoanCode,
+} from "../lib/server/branchOps";
 import { round2, completedMonthsBetween } from "../lib/finance/money";
 import { rowOutstanding } from "../lib/finance/schedule";
 import {
@@ -382,6 +386,11 @@ export const submit = mutation({
     // client onboarding does so single loans always work end-to-end.
     const applicationBranch = me.branchId ?? (await resolveBranchForActor(ctx, me));
 
+    // Resolve the branch's manager (if assigned) so the application carries
+    // the responsible BM for visibility and reporting.
+    const applicationBranchRecord = await ctx.db.get(applicationBranch);
+    const applicationManagerId = applicationBranchRecord?.managerId ?? undefined;
+
     const applicationId = await ctx.db.insert("loanApplications", {
       appId,
       clientId: args.clientId,
@@ -390,6 +399,7 @@ export const submit = mutation({
       branchId: applicationBranch,
       centerId: client.centerId,
       status: "SUBMITTED",
+      managerId: applicationManagerId,
       history: [
         {
           actorId: me._id,
@@ -1035,13 +1045,15 @@ export const decide = mutation({
         );
       }
 
-      const loanSeq =
-        (await ctx.db.query("loans").collect()).reduce(
-          (max, l) =>
-            Math.max(max, Number(String(l.loanId).replace(/\D/g, "") || 0)),
-          0,
-        ) + 1;
-      const loanId = `LN${String(loanSeq).padStart(6, "0")}`;
+      // Branch-scoped loan ID: LN + BranchID(4) + branch loan serial.
+      const appBranch = await ctx.db.get(app.branchId);
+      if (!appBranch) throw new AppError("Application branch not found.");
+      const branchIdCode = appBranch.branchIdCode;
+      if (branchIdCode == null) {
+        throw new AppError("Branch has no Branch ID allocated yet.");
+      }
+      const loanSerial = await allocateLoanSerial(ctx, branchIdCode);
+      const loanId = buildLoanCode(branchIdCode, loanSerial);
 
       const previewRows = rowsPreview;
       // No separately authorized fee rule → no fee on this loan.
@@ -1056,6 +1068,7 @@ export const decide = mutation({
         // Every loan traces back to the client's centre (centre-wise batches
         // record it at application time; single loans inherit it here).
         centerId: app.centerId ?? client?.centerId,
+        managerId: app.managerId,
         principal: app.amount,
         interestTotal: round2(previewRows.reduce((s, r) => s + r.interest, 0)),
         charges,

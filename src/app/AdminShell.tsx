@@ -28,10 +28,12 @@ import {
   X,
   ChevronDown,
   User,
+  Building,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
+import type { Permission } from "@/lib/finance/permissions";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -40,7 +42,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import type { Permission } from "@/lib/finance/permissions";
 
 /** Wordmark for the deep-saffron navigation surfaces. */
 function BrandWordmark({ className }: { className?: string }) {
@@ -100,6 +101,7 @@ const NAV: NavItem[] = [
   { to: "/dashboard/approvals", label: "Approvals", icon: Stamp },
   { to: "/dashboard/collection", label: "Collection", icon: Coins, permission: "collect_payment" },
   { to: "/dashboard/staff", label: "Staff & Wallets", icon: UserCog, permission: "staff_management" },
+  { to: "/dashboard/branches", label: "Branches", icon: Building, permission: "staff_management" },
   {
     to: "/dashboard/users",
     label: "User Management",
@@ -121,6 +123,7 @@ const TITLES: Record<string, string> = {
   "/dashboard/approvals": "Approvals",
   "/dashboard/collection": "Collection",
   "/dashboard/staff": "Staff & Wallets",
+  "/dashboard/branches": "Branches",
   "/dashboard/users": "User Management",
   "/dashboard/cash": "Cash & Handovers",
   "/dashboard/overdue": "Overdue & Recovery",

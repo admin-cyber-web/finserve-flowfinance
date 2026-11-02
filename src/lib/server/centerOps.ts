@@ -118,6 +118,11 @@ export async function createCenterForActor(
   const code = await nextCenterCode(ctx);
 
   const now = Date.now();
+  // Resolve the branch's manager (if assigned) so the centre carries the
+  // responsible BM for visibility and reporting.
+  const branch = await ctx.db.get(branchId);
+  const managerId = branch?.managerId ?? undefined;
+
   const centerId = await ctx.db.insert("centers", {
     code,
     name,
@@ -128,6 +133,7 @@ export async function createCenterForActor(
     // Creating staff member, from the backend identity.
     staffId: me._id,
     createdBy: me._id,
+    managerId,
     createdAt: now,
   });
   await logAudit(ctx, {

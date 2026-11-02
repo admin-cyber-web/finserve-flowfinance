@@ -17,6 +17,10 @@ import {
   resolveCenterForClient,
 } from "../lib/server/centerOps";
 import {
+  allocateClientSerial,
+  buildClientCode,
+} from "../lib/server/branchOps";
+import {
   ageFromDob,
   mobileNumber,
   optionalString,
@@ -864,31 +868,18 @@ export const create = mutation({
     }
     branchId = assigneeProfile.branchId ?? branchId;
 
-    // Client numbers come from their OWN sequence (separate from staff):
-    // numeric only — no role prefix, no hyphen — leading zeros kept
-    // (000001, 000002, ...). Legacy "C-000137" style codes still count
-    // towards the highest number, so a restored database never reissues a
-    // number. The counter row makes duplicate client IDs impossible even
-    // under concurrent creation (Convex serialises mutation commits).
-    const existing = await ctx.db.query("clients").collect();
-    const clientCounter = await ctx.db
-      .query("counters")
-      .withIndex("by_key", (q) => q.eq("key", "client"))
-      .unique();
-    let highestClientNumber = clientCounter?.value ?? 0;
-    for (const c of existing) {
-      const n = Number(c.code.replace(/\D/g, "") || 0);
-      if (n > highestClientNumber) highestClientNumber = n;
+    // Branch-scoped client code: C + BranchID(4) + branch serial.
+    // Each branch has its own independent serial starting at 1, allocated
+    // atomically from a per-branch counter (key `clientSerial:<branchIdCode>`).
+    // Legacy numeric codes (000456, C-000456) are preserved and never reissued.
+    const branch = await ctx.db.get(branchId);
+    if (!branch) throw new AppError("Branch not found.");
+    const branchIdCode = branch.branchIdCode;
+    if (branchIdCode == null) {
+      throw new AppError("Branch has no Branch ID allocated yet.");
     }
-    const nextClientNumber = highestClientNumber + 1;
-    if (clientCounter) {
-      if (clientCounter.value !== nextClientNumber) {
-        await ctx.db.patch(clientCounter._id, { value: nextClientNumber });
-      }
-    } else {
-      await ctx.db.insert("counters", { key: "client", value: nextClientNumber });
-    }
-    const code = String(nextClientNumber).padStart(6, "0");
+    const clientSerial = await allocateClientSerial(ctx, branchIdCode);
+    const code = buildClientCode(branchIdCode, clientSerial);
 
     // Centre linkage: the centre selected in the joining form is re-verified
     // against the database here (exists + same branch) so a direct backend
@@ -941,6 +932,7 @@ export const create = mutation({
       branchId,
       assignedTo: assignee,
       createdBy: me._id,
+      managerId: branch.managerId,
       kycStatus: "PENDING",
       kycDocType,
       kycDocRef,

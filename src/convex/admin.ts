@@ -22,6 +22,12 @@ import {
   migrateCenterIdsTx,
   repairBranchLinksTx,
 } from "../lib/server/maintenanceOps";
+import {
+  branchStatusValidator,
+  requireBranchAdmin,
+  buildBranchFields,
+  branchManagerCandidates,
+} from "../lib/server/branchOps";
 import { isClientImageAvailable } from "../lib/server/clientImageOps";
 
 /* ----------------------- SUPER_ADMIN maintenance ---------------------------- */
@@ -785,8 +791,10 @@ export const grievanceList = query({
  * Branch directory for the branch pickers (Create Staff, assign-branch).
  *
  * Returns the backend branch records themselves — `_id` is what gets stored
- * as `branchId`, and `code` is the visible Branch ID (KNP001 style) — so the
- * form never has to infer branches from who happens to already be staff.
+ * as `branchId`, `code` is the legacy reference code, and `branchIdCode` is
+ * the numeric human-readable Branch ID (1001, 1002, ...). The form never has
+ * to infer branches from who happens to already be staff.
+ *
  * Requires `staff_management`, the same permission that guards staff creation.
  */
 export const branches = query({
@@ -795,9 +803,161 @@ export const branches = query({
     const me = await requireProfile(ctx, { allowInactive: true });
     requirePermission(me, "staff_management");
     const rows = await ctx.db.query("branches").collect();
-    return rows
-      .map((b) => ({ _id: b._id, code: b.code, name: b.name, status: b.status }))
-      .sort((a, b) => a.name.localeCompare(b.name));
+    const enriched: any[] = [];
+    for (const b of rows) {
+      let managerName: string | undefined;
+      if (b.managerId) {
+        const m = await ctx.db.get(b.managerId);
+        managerName = m ? m.name : undefined;
+      }
+      enriched.push({
+        _id: b._id,
+        code: b.code,
+        name: b.name,
+        city: b.city,
+        state: b.state,
+        status: b.status,
+        address: b.address,
+        contactNumber: b.contactNumber,
+        branchIdCode: b.branchIdCode,
+        managerId: b.managerId,
+        managerName,
+      });
+    }
+    return enriched.sort((a, b) => a.name.localeCompare(b.name));
+  },
+});
+
+/** SUPER_ADMIN-only: create a new branch with an automatically allocated
+ * numeric Branch ID (1001, 1002, ...). The frontend may not supply it. */
+export const createBranch = mutation({
+  args: {
+    name: v.string(),
+    city: v.string(),
+    state: v.string(),
+    status: branchStatusValidator(),
+    address: v.optional(v.string()),
+    contactNumber: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx);
+    requireBranchAdmin(me);
+    const fields = await buildBranchFields(
+      ctx,
+      args.name,
+      args.city,
+      args.state,
+      args.status,
+      args.address,
+      args.contactNumber,
+    );
+
+    const branchId = await ctx.db.insert("branches", {
+      code: fields.code,
+      name: fields.name,
+      city: fields.city,
+      state: fields.state,
+      status: fields.status,
+      address: fields.address,
+      contactNumber: fields.contactNumber,
+      branchIdCode: fields.branchIdCode,
+      createdAt: Date.now(),
+    });
+
+    await logAudit(ctx, {
+      actorId: me._id,
+      actorName: me.name,
+      role: me.role,
+      action: "BRANCH_CREATED",
+      entity: "branches",
+      entityId: String(fields.branchIdCode),
+      after: {
+        name: fields.name,
+        city: fields.city,
+        state: fields.state,
+        status: fields.status,
+        branchIdCode: fields.branchIdCode,
+      },
+      branchId,
+    });
+
+    return { ok: true, branchId, branchIdCode: fields.branchIdCode };
+  },
+});
+
+/** SUPER_ADMIN-only: update a branch's editable fields.
+ * Branch ID (`branchIdCode`) is never changed after creation. */
+export const updateBranch = mutation({
+  args: {
+    branchId: v.id("branches"),
+    name: v.optional(v.string()),
+    city: v.optional(v.string()),
+    state: v.optional(v.string()),
+    status: v.optional(branchStatusValidator()),
+    address: v.optional(v.string()),
+    contactNumber: v.optional(v.string()),
+    managerId: v.optional(v.id("profiles")),
+  },
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx);
+    requireBranchAdmin(me);
+
+    const branch = await ctx.db.get(args.branchId);
+    if (!branch) throw new AppError("Branch not found.");
+
+    const before = {
+      name: branch.name,
+      city: branch.city,
+      state: branch.state,
+      status: branch.status,
+      address: branch.address,
+      contactNumber: branch.contactNumber,
+      branchIdCode: branch.branchIdCode,
+      managerId: branch.managerId,
+    };
+
+    const name = args.name != null ? requiredString(args.name, "name", 120) : branch.name;
+    const city = args.city != null ? requiredString(args.city, "city", 80) : branch.city;
+    const state = args.state != null ? requiredString(args.state, "state", 80) : branch.state;
+    const status = args.status ?? branch.status;
+    const address = args.address != null ? (args.address.trim() ? optionalString(args.address, "address", 300) : undefined) : branch.address;
+    const contactNumber = args.contactNumber != null ? (args.contactNumber.trim() ? optionalString(args.contactNumber, "contactNumber", 20) : undefined) : branch.contactNumber;
+
+    // Manager assignment: only ACTIVE BMs (or SUPER_ADMIN) may be assigned,
+    // and they should already belong to this branch (admin may reassign a BM
+    // into the branch they manage).
+    let managerId = branch.managerId;
+    if (args.managerId !== undefined) {
+      const candidate = await ctx.db.get(args.managerId);
+      if (!candidate) throw new AppError("Manager not found.");
+      if (candidate.status !== "ACTIVE") throw new AppError("Only an ACTIVE staff member can be assigned as Branch Manager.");
+      if (candidate.role !== "BRANCH_MANAGER" && candidate.role !== "SUPER_ADMIN") throw new AppError("Only a Branch Manager (or an administrator) can be assigned as the branch's manager.");
+      managerId = args.managerId;
+    }
+
+    await ctx.db.patch(args.branchId, {
+      name,
+      city,
+      state,
+      status,
+      address,
+      contactNumber,
+      managerId,
+    });
+
+    await logAudit(ctx, {
+      actorId: me._id,
+      actorName: me.name,
+      role: me.role,
+      action: "BRANCH_UPDATED",
+      entity: "branches",
+      entityId: String(branch.branchIdCode ?? ""),
+      before,
+      after: { name, city, state, status, address, contactNumber, managerId },
+      branchId: args.branchId,
+    });
+
+    return { ok: true };
   },
 });
 
@@ -1039,6 +1199,7 @@ export const updateStaff = mutation({
     mobile: v.optional(v.string()),
     email: v.optional(v.string()),
     branchId: v.optional(v.id("branches")),
+    managerId: v.optional(v.id("profiles")),
     role: v.optional(v.string()),
     joiningDate: v.optional(v.number()),
     device: v.optional(v.string()),
@@ -1052,6 +1213,14 @@ export const updateStaff = mutation({
     if (!target) throw new AppError("Staff not found.");
     if (target.role === "CLIENT") {
       throw new AppError("Edit client details on the client record instead.");
+    }
+
+    // Ordinary staff cannot change their own branch or manager mapping.
+    // SUPER_ADMIN (including the Pankaj grant) may reassign themselves.
+    if (target._id === me._id && me.role !== "SUPER_ADMIN") {
+      if (args.branchId !== undefined || args.managerId !== undefined) {
+        throw new AppError("You cannot change your own branch or manager assignment.");
+      }
     }
     if (target.status === "DEACTIVATED") {
       throw new AppError(
@@ -1077,11 +1246,10 @@ export const updateStaff = mutation({
         patch.email = undefined;
       }
     }
-    // Nobody edits their own branch assignment from an edit form — a staff
-    // member (including an admin editing themselves) can never move themselves
-    // into another branch. Branch moves are made by a different administrator
-    // on a different account.
-    if (args.branchId !== undefined && target._id === me._id) {
+    // Ordinary staff cannot move themselves to another branch. A SUPER_ADMIN
+    // (including the Pankaj grant) may reassign themselves — needed when the
+    // first real branch (KNP) is created/activated and the admin moves into it.
+    if (args.branchId !== undefined && target._id === me._id && me.role !== "SUPER_ADMIN") {
       throw new AppError("You cannot change your own branch assignment.");
     }
     if (args.branchId !== undefined) {

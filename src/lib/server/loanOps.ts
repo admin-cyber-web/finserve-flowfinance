@@ -432,6 +432,11 @@ export async function recordCollection(
 
   // 1. Collection document (append-only). IDs carry no hyphens (PY000123).
   const collectionCode = await makeCode(ctx, "collection", "PY", 6);
+  // Derive branch manager from the loan's branch so the collection is
+  // visible to the responsible BM.
+  const loanBranch = await ctx.db.get(loan.branchId);
+  const managerId = loanBranch?.managerId ?? undefined;
+
   const collectionId = await ctx.db.insert("collections", {
     code: collectionCode,
     loanId: loan._id,
@@ -439,6 +444,7 @@ export async function recordCollection(
     clientId: loan.clientId,
     staffId: args.actor._id,
     branchId: loan.branchId,
+    managerId,
     amount: args.amount,
     principalPortion: allocation.principalPortion,
     interestPortion: allocation.interestPortion,

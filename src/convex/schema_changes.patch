@@ -1,0 +1,12 @@
+Add to branches table:
+  branchIdCode: v.optional(v.number()),
+  contactNumber: v.optional(v.string()),
+  managerId: v.optional(v.id("profiles")),
+Add to profiles table:
+  managerId: v.optional(v.id("profiles")),
+Add to clients table:
+  managerId: v.optional(v.id("profiles")),
+Add to loans table:
+  managerId: v.optional(v.id("profiles")),
+Add to centers table:
+  managerId: v.optional(v.id("profiles")),
