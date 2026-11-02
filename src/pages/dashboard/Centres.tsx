@@ -35,19 +35,33 @@ export default function Centres() {
   const [saving, setSaving] = useState(false);
 
   const handleDelete = async () => {
-    if (!deleteTarget) return;
+    if (!deleteTarget) {
+      toast.error('No centre selected for deletion');
+      return;
+    }
+    if (!deleteTarget._id) {
+      toast.error('Invalid centre data');
+      return;
+    }
     setSaving(true);
     try {
       await deleteCenter({ centerId: deleteTarget._id });
       toast.success(`Centre "${deleteTarget.name}" deleted`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to delete centre";
+      toast.error(message);
+    } finally {
       setDeleteTarget(null);
       setConfirmingDelete(false);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete centre");
-      setConfirmingDelete(false);
-    } finally {
       setSaving(false);
     }
+  };
+
+  // Wrapper to prevent unhandled promise rejections from React event handlers
+  const onDeleteClick = () => {
+    void handleDelete().catch(() => {
+      // Errors are already handled in handleDelete via toast
+    });
   };
 
   const centerList = centres?.map((c) => ({
@@ -169,7 +183,7 @@ export default function Centres() {
             <Button variant="outline" onClick={() => setConfirmingDelete(false)}>
               Cancel
             </Button>
-            <Button variant="destructive" onClick={handleDelete} disabled={saving}>
+            <Button variant="destructive" onClick={onDeleteClick} disabled={saving}>
               {saving ? "Deleting..." : "Delete Centre"}
             </Button>
           </DialogFooter>

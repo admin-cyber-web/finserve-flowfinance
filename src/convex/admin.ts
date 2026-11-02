@@ -73,54 +73,60 @@ export const deleteCenter = mutation({
     centerId: v.id("centers"),
   },
   handler: async (ctx, { centerId }) => {
-    const me = await requireProfile(ctx);
-    if (me.role !== "SUPER_ADMIN") {
-      throw new AppError("Only SUPER_ADMIN can delete centres.");
+    try {
+      const me = await requireProfile(ctx);
+      if (me.role !== "SUPER_ADMIN") {
+        throw new AppError("Only SUPER_ADMIN can delete centres.");
+      }
+
+      const center = await ctx.db.get(centerId);
+      if (!center) throw new AppError("Centre not found.");
+
+      // Safety check: prevent deletion if there are linked clients.
+      const clients = await ctx.db.query("clients").collect();
+      const linkedClients = clients.filter((c) => c.centerId === centerId);
+      if (linkedClients.length > 0) {
+        throw new AppError(
+          `Cannot delete centre with ${linkedClients.length} linked client(s). Remove or reassign clients first.`,
+        );
+      }
+
+      // Safety check: prevent deletion if there are linked groups.
+      const groups = await ctx.db.query("groups").collect();
+      const linkedGroups = groups.filter((g) => g.centerId === centerId);
+      if (linkedGroups.length > 0) {
+        throw new AppError(
+          `Cannot delete centre with ${linkedGroups.length} linked group(s). Remove groups first.`,
+        );
+      }
+
+      const before = {
+        code: center.code,
+        name: center.name,
+        village: center.village,
+        branchId: center.branchId,
+      };
+
+      await ctx.db.delete(centerId);
+
+      await logAudit(ctx, {
+        actorId: me._id,
+        actorName: me.name,
+        role: me.role,
+        action: "CENTER_DELETED",
+        entity: "centers",
+        entityId: center.code,
+        before,
+        after: null,
+        branchId: center.branchId,
+      });
+
+      return { ok: true, deletedCode: center.code };
+    } catch (err) {
+      // Re-throw AppError as-is; wrap other errors in AppError for consistent handling.
+      if (err instanceof AppError) throw err;
+      throw new AppError(`Failed to delete centre: ${err instanceof Error ? err.message : "unknown error"}`);
     }
-
-    const center = await ctx.db.get(centerId);
-    if (!center) throw new AppError("Centre not found.");
-
-    // Safety check: prevent deletion if there are linked clients.
-    const clients = await ctx.db.query("clients").collect();
-    const linkedClients = clients.filter((c) => c.centerId === centerId);
-    if (linkedClients.length > 0) {
-      throw new AppError(
-        `Cannot delete centre with ${linkedClients.length} linked client(s). Remove or reassign clients first.`,
-      );
-    }
-
-    // Safety check: prevent deletion if there are linked groups.
-    const groups = await ctx.db.query("groups").collect();
-    const linkedGroups = groups.filter((g) => g.centerId === centerId);
-    if (linkedGroups.length > 0) {
-      throw new AppError(
-        `Cannot delete centre with ${linkedGroups.length} linked group(s). Remove groups first.`,
-      );
-    }
-
-    const before = {
-      code: center.code,
-      name: center.name,
-      village: center.village,
-      branchId: center.branchId,
-    };
-
-    await ctx.db.delete(centerId);
-
-    await logAudit(ctx, {
-      actorId: me._id,
-      actorName: me.name,
-      role: me.role,
-      action: "CENTER_DELETED",
-      entity: "centers",
-      entityId: center.code,
-      before,
-      after: null,
-      branchId: center.branchId,
-    });
-
-    return { ok: true, deletedCode: center.code };
   },
 });
 
