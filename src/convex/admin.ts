@@ -4,6 +4,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import {
   AppError,
   logAudit,
+  requirePermission,
   requireProfile,
   requireRole,
   revokeUserSessions,
@@ -778,6 +779,179 @@ export const grievanceList = query({
 
 /* ------------------------------- User management ---------------------------- */
 
+/* --------------------------- Branch directory ------------------------------ */
+
+/**
+ * Branch directory for the branch pickers (Create Staff, assign-branch).
+ *
+ * Returns the backend branch records themselves — `_id` is what gets stored
+ * as `branchId`, and `code` is the visible Branch ID (KNP001 style) — so the
+ * form never has to infer branches from who happens to already be staff.
+ * Requires `staff_management`, the same permission that guards staff creation.
+ */
+export const branches = query({
+  args: {},
+  handler: async (ctx) => {
+    const me = await requireProfile(ctx, { allowInactive: true });
+    requirePermission(me, "staff_management");
+    const rows = await ctx.db.query("branches").collect();
+    return rows
+      .map((b) => ({ _id: b._id, code: b.code, name: b.name, status: b.status }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  },
+});
+
+/* --------------------------- Data integrity ------------------------------ */
+
+export interface BranchIntegrityReport {
+  staffWithoutBranch: { staffId: string | null; name: string; role: string }[];
+  /** Branch-less SUPER_ADMIN accounts are expected (organisation-wide). */
+  orgWideAdmins: { staffId: string | null; name: string }[];
+  centers: {
+    code: string;
+    name: string;
+    branchId: string | null;
+    issue: string;
+  }[];
+  clients: {
+    code: string;
+    name: string;
+    branchId: string | null;
+    issue: string;
+  }[];
+  applications: { appId: string; branchId: string | null; issue: string }[];
+  clean: boolean;
+}
+
+/**
+ * Branch-relationship audit: every staff / centre / client / loan application
+ * whose branch link is missing or disagrees with the record it must follow
+ * (centre ← creating staff, client ← assigned staff or centre, application ←
+ * client). Used to prove `repairBranchLinks` fixed the data — and to REPORT
+ * records whose correct branch cannot be established instead of guessing.
+ */
+export const branchIntegrity = query({
+  args: {},
+  handler: async (ctx): Promise<BranchIntegrityReport> => {
+    const me = await requireProfile(ctx);
+    if (me.role !== "SUPER_ADMIN") {
+      throw new AppError("Only SUPER_ADMIN can audit branch relationships.");
+    }
+
+    const profiles = await ctx.db.query("profiles").collect();
+    const centers = await ctx.db.query("centers").collect();
+    const clients = await ctx.db.query("clients").collect();
+    const applications = await ctx.db.query("loanApplications").collect();
+    const staffById = new Map(profiles.map((p) => [p._id, p]));
+
+    const report: BranchIntegrityReport = {
+      staffWithoutBranch: [],
+      orgWideAdmins: [],
+      centers: [],
+      clients: [],
+      applications: [],
+      clean: true,
+    };
+
+    for (const p of profiles) {
+      if (p.role === "CLIENT") continue;
+      if (p.branchId) continue;
+      if (p.role === "SUPER_ADMIN") {
+        // An organisation-wide admin legitimately has no home branch.
+        report.orgWideAdmins.push({ staffId: p.staffId ?? null, name: p.name });
+        continue;
+      }
+      report.clean = false;
+      report.staffWithoutBranch.push({
+        staffId: p.staffId ?? null,
+        name: p.name,
+        role: p.role,
+      });
+    }
+
+    for (const c of centers) {
+      const creator = c.staffId ? staffById.get(c.staffId) : undefined;
+      if (!c.branchId) {
+        report.clean = false;
+        report.centers.push({
+          code: c.code,
+          name: c.name,
+          branchId: null,
+          issue: creator?.branchId
+            ? "missing branchId — creator has one"
+            : "missing branchId — creator's branch unknown (cannot repair)",
+        });
+      } else if (creator?.branchId && creator.branchId !== c.branchId) {
+        report.clean = false;
+        report.centers.push({
+          code: c.code,
+          name: c.name,
+          branchId: c.branchId,
+          issue: `creator ${creator.name} is in another branch`,
+        });
+      }
+    }
+
+    const centerById = new Map(centers.map((c) => [c._id, c]));
+    for (const c of clients) {
+      const staff = c.assignedTo ? staffById.get(c.assignedTo) : undefined;
+      const center = c.centerId ? centerById.get(c.centerId) : undefined;
+      if (!c.branchId) {
+        report.clean = false;
+        report.clients.push({
+          code: c.code,
+          name: c.name,
+          branchId: null,
+          issue: staff?.branchId
+            ? "missing branchId — assigned staff has one"
+            : center?.branchId
+              ? "missing branchId — centre has one"
+              : "missing branchId — no reliable source (cannot repair)",
+        });
+      } else if (staff?.branchId && staff.branchId !== c.branchId) {
+        report.clean = false;
+        report.clients.push({
+          code: c.code,
+          name: c.name,
+          branchId: c.branchId,
+          issue: `assigned staff ${staff.name} is in another branch`,
+        });
+      } else if (center?.branchId && center.branchId !== c.branchId) {
+        report.clean = false;
+        report.clients.push({
+          code: c.code,
+          name: c.name,
+          branchId: c.branchId,
+          issue: `centre ${center.code} is in another branch`,
+        });
+      }
+    }
+
+    for (const a of applications) {
+      const client = a.clientId ? clients.find((c) => c._id === a.clientId) : undefined;
+      if (!a.branchId) {
+        report.clean = false;
+        report.applications.push({
+          appId: a.appId,
+          branchId: null,
+          issue: client
+            ? "missing branchId — client has one"
+            : "missing branchId — client unknown (cannot repair)",
+        });
+      } else if (client?.branchId && client.branchId !== a.branchId) {
+        report.clean = false;
+        report.applications.push({
+          appId: a.appId,
+          branchId: a.branchId,
+          issue: `client ${client.code} is in another branch`,
+        });
+      }
+    }
+
+    return report;
+  },
+});
+
 /** SUPER_ADMIN-only: list every human profile (no clients) with basic details. */
 export const listUsers = query({
   args: {
@@ -902,6 +1076,13 @@ export const updateStaff = mutation({
       } else {
         patch.email = undefined;
       }
+    }
+    // Nobody edits their own branch assignment from an edit form — a staff
+    // member (including an admin editing themselves) can never move themselves
+    // into another branch. Branch moves are made by a different administrator
+    // on a different account.
+    if (args.branchId !== undefined && target._id === me._id) {
+      throw new AppError("You cannot change your own branch assignment.");
     }
     if (args.branchId !== undefined) {
       const branch = await ctx.db.get(args.branchId);

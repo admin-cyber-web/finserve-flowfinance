@@ -9,7 +9,11 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../../convex/_generated/server";
 import type { Permission } from "../finance/permissions";
-import { effectivePermissions } from "../finance/permissions";
+import {
+  effectivePermissions,
+  effectiveRole,
+  hasSuperAdminGrant,
+} from "../finance/permissions";
 import type { TxDirection, WalletTxType } from "../finance/types";
 import { deriveBalance, txDelta } from "../finance/wallet";
 import { isBalanced, type JournalEntrySpec } from "../finance/journal";
@@ -27,10 +31,28 @@ export class AppError extends Error {
 
 /* ------------------------------- Identity -------------------------------- */
 
+/**
+ * The authorization view of a profile.
+ *
+ * For a backend-granted account (see `SUPER_ADMIN_GRANTS`) `role` carries the
+ * EFFECTIVE role the server authorizes with, while `designationRole` keeps the
+ * stored role that must continue to display ("Branch Manager"). Everyone else
+ * has no `designationRole` and `role` is simply their stored role.
+ *
+ * This is a read-only projection: the stored profile document is never
+ * patched, so the record, its staff number, PIN and history stay untouched.
+ */
+export type AuthProfile = Doc<"profiles"> & { designationRole?: string };
+
+export function withEffectiveRole(profile: Doc<"profiles">): AuthProfile {
+  if (!hasSuperAdminGrant(profile)) return profile;
+  return { ...profile, role: effectiveRole(profile), designationRole: profile.role };
+}
+
 export interface Actor {
   userId: Id<"users">;
   user: Doc<"users">;
-  profile: Doc<"profiles"> | null;
+  profile: AuthProfile | null;
 }
 
 export async function getActor(ctx: Ctx): Promise<Actor | null> {
@@ -38,11 +60,11 @@ export async function getActor(ctx: Ctx): Promise<Actor | null> {
   if (userId === null) return null;
   const user = await ctx.db.get(userId);
   if (!user) return null;
-  const profile = await ctx.db
+  const stored = await ctx.db
     .query("profiles")
     .withIndex("by_user", (q) => q.eq("userId", userId))
     .unique();
-  return { userId, user, profile };
+  return { userId, user, profile: stored ? withEffectiveRole(stored) : null };
 }
 
 /** Signed in AND has a FinServe workspace profile. */
@@ -59,7 +81,7 @@ export async function requireActor(ctx: Ctx): Promise<Actor> {
 export async function requireProfile(
   ctx: Ctx,
   opts: { allowInactive?: boolean } = {},
-): Promise<Doc<"profiles">> {
+): Promise<AuthProfile> {
   const actor = await requireActor(ctx);
   if (!actor.profile) {
     throw new AppError("No KIRAT MICRO CREDIT workspace is linked to this sign-in.");
@@ -145,10 +167,19 @@ export async function logAudit(
     device?: string;
   },
 ): Promise<Id<"auditLogs">> {
+  // The audit trail records the actor's DESIGNATION (their stored role).
+  // For every account without a backend grant that is identical to the role
+  // the caller passes; a granted account keeps showing its own title
+  // ("Branch Manager") on every audit row instead of the effective role.
+  let role = entry.role;
+  if (entry.actorId) {
+    const actorProfile = await ctx.db.get(entry.actorId);
+    if (actorProfile) role = actorProfile.role;
+  }
   return await ctx.db.insert("auditLogs", {
     actorId: entry.actorId ?? undefined,
     actorName: entry.actorName ?? "system",
-    role: entry.role,
+    role,
     action: entry.action,
     entity: entry.entity,
     entityId: entry.entityId,

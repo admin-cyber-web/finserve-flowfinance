@@ -42,7 +42,11 @@ export const me = query({
         _id: profile._id,
         name: profile.name,
         email: profile.email,
+        // Effective role used for authorization. `designationRole` is the
+        // stored role and is what the UI displays as the person's
+        // designation (a backend-granted account keeps its own designation).
         role: profile.role,
+        designationRole: profile.designationRole ?? profile.role,
         status: profile.status,
         staffId: profile.staffId ?? null,
         image: profile.image ?? null,

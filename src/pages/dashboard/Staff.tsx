@@ -62,15 +62,22 @@ export default function Staff() {
   const set = (k: keyof typeof form) => (e: { target: { value: string } }) =>
     setForm((s) => ({ ...s, [k]: e.target.value }));
 
-  // Branches are known through the staff directory + your own branch.
+  // The REAL branch directory from the backend (every branch, with its
+  // permanent Branch ID), falling back to the branches visible through the
+  // staff directory while it loads. `_id` is what gets stored as branchId.
+  const branchDirectory = useQuery(
+    api.admin.branches,
+    can("staff_management") ? {} : "skip",
+  );
   const branches = useMemo(() => {
-    const map = new Map<string, { _id: string; name: string }>();
+    const map = new Map<string, { _id: string; name: string; code?: string }>();
+    for (const b of branchDirectory ?? []) map.set(b._id, b);
     for (const row of staff ?? []) {
       if (row.branch) map.set(row.branch._id, row.branch);
     }
     if (profile?.branch) map.set(profile.branch._id, profile.branch);
     return [...map.values()];
-  }, [staff, profile]);
+  }, [branchDirectory, staff, profile]);
 
   const rows = (staff ?? []).filter(
     (r) => roleFilter === "ALL" || r.profile.role === roleFilter,
@@ -81,11 +88,13 @@ export default function Staff() {
       toast.error("Name and a 10-digit mobile are required.");
       return;
     }
-    const branchId = (form.branchId || branches[0]?._id) as Id<"branches"> | undefined;
-    if (!branchId) {
-      toast.error("No branch available.");
+    // The branch must be chosen explicitly — the record stores the backend
+    // branch `_id`, and there is no silent default to a different branch.
+    if (!form.branchId) {
+      toast.error("Select the branch for this staff member.");
       return;
     }
+    const branchId = form.branchId as Id<"branches">;
     setBusy(true);
     try {
       const roleName = form.role === "FIELD_STAFF" ? "Field staff" : form.role === "BRANCH_MANAGER" ? "Branch manager" : "Accountant";
@@ -183,7 +192,10 @@ export default function Staff() {
                 <span className="block truncate text-sm font-black">{r.profile.name}</span>
                 <span className="block text-[11px] font-semibold text-muted-foreground">
                   {fmtId(r.profile.staffId)} · {ROLE_LABELS[r.profile.role as FsRole]} ·{" "}
-                  {r.branch?.name ?? "—"}
+                  {/* Branch name AND its permanent backend Branch ID. */}
+                  {r.branch
+                    ? `${r.branch.name}${r.branch.code ? ` · ${r.branch.code}` : ""}`
+                    : "No branch"}
                 </span>
                 <span className="mt-1 flex gap-1">
                   <StatusChip status={r.profile.status} />
@@ -261,11 +273,13 @@ export default function Staff() {
               </select>
             </div>
             <div className="space-y-1">
-              <label className="text-xs font-black uppercase">Branch</label>
+              <label className="text-xs font-black uppercase">Branch *</label>
               <select className={inputCls} value={form.branchId} onChange={set("branchId")}>
+                <option value="">Select branch</option>
                 {branches.map((b) => (
                   <option key={b._id} value={b._id}>
                     {b.name}
+                    {b.code ? ` · ${b.code}` : ""}
                   </option>
                 ))}
               </select>

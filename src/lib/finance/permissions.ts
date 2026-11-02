@@ -47,6 +47,66 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
 
 const ALL = [...PERMISSIONS];
 
+/* ----------------------- Backend SUPER_ADMIN grants ----------------------- */
+
+/**
+ * Accounts that hold the FULL SUPER_ADMIN power set while keeping their own
+ * displayed designation (role).
+ *
+ * The grant is keyed on the immutable backend identity of one exact profile
+ * (`_id` + the backend-generated staff number). Nothing the browser can send
+ * — role, email, permissions list, localStorage — is ever consulted, so the
+ * grant cannot be forged, and it never matches "any BRANCH_MANAGER": every
+ * other profile keeps exactly the permissions its own role defines.
+ *
+ * The stored `role` field is NOT modified. `effectiveRole()` is what the
+ * server authorizes with; the stored role keeps being what the UI shows as
+ * the person's designation.
+ */
+export interface SuperAdminGrant {
+  /** Convex profile id — immutable, unique to this one account. */
+  profileId: string;
+  /** Backend-generated staff number — immutable, never re-issued. */
+  staffId: string;
+  /** Designation that must keep displaying in the UI. */
+  designation: string;
+}
+
+export const SUPER_ADMIN_GRANTS: SuperAdminGrant[] = [
+  {
+    profileId: "p574ae493kw1d8xcwsmqq262498ga2pc", // Pankaj Tiwari
+    staffId: "0002", // System ID 10002 (legacy BM10002)
+    designation: "Branch Manager",
+  },
+];
+
+/** Anything shaped like a profile — full document or a partial test double. */
+export interface GrantSubject {
+  _id?: string;
+  staffId?: string | null;
+  role: string;
+  permissions?: string[] | null;
+}
+
+/** True only for the exact accounts listed in `SUPER_ADMIN_GRANTS`. */
+export function hasSuperAdminGrant(
+  profile: GrantSubject | null | undefined,
+): boolean {
+  if (!profile?._id || !profile.staffId) return false;
+  return SUPER_ADMIN_GRANTS.some(
+    (g) => g.profileId === profile._id && g.staffId === profile.staffId,
+  );
+}
+
+/**
+ * The role the SERVER authorizes with: `SUPER_ADMIN` for granted accounts,
+ * the stored role for everyone else. Display code must use the stored role
+ * (`designationRole`) so the granted account keeps its own designation.
+ */
+export function effectiveRole(profile: GrantSubject): string {
+  return hasSuperAdminGrant(profile) ? "SUPER_ADMIN" : profile.role;
+}
+
 /** Default effective permissions per role (admins can override per user). */
 export const ROLE_PERMISSIONS: Record<FsRole, Permission[]> = {
   SUPER_ADMIN: ALL,
@@ -85,11 +145,15 @@ export const ROLE_PERMISSIONS: Record<FsRole, Permission[]> = {
   CLIENT: ["view_loans"],
 };
 
-/** Effective permissions: explicit per-user overrides win over role defaults. */
-export function effectivePermissions(profile: {
-  role: string;
-  permissions?: string[] | null;
-}): Permission[] {
+/**
+ * Effective permissions.
+ *
+ * A backend SUPER_ADMIN grant always returns the complete set — it can never
+ * be narrowed by a stored per-user override. Otherwise explicit per-user
+ * overrides win over role defaults.
+ */
+export function effectivePermissions(profile: GrantSubject): Permission[] {
+  if (hasSuperAdminGrant(profile)) return ALL;
   if (profile.permissions && profile.permissions.length > 0) {
     return profile.permissions.filter((p): p is Permission =>
       (PERMISSIONS as readonly string[]).includes(p),

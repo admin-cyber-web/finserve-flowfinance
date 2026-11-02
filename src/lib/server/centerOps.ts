@@ -121,9 +121,13 @@ export async function createCenterForActor(
   const centerId = await ctx.db.insert("centers", {
     code,
     name,
+    // Branch comes from the AUTHENTICATED staff member's own profile — a
+    // frontend-supplied branch can never place a centre elsewhere.
     branchId,
     village,
+    // Creating staff member, from the backend identity.
     staffId: me._id,
+    createdBy: me._id,
     createdAt: now,
   });
   await logAudit(ctx, {

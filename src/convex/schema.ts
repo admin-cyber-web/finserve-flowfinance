@@ -619,6 +619,9 @@ const schema = defineSchema(
       branchId: v.id("branches"),
       village: v.string(),
       staffId: v.optional(v.id("profiles")),
+      // Staff member who created this centre — always taken from the
+      // authenticated actor on the backend, never from the frontend.
+      createdBy: v.optional(v.id("profiles")),
       createdAt: v.number(),
     }).index("by_branch", ["branchId"]),
 

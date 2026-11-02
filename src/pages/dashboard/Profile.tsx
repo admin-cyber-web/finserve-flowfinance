@@ -38,7 +38,12 @@ export default function Profile() {
 
   return (
     <div className="space-y-5 pb-8">
-      <PageHeader title="Profile" subtitle={ROLE_LABELS[profile.role as FsRole]} />
+      {/* The designation is the stored role — never the effective authorizing
+          role, so a backend-granted account still shows its own title. */}
+      <PageHeader
+        title="Profile"
+        subtitle={ROLE_LABELS[(profile.designationRole ?? profile.role) as FsRole]}
+      />
 
       {/* Identity */}
       <section className="border-2 border-ink bg-navy p-4 text-paper shadow-hard">
@@ -59,7 +64,7 @@ export default function Profile() {
         <div className="mt-3 flex flex-wrap gap-1.5">
           <StatusChip status={profile.status} />
           <span className="border-2 border-paper/40 px-1.5 py-0.5 text-[10px] font-black uppercase">
-            {ROLE_LABELS[profile.role as FsRole]}
+            {ROLE_LABELS[(profile.designationRole ?? profile.role) as FsRole]}
           </span>
           <span className="border-2 border-paper/40 px-1.5 py-0.5 text-[10px] font-black uppercase">
             Joined {profile.joiningDate ? new Date(profile.joiningDate).toLocaleDateString("en-IN") : "—"}

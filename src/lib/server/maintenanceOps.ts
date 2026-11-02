@@ -106,6 +106,8 @@ export async function repairBranchLinksTx(
   centers: BranchRepairRow[];
   clients: BranchRepairRow[];
   applications: BranchRepairRow[];
+  /** Centres that were missing `createdBy`, backfilled from their creator. */
+  createdByBackfilled: string[];
 }> {
   const profiles = await ctx.db.query("profiles").collect();
   const branchOfStaff = new Map<Id<"profiles">, Id<"branches"> | undefined>(
@@ -117,6 +119,17 @@ export async function repairBranchLinksTx(
   const applications = await ctx.db.query("loanApplications").collect();
 
   const centerReport: BranchRepairRow[] = [];
+
+  // 0. `createdBy` on centres — recorded at creation from the authenticated
+  //    actor; older rows only carry it on `staffId`, which IS the creator, so
+  //    the backfill is a confident copy and never a guess.
+  const createdByBackfilled: string[] = [];
+  for (const center of centers) {
+    if (!center.createdBy && center.staffId) {
+      await ctx.db.patch(center._id, { createdBy: center.staffId });
+      createdByBackfilled.push(center.code);
+    }
+  }
   const branchByCenter = new Map<
     Id<"centers">,
     Id<"branches"> | undefined
@@ -184,7 +197,8 @@ export async function repairBranchLinksTx(
   if (
     centerReport.length > 0 ||
     clientReport.length > 0 ||
-    applicationReport.length > 0
+    applicationReport.length > 0 ||
+    createdByBackfilled.length > 0
   ) {
     await logAudit(ctx, {
       actorId: actor._id,
@@ -197,6 +211,7 @@ export async function repairBranchLinksTx(
         centers: centerReport,
         clients: clientReport,
         applications: applicationReport,
+        createdByBackfilled,
       },
     });
   }
@@ -206,5 +221,6 @@ export async function repairBranchLinksTx(
     centers: centerReport,
     clients: clientReport,
     applications: applicationReport,
+    createdByBackfilled,
   };
 }

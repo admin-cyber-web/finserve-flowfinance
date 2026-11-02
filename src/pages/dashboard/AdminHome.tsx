@@ -39,7 +39,7 @@ export default function AdminHome() {
     <div className="space-y-5 pb-10">
       <PageHeader
         title={`Welcome, ${profile?.name?.split(" ")[0] ?? "there"}`}
-        subtitle={`${ROLE_LABELS[(profile?.role ?? "SUPER_ADMIN") as FsRole]} · ${
+        subtitle={`${ROLE_LABELS[((profile?.designationRole ?? profile?.role) ?? "SUPER_ADMIN") as FsRole]} · ${
           profile?.branch?.name ?? "Organisation-wide"
         } · ${new Date().toLocaleDateString("en-IN", {
           weekday: "long",

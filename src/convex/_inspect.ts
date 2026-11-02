@@ -603,6 +603,28 @@ export const setupVerification = internalMutation({
 });
 
 /**
+/**
+ * TEST HARNESS ONLY — remove a centre that a CLI probe created by accident.
+ * Refuses to touch any centre that already has clients, so real records can
+ * never be deleted through this path. Internal function only.
+ */
+export const removeTestCenter = internalMutation({
+  args: { centerCode: v.string() },
+  handler: async (ctx, { centerCode }) => {
+    const centers = await ctx.db.query("centers").collect();
+    const center = centers.find((c) => c.code === centerCode);
+    if (!center) return { removed: false, reason: "not found" };
+    const clients = await ctx.db.query("clients").collect();
+    const linked = clients.filter((c) => c.centerId === center._id);
+    if (linked.length > 0) {
+      return { removed: false, reason: `${linked.length} clients still linked` };
+    }
+    await ctx.db.delete(center._id);
+    return { removed: true, code: center.code, name: center.name };
+  },
+});
+
+/**
  * TEST HARNESS ONLY — drop every saved image row for one client, so the loan
  * image gate can be verified end-to-end (application/loan created while the
  * client had a photo, then the photo removed). Internal function: it cannot be

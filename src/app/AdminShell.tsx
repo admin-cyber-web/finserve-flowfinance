@@ -300,7 +300,10 @@ export function AdminShell({ children }: { children: ReactNode }) {
                 </p>
                 <p className="truncate text-[11px] font-semibold text-muted-foreground">
                   {profile?.branch?.name ?? "Organization-wide"} ·{" "}
-                  {profile?.role?.replace("_", " ").toLowerCase()}
+                  {/* Designation, not the effective authorizing role. */}
+                  {(profile?.designationRole ?? profile?.role)
+                    ?.replace("_", " ")
+                    .toLowerCase()}
                 </p>
               </DropdownMenuLabel>
               <DropdownMenuSeparator />

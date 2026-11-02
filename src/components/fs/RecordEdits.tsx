@@ -165,12 +165,16 @@ function StaffEditForm({
     }
     setBusy(true);
     try {
+      // Branch is only sent when it actually changed: the backend refuses a
+      // self branch move, so re-saving an untouched form must not trip it.
+      const branchChanged =
+        !!form.branchId && form.branchId !== String(target.branchId ?? "");
       await updateStaff({
         profileId: target._id,
         name: form.name.trim(),
         ...(form.mobile.trim() ? { mobile: form.mobile.trim() } : {}),
         ...(form.email.trim() ? { email: form.email.trim() } : {}),
-        ...(form.branchId ? { branchId: form.branchId as Id<"branches"> } : {}),
+        ...(branchChanged ? { branchId: form.branchId as Id<"branches"> } : {}),
         role: form.role,
       });
       toast.success(`${form.name.trim()} updated`);
