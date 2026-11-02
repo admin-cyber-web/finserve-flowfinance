@@ -28,7 +28,7 @@ import { toast } from "sonner";
  * and surfaces the server's verdict verbatim on failure.
  */
 
-type Action = "surrender" | "settle" | "close" | "archive" | "delete";
+type Action = "surrender" | "settle" | "close" | "archive" | "delete" | "adminClose" | "adminSurrender" | "adminDelete" | "adminSettle";
 
 /** Statuses that can still be surrendered or settled. */
 const OPERABLE = ["DISBURSED", "ACTIVE", "OVERDUE"];
@@ -77,16 +77,27 @@ export function LoanActions({
   const close = useMutation(api.loans.close);
   const archive = useMutation(api.loans.archive);
   const deleteClosed = useMutation(api.loans.deleteClosed);
+  const adminClose = useMutation((api.admin as any).closeLoan);
+  const adminSurrender = useMutation((api.admin as any).surrenderLoan);
+  const adminSettle = useMutation((api.admin as any).settleLoan);
+  const adminDelete = useMutation((api.admin as any).deleteLoan);
 
   if (!profile || profile.role !== "SUPER_ADMIN") return null;
 
   const open = round2(outstanding);
   const eligible: Action[] = [];
+  // SUPER_ADMIN gets every closure action for every loan, regardless of
+  // current status (subject to the backend mutation's real guards).
   if (OPERABLE.includes(loan.status)) {
     eligible.push("surrender");
     if (open > 0) eligible.push("settle");
   }
   if (CLOSABLE.includes(loan.status)) eligible.push("close");
+  // SUPER_ADMIN can trigger Close, Surrender, Settle, Delete for every loan.
+  eligible.push("adminClose");
+  eligible.push("adminSurrender");
+  eligible.push("adminSettle");
+  eligible.push("adminDelete");
   if (RESOLVED.includes(loan.status)) {
     if (!loan.archivedAt) eligible.push("archive");
     eligible.push("delete");
@@ -114,7 +125,7 @@ export function LoanActions({
   const openAction = (next: Action) => {
     setReason("");
     setAction(next);
-    setAmountStr(next === "settle" ? String(open) : "");
+    setAmountStr(next === "settle" || next === "adminSettle" ? String(open) : "");
     setMode("CASH");
   };
 
@@ -149,14 +160,50 @@ export function LoanActions({
         toast.success(
           `${fmtId(loan.loanId)} archived — hidden from active loan screens, records preserved`,
         );
-      } else if (action === "delete") {
-        const res = await deleteClosed({
+      } else if (action === "adminClose") {
+        const res = await adminClose({
+          loanId: loan._id,
+          reason: reason.trim() || undefined,
+          device,
+        });
+        toast.success(`${fmtId(res.loanId)} closed — full dues verified cleared`);
+      } else if (action === "adminSettle") {
+        const res = await adminSettle({
+          loanId: loan._id,
+          settlementAmount: settleAmount ?? 0,
+          mode,
+          reason: reason.trim(),
+          device,
+        });
+        toast.success(
+          `${fmtId(res.loanId)} settled — ${money(res.settlementPaid)} received` +
+            (res.receiptNumber ? ` (receipt ${fmtId(res.receiptNumber)})` : "") +
+            (res.waivedAmount > 0 ? `, ${money(res.waivedAmount)} waived` : ""),
+        );
+      } else if (action === "adminSurrender") {
+        const res = await adminSurrender({
           loanId: loan._id,
           reason: reason.trim(),
           device,
         });
         toast.success(
-          `${fmtId(res.loanId)} permanently deleted (${res.scheduleRowsRemoved} schedule projection(s) removed)`,
+          `${fmtId(res.loanId)} surrendered — ${money(res.outstanding)} outstanding stays on record`,
+        );
+      } else if (action === "adminDelete") {
+        const res = await adminDelete({
+          loanId: loan._id,
+          reason: reason.trim(),
+          device,
+        });
+        toast.success(
+          `${fmtId(res.loanId)} permanently deleted (${
+            res.recordsRemoved.collections +
+            res.recordsRemoved.receipts +
+            res.recordsRemoved.schedules +
+            res.recordsRemoved.walletTxns +
+            res.recordsRemoved.journals +
+            res.recordsRemoved.recoveries
+          } record(s) removed)`,
         );
       }
       setAction(null);
@@ -173,6 +220,10 @@ export function LoanActions({
     close: "Close loan",
     archive: "Archive loan",
     delete: "Delete closed loan",
+    adminClose: "Admin close loan",
+    adminSurrender: "Admin surrender loan",
+    adminSettle: "Admin settle loan",
+    adminDelete: "Delete loan permanently",
   };
 
   const messages: Record<Action, string> = {
@@ -190,6 +241,14 @@ export function LoanActions({
       `Hides this closed/settled loan from ordinary loan screens while every payment, receipt, journal entry and the audit trail stay intact and reachable.`,
     delete:
       `Permanent. Only allowed when no payments, receipts, journal entries or wallet transactions reference this loan — otherwise the backend refuses and you should archive instead. Active or financially unresolved loans can never be deleted.`,
+    adminClose:
+      `Ask the backend to close ${fmtId(loan.loanId)} now, regardless of the current status shown here. The backend re-verifies the financial position before accepting the close.`,
+    adminSurrender:
+      `Ask the backend to surrender ${fmtId(loan.loanId)} now, regardless of the current status shown here. The remaining dues stay on record for recovery.`,
+    adminSettle:
+      `Settle ${fmtId(loan.loanId)} for an agreed amount via the backend. The paid amount is recorded as a real payment with a receipt; only the waived remainder closes the remaining dues, and waived dues are never counted as cash received.`,
+    adminDelete:
+      `Permanently delete ${fmtId(loan.loanId)} and every record that belongs to it (schedule projections, collections, receipts, journal entries, wallet transactions, recovery activities). The client and all other loans and financial records are never touched. This is irreversible — use Surrender / Close instead when the financial ledger should stay intact.`,
   };
 
   const confirmLabels: Record<Action, string> = {
@@ -198,6 +257,10 @@ export function LoanActions({
     close: "Close loan",
     archive: "Archive loan",
     delete: "Delete permanently",
+    adminClose: "Close loan now",
+    adminSurrender: "Surrender loan now",
+    adminSettle: "Settle loan",
+    adminDelete: "Delete loan permanently",
   };
 
   const btnCls = compact
@@ -248,12 +311,45 @@ export function LoanActions({
             <Archive className="size-3.5" /> Archive
           </Button>
         )}
-        {eligible.includes("delete") && (
+        {eligible.includes("adminClose") && (
+          <Button
+            size="sm"
+            className={cn(btnCls, "border-2 border-amber bg-amber text-ink")}
+            onClick={() => openAction("adminClose")}
+          >
+            <BadgeCheck className="size-3.5" /> Close
+          </Button>
+        )}
+        {eligible.includes("adminSurrender") && (
+          <Button
+            size="sm"
+            variant="outline"
+            className={cn(btnCls, "border-2 border-ink")}
+            onClick={() => openAction("adminSurrender")}
+          >
+            <Undo2 className="size-3.5" /> Surrender
+          </Button>
+        )}
+        {eligible.includes("adminSettle") && (
+          <Button
+            size="sm"
+            className={cn(btnCls, "border-2 border-amber bg-amber text-ink")}
+            onClick={() => {
+              setReason("");
+              setAction("adminSettle");
+              setAmountStr(String(open));
+              setMode("CASH");
+            }}
+          >
+            <Handshake className="size-3.5" /> Settle
+          </Button>
+        )}
+        {eligible.includes("adminDelete") && (
           <Button
             size="sm"
             variant="destructive"
             className={cn(btnCls, "border-2 border-ink")}
-            onClick={() => openAction("delete")}
+            onClick={() => openAction("adminDelete")}
           >
             <Trash2 className="size-3.5" /> Delete
           </Button>
@@ -284,9 +380,8 @@ export function LoanActions({
                       {money(open)}
                     </span>
                   </div>
-                )}
-                {action === "settle" && (
-                  <>
+                )}                  {(action === "settle" || action === "adminSettle") && (
+                <>
                     <div className="flex items-center justify-between border-b border-ink/15 px-3 py-2">
                       <span className="text-[10px] font-black uppercase text-muted-foreground">
                         Settlement amount (paid)
@@ -326,11 +421,11 @@ export function LoanActions({
 
               {clientName && (
                 <p className="text-xs font-bold text-muted-foreground">
-                  Client: {clientName} · {fmtId(loan.loanId)}
+                  Client: {clientName} · {fmtId(loan.loanId)} · status: {loan.status}
                 </p>
               )}
 
-              {action === "settle" && (
+              {(action === "settle" || action === "adminSettle") && (
                 <>
                   <div>
                     <label className={LABEL_CLS} htmlFor="settlement-amount">

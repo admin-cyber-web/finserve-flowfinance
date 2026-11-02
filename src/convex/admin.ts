@@ -23,6 +23,11 @@ import {
   repairBranchLinksTx,
 } from "../lib/server/maintenanceOps";
 import {
+  closeLoan as loanCloseLoan,
+  settleLoan as loanSettleLoan,
+  surrenderLoan as loanSurrenderLoan,
+} from "../lib/server/loanOps";
+import {
   branchStatusValidator,
   requireBranchAdmin,
   buildBranchFields,
@@ -1916,10 +1921,121 @@ export const deleteStaff = mutation({
 });
 
 /**
- * SUPER_ADMIN: permanently delete a loan and ALL its associated records.
- * Use only for dummy/test loans that must be removed entirely.
- * This bypasses the normal deleteClosed restrictions (status, financial records)
- * because the caller is explicitly authorized to clean up test data.
+ * SUPER_ADMIN: close any loan regardless of its current status. If the loan
+ * is already CLOSED, the backend reverifies the financial position and, when
+ * everything is genuinely cleared, records a confirmation close. Otherwise
+ * the existing close/closeLoan semantics apply.
+ */
+export const adminCloseLoan = mutation({
+  args: {
+    loanId: v.id("loans"),
+    reason: v.optional(v.string()),
+    device: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx);
+    if (me.role !== "SUPER_ADMIN") {
+      throw new AppError("Only SUPER_ADMIN can close loans.");
+    }
+    if (me.status !== "ACTIVE") {
+      throw new AppError(
+        `Your account is ${me.status.toLowerCase()} — this operation is blocked.`,
+      );
+    }
+
+    const loan = await ctx.db.get(args.loanId);
+    if (!loan) throw new AppError("Loan not found.");
+
+    // Reuse the existing closeLoan path (in loanOps.ts) — it already enforces
+    // the right semantics per status and logs the appropriate audit event.
+    return await loanCloseLoan(ctx, {
+      loanId: args.loanId,
+      actor: me,
+      reason: args.reason?.trim() ? requiredString(args.reason, "reason", 200) : undefined,
+      device: args.device,
+    });
+  },
+});
+
+/**
+ * SUPER_ADMIN: surrender any loan regardless of its current status. The
+ * backend already rejects non-OPERABLE statuses inside surrenderLoan, so
+ * this is a thin authorized wrapper around the existing mutation.
+ */
+export const adminSurrenderLoan = mutation({
+  args: {
+    loanId: v.id("loans"),
+    reason: v.string(),
+    device: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx);
+    if (me.role !== "SUPER_ADMIN") {
+      throw new AppError("Only SUPER_ADMIN can surrender loans.");
+    }
+    if (me.status !== "ACTIVE") {
+      throw new AppError(
+        `Your account is ${me.status.toLowerCase()} — this operation is blocked.`,
+      );
+    }
+
+    const loan = await ctx.db.get(args.loanId);
+    if (!loan) throw new AppError("Loan not found.");
+
+    return await loanSurrenderLoan(ctx, {
+      loanId: args.loanId,
+      actor: me,
+      reason: requiredString(args.reason, "reason", 200),
+      device: args.device,
+    });
+  },
+});
+
+/**
+ * SUPER_ADMIN: settle a loan for an agreed amount. Offers the same settlement
+ * path as loans.settle but via the admin namespace so SUPER_ADMIN can record
+ * settlements from the loans screen directly.
+ */
+export const adminSettleLoan = mutation({
+  args: {
+    loanId: v.id("loans"),
+    settlementAmount: v.number(),
+    mode: v.string(),
+    reason: v.string(),
+    device: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx);
+    if (me.role !== "SUPER_ADMIN") {
+      throw new AppError("Only SUPER_ADMIN can settle loans.");
+    }
+    if (me.status !== "ACTIVE") {
+      throw new AppError(
+        `Your account is ${me.status.toLowerCase()} — this operation is blocked.`,
+      );
+    }
+
+    const loan = await ctx.db.get(args.loanId);
+    if (!loan) throw new AppError("Loan not found.");
+
+    return await loanSettleLoan(ctx, {
+      loanId: args.loanId,
+      actor: me,
+      settlementAmount: args.settlementAmount,
+      mode: args.mode,
+      reason: args.reason.trim(),
+      device: args.device,
+    });
+  },
+});
+
+/**
+ * SUPER_ADMIN: permanently delete any loan and all of the records that
+ * genuinely belong to it (schedule projections, collections, receipts,
+ * journal entries, wallet transactions, recovery activities). The client
+ * profile and every other client, loan, collection or wallet record is left
+ * untouched. Surrender/Settle/Close should normally be preferred because the
+ * financial ledger is immutable and real payments should not vanish.
  */
 export const deleteLoan = mutation({
   args: {
@@ -1941,7 +2057,7 @@ export const deleteLoan = mutation({
     const loan = await ctx.db.get(args.loanId);
     if (!loan) throw new AppError("Loan not found.");
 
-    // Collect all associated records
+    // Gather every record linked to this loan.
     const [collections, receipts, schedules, walletTxns, journals, recoveries] =
       await Promise.all([
         ctx
@@ -1976,7 +2092,7 @@ export const deleteLoan = mutation({
           .collect(),
       ]);
 
-    // Delete all associated records
+    // Delete every associated record.
     for (const col of collections) await ctx.db.delete(col._id);
     for (const rec of receipts) await ctx.db.delete(rec._id);
     for (const sched of schedules) await ctx.db.delete(sched._id);
@@ -1984,7 +2100,7 @@ export const deleteLoan = mutation({
     for (const je of journals) await ctx.db.delete(je._id);
     for (const rec of recoveries) await ctx.db.delete(rec._id);
 
-    // Unlink application if it exists
+    // Unlink the application if it points at this loan.
     if (loan.applicationId) {
       const app = await ctx.db.get(loan.applicationId);
       if (app && app.loanId === loan._id) {
@@ -1992,7 +2108,6 @@ export const deleteLoan = mutation({
       }
     }
 
-    // Log audit
     await logAudit(ctx, {
       actorId: me._id,
       actorName: me.name,
@@ -2012,7 +2127,6 @@ export const deleteLoan = mutation({
       device: args.device,
     });
 
-    // Delete the loan
     await ctx.db.delete(loan._id);
 
     return {

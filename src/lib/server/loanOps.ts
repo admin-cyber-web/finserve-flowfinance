@@ -777,7 +777,7 @@ export async function reverseCollection(
 /* -------------------- SUPER_ADMIN closure operations --------------------- */
 
 /** Statuses a disbursed loan can still operate under. */
-const OPERABLE_LOAN_STATUSES = ["DISBURSED", "ACTIVE", "OVERDUE"];
+const OPERABLE_LOAN_STATUSES = ["DISBURSED", "ACTIVE", "OVERDUE", "SURRENDERED", "SETTLED", "CLOSED"];
 
 async function scheduleRowsSorted(ctx: Mtx, loanId: Id<"loans">) {
   return (
