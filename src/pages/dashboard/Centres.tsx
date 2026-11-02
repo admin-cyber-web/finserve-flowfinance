@@ -44,7 +44,7 @@ export default function Centres() {
       setConfirmingDelete(false);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to delete centre");
-      throw err;
+      setConfirmingDelete(false);
     } finally {
       setSaving(false);
     }
