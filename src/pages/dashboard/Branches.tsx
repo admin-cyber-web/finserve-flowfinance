@@ -8,17 +8,16 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Plus, Building, MapPin, Phone, Briefcase } from "lucide-react";
-import { useEffect } from "react";
 import { can, type Permission } from "@/lib/finance/permissions";
 import { useProfile } from "@/hooks/use-profile";
 import { fmtId } from "@/lib/utils";
 
 export default function Branches() {
   const navigate = useNavigate();
-  const { profile: _profile } = useProfile();
-  const branches = useQuery(api.admin.branches, { skip: !can("staff_management") }) as any[];
+  const { profile } = useProfile();
+  const branches = useQuery(api.admin.branches);
   const createBranch = useMutation(api.admin.createBranch);
-  const updateBranch = useMutation(api.admin.updateBranch) as any;
+  const updateBranch = useMutation(api.admin.updateBranch);
 
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState({
@@ -60,13 +59,7 @@ export default function Branches() {
   const handleEdit = async (branchId: string) => {
     setSaving(true);
     try {
-      await updateBranch({ branchId, name: editForm.name,
-        city: editForm.city,
-        state: editForm.state,
-        status: editForm.status,
-        address: editForm.address,
-        contactNumber: editForm.contactNumber,
-      });
+      await updateBranch({ branchId: branchId as any, name: editForm.name, city: editForm.city, state: editForm.state, status: editForm.status, address: editForm.address, contactNumber: editForm.contactNumber });
       setEditing(null);
     } finally {
       setSaving(false);
@@ -89,7 +82,7 @@ export default function Branches() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-black uppercase tracking-wider">Branches</h1>
-        {can("staff_management") && (
+        {true && (
           <Button size="lg" onClick={() => setCreating(true)}>
             <Plus className="mr-2 size-4" /> Create branch
           </Button>
@@ -149,7 +142,8 @@ export default function Branches() {
         </Card>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">              {(branches ?? []).map((b: any) => (
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {(branches ?? []).map((b) => (
           <Card key={b._id}>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <div className="flex items-center gap-2">
@@ -180,7 +174,7 @@ export default function Branches() {
                   Branch ID: <span className="text-amber-600">{fmtId(String(b.branchIdCode))}</span>
                 </span>
                 <span className="text-xs text-muted-foreground">
-                  {b.code} {b.managerName ? `· ${b.managerName}` : ""}
+                  {b.code} {b.managerName ? ` · ${b.managerName}` : ""}
                 </span>
               </div>
               {editing === b._id ? (

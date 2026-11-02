@@ -11,6 +11,10 @@
  * serialises mutation commits (OCC with automatic retry), so concurrent
  * branch creation cannot hand out the same Branch ID — a conflicting commit
  * retries and picks up the next value.
+ *
+ * The counter stores the LAST allocated value. On first use it does not
+ * exist, so the first allocation returns FIRST_BRANCH_ID (1001) and writes
+ * the counter at 1001. Each subsequent call returns counter.value + 1.
  */
 
 import type { Mtx } from "./convexHelpers";
@@ -185,6 +189,20 @@ export async function branchManagerCandidates(
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/** Reset the branch ID counter to a specific value (admin only).
+ * Used only for testing — never exposed in the UI. */
+export async function resetBranchIdCounter(ctx: Mtx, value: number): Promise<void> {
+  const counter = await ctx.db
+    .query("counters")
+    .withIndex("by_key", (q) => q.eq("key", "branchId"))
+    .unique();
+  if (counter) {
+    await ctx.db.patch(counter._id, { value });
+  } else {
+    await ctx.db.insert("counters", { key: "branchId", value });
+  }
+}
+
 /** The first Branch ID issued by this system. */
 export const FIRST_BRANCH_ID = 1001;
 
@@ -195,8 +213,8 @@ export async function allocateBranchId(ctx: Mtx): Promise<number> {
     .withIndex("by_key", (q) => q.eq("key", "branchId"))
     .unique();
 
-  // Start the sequence at 1001 on first use, regardless of what the counter
-  // row currently holds (so a reset counter cannot reissue old IDs).
+  // The counter stores the LAST allocated value. Allocate the next value,
+  // starting at FIRST_BRANCH_ID (1001) on first use.
   const next = counter
     ? Math.max(counter.value + 1, FIRST_BRANCH_ID)
     : FIRST_BRANCH_ID;

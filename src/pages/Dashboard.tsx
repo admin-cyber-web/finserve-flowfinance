@@ -29,6 +29,7 @@ import StaffDetail from "./dashboard/StaffDetail";
 import StaffHome from "./dashboard/StaffHome";
 import Transactions from "./dashboard/Transactions";
 import Users from "./dashboard/Users";
+import Branches from "./dashboard/Branches";
 
 function BootScreen({ label }: { label: string }) {
   return (
@@ -138,6 +139,7 @@ export default function Dashboard() {
       <Route path="overdue" element={<Overdue />} />
       <Route path="accounting" element={<Accounting />} />
       <Route path="audit" element={<Audit />} />
+      <Route path="branches" element={<Branches />} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
   );

@@ -71,3 +71,59 @@ export const backfillBranchIds = mutation({
     };
   },
 });
+
+/** Remove a branch by id (admin only). Only for test cleanup — not exposed in UI. */
+export const removeBranch = mutation({
+  args: { branchId: v.id("branches") },
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx);
+    if (me.role !== "SUPER_ADMIN") throw new Error("admin only");
+    const b = await ctx.db.get(args.branchId);
+    if (!b) throw new Error("Branch not found");
+    // Check for dependent centers
+    const centers = await ctx.db.query("centers").collect();
+    const dependentCenters = centers.filter((c) => c.branchId === args.branchId);
+    if (dependentCenters.length > 0) {
+      throw new Error(`Cannot delete branch with ${dependentCenters.length} dependent centers`);
+    }
+    // Check for dependent clients
+    const clients = await ctx.db.query("clients").collect();
+    const dependentClients = clients.filter((c) => c.branchId === args.branchId);
+    if (dependentClients.length > 0) {
+      throw new Error(`Cannot delete branch with ${dependentClients.length} dependent clients`);
+    }
+    // Check for dependent loans
+    const loans = await ctx.db.query("loans").collect();
+    const dependentLoans = loans.filter((l) => l.branchId === args.branchId);
+    if (dependentLoans.length > 0) {
+      throw new Error(`Cannot delete branch with ${dependentLoans.length} dependent loans`);
+    }
+    await ctx.db.delete(args.branchId);
+    return { ok: true, deleted: b.code };
+  },
+});
+
+/** Reset the branch ID counter (admin only). For test setup only. */
+export const resetBranchIdCounter = mutation({
+  args: { value: v.number() },
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx);
+    if (me.role !== "SUPER_ADMIN") throw new Error("admin only");
+    await resetBranchIdCounterInternal(ctx, args.value);
+    return { ok: true };
+  },
+});
+
+/** Internal implementation — called by the public mutation above. */
+async function resetBranchIdCounterInternal(ctx: any, value: number): Promise<void> {
+  const counter = await ctx.db
+    .query("counters")
+    .withIndex("by_key", (q: any) => q.eq("key", "branchId"))
+    .unique();
+  if (counter) {
+    await ctx.db.patch(counter._id, { value });
+  } else {
+    await ctx.db.insert("counters", { key: "branchId", value });
+  }
+}
+
