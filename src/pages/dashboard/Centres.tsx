@@ -74,13 +74,14 @@ export default function Centres() {
     groupCount: c.groups.length,
   })) || [];
 
+  // Show only matching centres when search is active; hide all when empty.
   const filteredCentres = q.trim()
     ? centerList.filter(
         (c) =>
           c.name.toLowerCase().includes(q.toLowerCase()) ||
           c.code.toLowerCase().includes(q.toLowerCase())
       )
-    : centerList;
+    : [];
 
   return (
     <div className="space-y-6">
@@ -94,8 +95,8 @@ export default function Centres() {
                 type="text"
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                placeholder="Filter centres..."
-                className="h-10 w-48 rounded-md border border-input bg-background pl-9 pr-3 text-sm focus:border-ink focus:outline-none"
+                placeholder="Search by name or ID..."
+                className="h-10 w-64 rounded-md border border-input bg-background pl-9 pr-3 text-sm focus:border-ink focus:outline-none"
               />
             </div>
           </div>
@@ -113,13 +114,13 @@ export default function Centres() {
 
       {filteredCentres.length === 0 ? (
         <div className="text-center py-12">
-          <Building className="mx-auto size-12 text-muted-foreground" />
+          <Search className="mx-auto size-12 text-muted-foreground" />
           <p className="mt-4 text-lg font-bold">
-            {q.trim() ? "No matching centres found." : "No centres yet"}
+            {q.trim() ? "No matching centres found." : "Enter a Centre Name or ID to search"}
           </p>
-          {isSuperAdmin && !q.trim() && (
+          {q.trim() && (
             <p className="text-sm text-muted-foreground">
-              Create centres from the New Client flow.
+              Try searching by centre name or centre ID (e.g. 137315)
             </p>
           )}
         </div>
