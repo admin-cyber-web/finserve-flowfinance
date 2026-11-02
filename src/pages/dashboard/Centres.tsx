@@ -136,7 +136,7 @@ export default function Centres() {
                       variant="outline"
                       size="sm"
                       className="flex-1"
-                      onClick={() => setDeleteTarget(c)}
+                      onClick={() => { setDeleteTarget(c); setConfirmingDelete(true); }}
                     >
                       <Trash2 className="size-3.5" />
                       Delete
