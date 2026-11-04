@@ -26,7 +26,6 @@ import {
   Plus,
   Search,
   Trash2,
-  Users,
   UserPlus,
 } from "lucide-react";
 import { DocCapture, DOC_KIND_OPTIONS, type DocItem } from "@/components/fs/DocCapture";
@@ -59,21 +58,7 @@ const GENDERS = ["MALE", "FEMALE", "OTHER"] as const;
 /** One character-reference row (Reference 1 / Reference 2). */
 type ReferenceRow = { name: string; mobile: string };
 
-/** One family-member row of the application table. */
-type FamilyMemberRow = {
-  name: string;
-  age: string;
-  relationship: string;
-  occupation: string;
-};
-
 const emptyReference = (): ReferenceRow => ({ name: "", mobile: "" });
-const emptyFamilyMember = (): FamilyMemberRow => ({
-  name: "",
-  age: "",
-  relationship: "",
-  occupation: "",
-});
 
 /**
  * Date of birth — kept as separate day / month / year parts so a
@@ -344,22 +329,16 @@ export default function ClientNew() {
   const [bankAccountNo, setBankAccountNo] = useState("");
   const [bankIfsc, setBankIfsc] = useState("");
 
-  // Section 4 — nominee details.
+  // Section 4 — nominee details. Only name, relationship and age are
+  // collected; nominee mobile/address were removed from the form.
   const [nomineeName, setNomineeName] = useState("");
   const [nomineeRelationship, setNomineeRelationship] = useState("");
   const [nomineeAge, setNomineeAge] = useState("");
-  const [nomineeMobile, setNomineeMobile] = useState("");
-  const [nomineeAddress, setNomineeAddress] = useState("");
 
   // Section 5 — two character references.
   const [references, setReferences] = useState<ReferenceRow[]>([
     emptyReference(),
     emptyReference(),
-  ]);
-
-  // Family members — the backend requires at least one complete row.
-  const [familyRows, setFamilyRows] = useState<FamilyMemberRow[]>([
-    emptyFamilyMember(),
   ]);
 
   // Section 6 — FOR OFFICE USE ONLY (honoured only for authorised roles).
@@ -634,9 +613,7 @@ export default function ClientNew() {
     const nomineeTouched =
       nomineeName.trim() !== "" ||
       nomineeRelationship.trim() !== "" ||
-      nomineeAge.trim() !== "" ||
-      nomineeMobile.trim() !== "" ||
-      nomineeAddress.trim() !== "";
+      nomineeAge.trim() !== "";
     if (nomineeTouched) {
       if (!nomineeName.trim() || !nomineeRelationship.trim()) {
         return toast.error(
@@ -647,18 +624,10 @@ export default function ClientNew() {
       if (!Number.isInteger(nomineeAgeNum) || nomineeAgeNum < 1 || nomineeAgeNum > 120) {
         return toast.error("Nominee age must be between 1 and 120.");
       }
-      if (
-        nomineeMobile.trim() &&
-        !/^[6-9]\d{9}$/.test(nomineeMobile.trim())
-      ) {
-        return toast.error("Enter a valid 10-digit nominee mobile number.");
-      }
       nominee = {
         name: nomineeName.trim(),
         relationship: nomineeRelationship.trim(),
         age: nomineeAgeNum,
-        mobile: nomineeMobile.trim() || undefined,
-        address: nomineeAddress.trim() || undefined,
       };
     }
 
@@ -678,41 +647,8 @@ export default function ClientNew() {
         );
       }
     }
-    // Family members — at least one complete row, mirroring the backend rule
-    // that keeps the application's family table from being empty.
-    const familyValues: FamilyMemberRow[] = [];
-    for (const row of familyRows) {
-      const member: FamilyMemberRow = {
-        name: row.name.trim(),
-        age: row.age.trim(),
-        relationship: row.relationship.trim(),
-        occupation: row.occupation.trim(),
-      };
-      if (
-        !member.name &&
-        !member.age &&
-        !member.relationship &&
-        !member.occupation
-      ) {
-        continue; // untouched row — not submitted
-      }
-      if (!member.name) {
-        return toast.error("Family member name is required.");
-      }
-      if (!member.relationship) {
-        return toast.error("Family member relationship is required.");
-      }
-      if (member.age) {
-        const ageNum = Number(member.age);
-        if (!Number.isInteger(ageNum) || ageNum < 1 || ageNum > 100) {
-          return toast.error("Family member age must be between 1 and 100.");
-        }
-      }
-      familyValues.push(member);
-    }
-    if (familyValues.length === 0) {
-      return toast.error("Add at least one family member to the application.");
-    }
+    // Family members are no longer part of the joining form — nothing is
+    // collected or submitted for them.
 
     /* ---------------- Section 6 — FOR OFFICE USE ONLY ------------------ */
     const officeTouched =
@@ -915,20 +851,14 @@ export default function ClientNew() {
           photoStorageId: coPhotoGeo ? undefined : coPhotoStorageId,
           documents: coDocsPayload,
         },
-        // Restored application sections 1–5 + family members. Every value
-        // typed into the form travels to the backend, which re-validates it
-        // before it lands on the client record.
+        // Restored application sections 1–5. Every value typed into the form
+        // travels to the backend, which re-validates it before it lands on
+        // the client record.
         typeOfBusiness: typeOfBusiness.trim() || undefined,
         businessAddress: businessAddress.trim() || undefined,
         householdExpenses: expenses,
         otherIncome: otherInc,
         existingLoanEmi: emi,
-        familyRows: familyValues.map((r) => ({
-          name: r.name,
-          age: r.age ? Number(r.age) : undefined,
-          relationship: r.relationship,
-          occupation: r.occupation || undefined,
-        })),
         loanRequest,
         bankAccount,
         nominee,
@@ -1828,27 +1758,6 @@ export default function ClientNew() {
               placeholder="0"
             />
           </label>
-          <label className="block">
-            <span className={label}>Mobile number</span>
-            <Input
-              className={field}
-              value={nomineeMobile}
-              onChange={(e) => setNomineeMobile(e.target.value)}
-              inputMode="numeric"
-              maxLength={10}
-              placeholder="9876543210"
-            />
-          </label>
-          <label className="block sm:col-span-2">
-            <span className={label}>Address</span>
-            <textarea
-              value={nomineeAddress}
-              onChange={(e) => setNomineeAddress(e.target.value)}
-              rows={2}
-              placeholder="House, village, post, district"
-              className={cn(field, "resize-y")}
-            />
-          </label>
         </div>
         <p className="border-2 border-ink bg-sky p-2 text-[11px] font-bold">
           Optional block — when you start it, the nominee's name, relationship
@@ -1905,103 +1814,6 @@ export default function ClientNew() {
           Both rows may be left blank — a row with only a name or only a
           mobile number is rejected.
         </p>
-      </div>
-
-      {/* Family members — backend requires at least one complete row */}
-      <div className="border-2 border-ink bg-card p-3 shadow-hard">
-        <div className="mb-3 flex items-center gap-2 text-xs font-black uppercase">
-          <Users className="size-4 text-foreground" /> Family members
-        </div>
-        <div className="space-y-3">
-          {familyRows.map((row, i) => (
-            <div key={i} className="border-2 border-ink bg-white p-2">
-              <div className="mb-1.5 flex items-center justify-between">
-                <span className="text-[10px] font-black uppercase tracking-[0.14em]">
-                  Member {i + 1}
-                </span>
-                {familyRows.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setFamilyRows((cur) => cur.filter((_, j) => j !== i))
-                    }
-                    className="border-2 border-ink bg-blush px-2 py-0.5 text-[10px] font-black uppercase text-destructive"
-                  >
-                    Remove
-                  </button>
-                )}
-              </div>
-              <div className="grid gap-2 sm:grid-cols-2">
-                <label className="block">
-                  <span className={label}>Name *</span>
-                  <Input
-                    className={field}
-                    value={row.name}
-                    onChange={(e) =>
-                      setFamilyRows((cur) =>
-                        cur.map((r, j) =>
-                          j === i ? { ...r, name: e.target.value } : r,
-                        ),
-                      )
-                    }
-                  />
-                </label>
-                <label className="block">
-                  <span className={label}>Age</span>
-                  <Input
-                    className={field}
-                    value={row.age}
-                    onChange={(e) =>
-                      setFamilyRows((cur) =>
-                        cur.map((r, j) =>
-                          j === i ? { ...r, age: e.target.value } : r,
-                        ),
-                      )
-                    }
-                    inputMode="numeric"
-                    maxLength={3}
-                  />
-                </label>
-                <label className="block">
-                  <span className={label}>Relationship *</span>
-                  <Input
-                    className={field}
-                    value={row.relationship}
-                    onChange={(e) =>
-                      setFamilyRows((cur) =>
-                        cur.map((r, j) =>
-                          j === i ? { ...r, relationship: e.target.value } : r,
-                        ),
-                      )
-                    }
-                    placeholder="e.g. Husband"
-                  />
-                </label>
-                <label className="block">
-                  <span className={label}>Occupation</span>
-                  <Input
-                    className={field}
-                    value={row.occupation}
-                    onChange={(e) =>
-                      setFamilyRows((cur) =>
-                        cur.map((r, j) =>
-                          j === i ? { ...r, occupation: e.target.value } : r,
-                        ),
-                      )
-                    }
-                  />
-                </label>
-              </div>
-            </div>
-          ))}
-        </div>
-        <button
-          type="button"
-          onClick={() => setFamilyRows((cur) => [...cur, emptyFamilyMember()])}
-          className="mt-2 flex w-full items-center justify-center gap-2 border-2 border-ink bg-gold px-3 py-2 text-xs font-black uppercase shadow-hard-sm transition-transform active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
-        >
-          <Plus className="size-4" /> Add family member
-        </button>
       </div>
 
       <label className="flex cursor-pointer items-start gap-2 border-2 border-ink bg-sky p-3">

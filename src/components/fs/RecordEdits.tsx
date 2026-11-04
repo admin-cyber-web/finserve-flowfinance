@@ -384,7 +384,6 @@ function ClientEditForm({
     occupation: target.occupation,
     monthlyIncome: String(target.monthlyIncome ?? ""),
     householdIncome: String(target.householdIncome ?? ""),
-    familyMembers: String(target.familyMembers ?? 1),
     // Restored application sections — prefilled from the saved record so an
     // edit opens with exactly what is stored in the database.
     typeOfBusiness: target.typeOfBusiness ?? "",
@@ -417,8 +416,6 @@ function ClientEditForm({
     nomineeName: target.nominee?.name ?? "",
     nomineeRelationship: target.nominee?.relationship ?? "",
     nomineeAge: target.nominee?.age != null ? String(target.nominee.age) : "",
-    nomineeMobile: target.nominee?.mobile ?? "",
-    nomineeAddress: target.nominee?.address ?? "",
     ref1Name: target.references?.[0]?.name ?? "",
     ref1Mobile: target.references?.[0]?.mobile ?? "",
     ref2Name: target.references?.[1]?.name ?? "",
@@ -450,13 +447,8 @@ function ClientEditForm({
     }
     const monthly = Number(form.monthlyIncome);
     const household = Number(form.householdIncome);
-    const family = Number(form.familyMembers);
     if (!Number.isFinite(monthly) || monthly < 0 || !Number.isFinite(household) || household < 0) {
       toast.error("Income must be a number.");
-      return;
-    }
-    if (!Number.isInteger(family) || family < 1 || family > 30) {
-      toast.error("Family members must be between 1 and 30.");
       return;
     }
 
@@ -554,9 +546,7 @@ function ClientEditForm({
     const nomineeTouched =
       form.nomineeName.trim() !== "" ||
       form.nomineeRelationship.trim() !== "" ||
-      form.nomineeAge.trim() !== "" ||
-      form.nomineeMobile.trim() !== "" ||
-      form.nomineeAddress.trim() !== "";
+      form.nomineeAge.trim() !== "";
     let nominee: NomineeValue | null = null;
     if (nomineeTouched) {
       if (!form.nomineeName.trim() || !form.nomineeRelationship.trim()) {
@@ -570,19 +560,10 @@ function ClientEditForm({
         toast.error("Nominee age must be between 1 and 120.");
         return;
       }
-      if (
-        form.nomineeMobile.trim() &&
-        !/^[6-9]\d{9}$/.test(form.nomineeMobile.trim())
-      ) {
-        toast.error("Enter a valid 10-digit nominee mobile number.");
-        return;
-      }
       nominee = {
         name: form.nomineeName.trim(),
         relationship: form.nomineeRelationship.trim(),
         age: nomineeAge,
-        mobile: form.nomineeMobile.trim() || undefined,
-        address: form.nomineeAddress.trim() || undefined,
       };
     }
 
@@ -638,7 +619,6 @@ function ClientEditForm({
         occupation: form.occupation.trim(),
         monthlyIncome: monthly,
         householdIncome: household,
-        familyMembers: family,
         // Restored application sections. Blank strings / nulls clear a value,
         // untouched objects replace their block; the server re-validates all
         // of it with the same rules the joining form applies.
@@ -788,20 +768,6 @@ function ClientEditForm({
             value={form.householdIncome}
             onChange={(e) =>
               set("householdIncome")(e.target.value.replace(/[^\d]/g, ""))
-            }
-          />
-        </div>
-        <div>
-          <label className={labelCls} htmlFor="client-edit-family">
-            Family members
-          </label>
-          <input
-            id="client-edit-family"
-            className={inputCls}
-            inputMode="numeric"
-            value={form.familyMembers}
-            onChange={(e) =>
-              set("familyMembers")(e.target.value.replace(/[^\d]/g, ""))
             }
           />
         </div>
@@ -1065,29 +1031,6 @@ function ClientEditForm({
             onChange={(e) =>
               set("nomineeAge")(e.target.value.replace(/[^\d]/g, ""))
             }
-          />
-        </div>
-        <div>
-          <label className={labelCls} htmlFor="client-edit-nom-mobile">
-            Mobile number
-          </label>
-          <input
-            id="client-edit-nom-mobile"
-            className={inputCls}
-            inputMode="numeric"
-            value={form.nomineeMobile}
-            onChange={(e) => set("nomineeMobile")(e.target.value)}
-          />
-        </div>
-        <div className="sm:col-span-2">
-          <label className={labelCls} htmlFor="client-edit-nom-addr">
-            Address
-          </label>
-          <input
-            id="client-edit-nom-addr"
-            className={inputCls}
-            value={form.nomineeAddress}
-            onChange={(e) => set("nomineeAddress")(e.target.value)}
           />
         </div>
       </div>

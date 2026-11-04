@@ -3,6 +3,7 @@ import { query, mutation } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   AppError,
+  hasPermission,
   logAudit,
   notify,
   requirePermission,
@@ -697,9 +698,10 @@ export const create = mutation({
       optionalString(args.typeOfBusiness, "typeOfBusiness", 120) ?? occupation;
     const businessAddress = optionalString(args.businessAddress, "businessAddress", 300);
 
-    // Family details — structured rows from the application table. Fully
-    // empty rows are ignored; at least one complete row is required by the
-    // existing "family members ≥ 1" business rule.
+    // Family details — structured rows, kept for callers that still collect
+    // them. The joining form no longer has a family section, so an empty list
+    // is VALID: nothing is invented for the client and the stored count is
+    // simply 0. Rows that ARE supplied are validated exactly as before.
     const familyRows = (args.familyRows ?? [])
       .slice(0, 20)
       .map((r) => ({
@@ -711,9 +713,6 @@ export const create = mutation({
         relationship: requiredString(r.relationship, "family member relationship", 40),
         occupation: optionalString(r.occupation, "family member occupation", 120),
       }));
-    if (familyRows.length === 0) {
-      throw new AppError("Add at least one family member to the application.");
-    }
 
     // Optional co-applicant — every provided value is validated; nothing is
     // auto-filled and the whole block is dropped when absent.
@@ -1299,7 +1298,12 @@ export const photoUploadUrl = mutation({
   args: {},
   handler: async (ctx) => {
     const me = await requireProfile(ctx);
-    requirePermission(me, "create_client");
+    // Onboarding uploads need `create_client`; replacing a photo / KYC file on
+    // an EXISTING client needs `edit_client`. Both land in private storage and
+    // are re-validated inside the mutation that links them to the record.
+    if (!hasPermission(me, "create_client") && !hasPermission(me, "edit_client")) {
+      requirePermission(me, "create_client");
+    }
     return await ctx.storage.generateUploadUrl();
   },
 });
@@ -1605,7 +1609,10 @@ export const update = mutation({
       patch.bankAccount =
         args.bankAccount === null ? undefined : bankAccountValue(args.bankAccount);
     if (args.nominee !== undefined)
-      patch.nominee = args.nominee === null ? undefined : nomineeValue(args.nominee);
+      patch.nominee =
+        args.nominee === null
+          ? undefined
+          : preserveNomineeContact(client.nominee, nomineeValue(args.nominee));
     if (args.references !== undefined)
       patch.references =
         args.references === null ? undefined : referencesValue(args.references);
@@ -1633,6 +1640,508 @@ export const update = mutation({
       device: args.device,
     });
     return { ok: true };
+  },
+});
+
+/**
+ * Nominee contact fields were REMOVED from the joining form and its edit
+ * forms. An edit that replaces the nominee block therefore keeps whatever
+ * mobile / address were stored earlier — taking the inputs off the form must
+ * never destroy data already captured for an existing client.
+ */
+function preserveNomineeContact(
+  prev: Doc<"clients">["nominee"],
+  next: NonNullable<Doc<"clients">["nominee"]>,
+): NonNullable<Doc<"clients">["nominee"]> {
+  return {
+    name: next.name,
+    relationship: next.relationship,
+    age: next.age,
+    mobile: next.mobile ?? prev?.mobile,
+    address: next.address ?? prev?.address,
+  };
+}
+
+/** Co-applicant block shape accepted by `updateFull` (same fields as create). */
+const coApplicantArg = v.object({
+  name: v.string(),
+  fatherName: v.optional(v.string()),
+  relationship: v.string(),
+  dob: v.number(),
+  age: v.optional(v.number()), // compatibility only, never trusted
+  gender: v.optional(v.string()),
+  mobile: v.optional(v.string()),
+  address: v.optional(v.string()),
+  aadhaarNumber: v.optional(v.string()),
+  panNumber: v.optional(v.string()),
+  voterId: v.optional(v.string()),
+  kycDocuments: v.optional(v.array(v.string())),
+});
+
+/**
+ * FULL client edit — every field of the joining form, for an existing client.
+ *
+ * Used by Client 360° → "Edit full details" (SUPER_ADMIN / Branch Manager,
+ * plus any role holding `edit_client`). Deliberately scoped:
+ *   • the Client ID (`code`), branch, assignee, KYC status/verification and
+ *     every loan / approval record are NEVER touched here;
+ *   • fields left out of the call are left as they are in the database;
+ *   • every value is re-validated with the SAME rules `create` applies;
+ *   • age is always re-derived from a supplied DOB, never taken from input.
+ */
+export const updateFull = mutation({
+  args: {
+    clientId: v.id("clients"),
+    name: v.optional(v.string()),
+    fatherName: v.optional(v.string()),
+    applicantFatherName: v.optional(v.string()),
+    husbandName: v.optional(v.string()),
+    fatherAddress: v.optional(v.string()),
+    maternalHomeAddress: v.optional(v.string()),
+    dob: v.optional(v.number()),
+    gender: v.optional(v.string()),
+    mobile: v.optional(v.string()),
+    altMobile: v.optional(v.union(v.string(), v.null())),
+    address: v.optional(v.string()),
+    village: v.optional(v.string()),
+    district: v.optional(v.string()),
+    state: v.optional(v.string()),
+    pin: v.optional(v.string()),
+    occupation: v.optional(v.string()),
+    typeOfBusiness: v.optional(v.string()),
+    businessAddress: v.optional(v.string()),
+    monthlyIncome: v.optional(v.number()),
+    householdIncome: v.optional(v.number()),
+    householdExpenses: v.optional(v.union(v.number(), v.null())),
+    otherIncome: v.optional(v.union(v.number(), v.null())),
+    existingLoanEmi: v.optional(v.union(v.number(), v.null())),
+    panNumber: v.optional(v.union(v.string(), v.null())),
+    voterId: v.optional(v.union(v.string(), v.null())),
+    kycDocType: v.optional(v.string()),
+    kycDocRef: v.optional(v.string()),
+    kycDocuments: v.optional(v.array(v.string())),
+    centerCode: v.optional(v.union(v.string(), v.null())),
+    groupCode: v.optional(v.union(v.string(), v.null())),
+    loanRequest: v.optional(
+      v.union(
+        v.object({
+          amountRequested: v.number(),
+          purpose: v.string(),
+          tenureMonths: v.number(),
+          repaymentFrequency: v.string(),
+          estimatedInstallment: v.optional(v.number()),
+        }),
+        v.null(),
+      ),
+    ),
+    bankAccount: v.optional(
+      v.union(
+        v.object({
+          accountHolderName: v.string(),
+          bankName: v.string(),
+          branch: v.string(),
+          accountNumber: v.string(),
+          ifscCode: v.string(),
+        }),
+        v.null(),
+      ),
+    ),
+    nominee: v.optional(
+      v.union(
+        v.object({
+          name: v.string(),
+          relationship: v.string(),
+          age: v.number(),
+          mobile: v.optional(v.string()),
+          address: v.optional(v.string()),
+        }),
+        v.null(),
+      ),
+    ),
+    references: v.optional(
+      v.union(
+        v.array(v.object({ name: v.string(), mobile: v.string() })),
+        v.null(),
+      ),
+    ),
+    /** Whole co-applicant block: an object replaces it, `null` removes it. */
+    coApplicant: v.optional(v.union(coApplicantArg, v.null())),
+    device: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx);
+    requirePermission(me, "edit_client");
+    const client = await ctx.db.get(args.clientId);
+    if (!client) throw new AppError("Client not found.");
+    if (me.role === "FIELD_STAFF" && client.branchId !== me.branchId) {
+      throw new AppError("This client belongs to another branch.");
+    }
+    if (me.role === "BRANCH_MANAGER" && client.branchId !== me.branchId) {
+      throw new AppError("This client belongs to another branch.");
+    }
+
+    const now = Date.now();
+    const patch: Record<string, unknown> = {};
+
+    if (args.name !== undefined) patch.name = requiredString(args.name, "name", 80);
+    if (args.fatherName !== undefined)
+      patch.fatherName = optionalString(args.fatherName, "fatherName", 80);
+    if (args.applicantFatherName !== undefined)
+      patch.applicantFatherName = optionalString(
+        args.applicantFatherName,
+        "applicantFatherName",
+        80,
+      );
+    if (args.husbandName !== undefined)
+      patch.husbandName = optionalString(args.husbandName, "husbandName", 80);
+    if (args.fatherAddress !== undefined)
+      patch.fatherAddress = optionalString(args.fatherAddress, "fatherAddress", 300);
+    if (args.maternalHomeAddress !== undefined)
+      patch.maternalHomeAddress = optionalString(
+        args.maternalHomeAddress,
+        "maternalHomeAddress",
+        300,
+      );
+    if (args.gender !== undefined)
+      patch.gender = oneOf(args.gender, ["MALE", "FEMALE", "OTHER"], "gender");
+    if (args.mobile !== undefined) patch.mobile = mobileNumber(args.mobile);
+    if (args.altMobile !== undefined)
+      patch.altMobile =
+        args.altMobile === null || args.altMobile === ""
+          ? undefined
+          : mobileNumber(args.altMobile, "altMobile");
+    if (args.address !== undefined)
+      patch.address = optionalString(args.address, "address", 300);
+    if (args.district !== undefined)
+      patch.district = optionalString(args.district, "district", 80) ?? "—";
+    if (args.state !== undefined)
+      patch.state = optionalString(args.state, "state", 80) ?? "—";
+    if (args.pin !== undefined) patch.pin = optionalString(args.pin, "pin", 8) ?? "000000";
+    if (args.occupation !== undefined)
+      patch.occupation = requiredString(args.occupation, "occupation", 80);
+    if (args.typeOfBusiness !== undefined)
+      patch.typeOfBusiness = optionalString(args.typeOfBusiness, "typeOfBusiness", 120);
+    if (args.businessAddress !== undefined)
+      patch.businessAddress = optionalString(args.businessAddress, "businessAddress", 300);
+    if (args.monthlyIncome !== undefined)
+      patch.monthlyIncome = money(args.monthlyIncome, "monthlyIncome", { allowZero: true });
+    if (args.householdIncome !== undefined)
+      patch.householdIncome = money(args.householdIncome, "householdIncome", { allowZero: true });
+    if (args.householdExpenses !== undefined)
+      patch.householdExpenses =
+        args.householdExpenses === null
+          ? undefined
+          : money(args.householdExpenses, "householdExpenses", { allowZero: true });
+    if (args.otherIncome !== undefined)
+      patch.otherIncome =
+        args.otherIncome === null
+          ? undefined
+          : money(args.otherIncome, "otherIncome", { allowZero: true });
+    if (args.existingLoanEmi !== undefined)
+      patch.existingLoanEmi =
+        args.existingLoanEmi === null
+          ? undefined
+          : money(args.existingLoanEmi, "existingLoanEmi", { allowZero: true });
+
+    // ---- Aadhaar / PAN / Voter ID -----------------------------------------
+    if (args.panNumber !== undefined) {
+      const pan =
+        args.panNumber === null
+          ? undefined
+          : optionalString(args.panNumber, "panNumber", 10)?.toUpperCase();
+      if (pan && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan)) {
+        throw new AppError("PAN number must look like ABCDE1234F.");
+      }
+      patch.panNumber = pan;
+    }
+    if (args.voterId !== undefined) {
+      const voter =
+        args.voterId === null
+          ? undefined
+          : optionalString(args.voterId, "voterId", 20)?.toUpperCase();
+      if (voter && !/^[A-Z]{3}[0-9]{7}$/.test(voter)) {
+        throw new AppError("Voter ID must look like ABC1234567.");
+      }
+      patch.voterId = voter;
+    }
+    const nextKycType =
+      args.kycDocType !== undefined
+        ? (optionalString(args.kycDocType, "kycDocType", 40) ?? "AADHAAR")
+        : client.kycDocType;
+    const nextKycRef =
+      args.kycDocRef !== undefined
+        ? optionalString(args.kycDocRef, "kycDocRef", 40)
+        : client.kycDocRef;
+    if (args.kycDocType !== undefined) patch.kycDocType = nextKycType;
+    if (args.kycDocRef !== undefined) {
+      if (!nextKycRef) throw new AppError("KYC document number is required.");
+      if (nextKycType === "AADHAAR" && !/^\d{12}$/.test(nextKycRef)) {
+        throw new AppError("Aadhaar must be exactly 12 digits.");
+      }
+      patch.kycDocRef = nextKycRef;
+    }
+    if (args.kycDocuments !== undefined) {
+      const kinds = args.kycDocuments
+        .slice(0, 4)
+        .map((d) => oneOf(d, ["AADHAAR", "PAN", "VOTER_ID", "OTHER"], "kycDocuments"));
+      patch.kycDocuments = kinds.length > 0 ? kinds : undefined;
+    }
+
+    // ---- DOB → age is always re-derived ----------------------------------
+    if (args.dob !== undefined) {
+      if (
+        !Number.isFinite(args.dob) ||
+        args.dob > now ||
+        args.dob < now - 100 * 366 * 24 * 3_600_000
+      ) {
+        throw new AppError("Invalid date of birth.");
+      }
+      patch.dob = args.dob;
+      patch.age = intInRange(ageFromDob(args.dob, now), "age", 18, 100);
+    }
+
+    if (args.village !== undefined || args.address !== undefined) {
+      const nextAddress = args.address ?? client.address;
+      const nextVillage =
+        optionalString(args.village, "village", 80) ??
+        nextAddress?.split(/[,\n]/)[0]?.trim().slice(0, 80) ??
+        "";
+      if (!nextVillage) throw new AppError("Permanent address is required.");
+      patch.village = nextVillage;
+    }
+
+    // ---- Centre linkage (re-verified server-side, never trusted) ---------
+    if (args.centerCode !== undefined) {
+      const resolved = await resolveCenterForClient(
+        ctx,
+        client.branchId,
+        args.centerCode === null
+          ? undefined
+          : optionalString(args.centerCode, "centerCode", 40),
+      );
+      patch.centerCode = resolved.centerCode;
+      patch.centerId = resolved.centerId;
+    }
+    if (args.groupCode !== undefined)
+      patch.groupCode = optionalString(args.groupCode, "groupCode", 40);
+
+    // ---- Application blocks ----------------------------------------------
+    if (args.loanRequest !== undefined)
+      patch.loanRequest =
+        args.loanRequest === null ? undefined : loanRequestValue(args.loanRequest);
+    if (args.bankAccount !== undefined)
+      patch.bankAccount =
+        args.bankAccount === null ? undefined : bankAccountValue(args.bankAccount);
+    if (args.references !== undefined)
+      patch.references =
+        args.references === null ? undefined : referencesValue(args.references);
+    if (args.nominee !== undefined) {
+      patch.nominee =
+        args.nominee === null
+          ? undefined
+          : preserveNomineeContact(client.nominee, nomineeValue(args.nominee));
+    }
+
+    // ---- Co-applicant block (incl. Aadhaar / PAN / Voter ID) --------------
+    if (args.coApplicant !== undefined) {
+      if (args.coApplicant === null) {
+        patch.coApplicant = undefined;
+      } else {
+        const co = args.coApplicant;
+        const coAadhaar = optionalString(co.aadhaarNumber, "coApplicant.aadhaarNumber", 12);
+        if (coAadhaar && !/^\d{12}$/.test(coAadhaar)) {
+          throw new AppError("Co-applicant Aadhaar must be exactly 12 digits.");
+        }
+        const coPan = optionalString(co.panNumber, "coApplicant.panNumber", 10)?.toUpperCase();
+        if (coPan && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(coPan)) {
+          throw new AppError("Co-applicant PAN number must look like ABCDE1234F.");
+        }
+        const coVoter = optionalString(co.voterId, "coApplicant.voterId", 20)?.toUpperCase();
+        if (coVoter && !/^[A-Z]{3}[0-9]{7}$/.test(coVoter)) {
+          throw new AppError("Co-applicant Voter ID must look like ABC1234567.");
+        }
+        if (
+          !Number.isFinite(co.dob) ||
+          co.dob > now ||
+          co.dob < now - 100 * 366 * 24 * 3_600_000
+        ) {
+          throw new AppError("Invalid co-applicant date of birth.");
+        }
+        patch.coApplicant = {
+          name: requiredString(co.name, "coApplicant.name", 80),
+          fatherName: optionalString(co.fatherName, "coApplicant.fatherName", 80),
+          relationship: requiredString(co.relationship, "coApplicant.relationship", 40),
+          dob: co.dob,
+          age: intInRange(ageFromDob(co.dob, now), "coApplicant.age", 18, 100),
+          gender: co.gender
+            ? oneOf(co.gender, ["MALE", "FEMALE", "OTHER"], "coApplicant.gender")
+            : undefined,
+          mobile: co.mobile ? mobileNumber(co.mobile, "coApplicant.mobile") : undefined,
+          address: optionalString(co.address, "coApplicant.address", 300),
+          aadhaarNumber: coAadhaar,
+          panNumber: coPan,
+          voterId: coVoter,
+          kycDocuments: co.kycDocuments
+            ?.slice(0, 4)
+            .map((d) =>
+              oneOf(d, ["AADHAAR", "PAN", "VOTER_ID", "OTHER"], "coApplicant.kycDocuments"),
+            ),
+          // The saved co-applicant photo is kept unless a new one is uploaded
+          // through the (separate) photo workflow.
+          photoStorageId: client.coApplicant?.photoStorageId,
+        };
+      }
+    }
+
+    // Search text always reflects the CURRENT stored values.
+    if (
+      patch.name !== undefined ||
+      patch.mobile !== undefined ||
+      patch.village !== undefined
+    ) {
+      const name = (patch.name as string | undefined) ?? client.name;
+      const mobile = (patch.mobile as string | undefined) ?? client.mobile;
+      const village = (patch.village as string | undefined) ?? client.village;
+      patch.searchText = `${name} ${mobile} ${client.code} ${village}`.toLowerCase();
+    }
+
+    if (Object.keys(patch).length === 0) return { ok: true, changed: 0 };
+
+    await ctx.db.patch(args.clientId, patch);
+    await logAudit(ctx, {
+      actorId: me._id,
+      actorName: me.name,
+      role: me.role,
+      action: "CLIENT_UPDATED",
+      entity: "clients",
+      entityId: client.code,
+      before: {
+        name: client.name,
+        mobile: client.mobile,
+        dob: client.dob ?? null,
+        kycDocType: client.kycDocType ?? null,
+        kycDocRefTail: client.kycDocRef ? `xxxx${client.kycDocRef.slice(-4)}` : null,
+        panNumber: client.panNumber ?? null,
+        voterId: client.voterId ?? null,
+        hasCoApplicant: Boolean(client.coApplicant),
+      },
+      after: {
+        ...patch,
+        kycDocRef: undefined,
+        kycDocRefTail:
+          (patch.kycDocRef as string | undefined)?.slice(-4) !== undefined
+            ? `xxxx${String(patch.kycDocRef).slice(-4)}`
+            : undefined,
+      },
+      referenceId: client.code,
+      branchId: client.branchId,
+      device: args.device,
+    });
+    return { ok: true, changed: Object.keys(patch).length };
+  },
+});
+
+/**
+ * Upload / replace / remove client KYC and co-applicant KYC files after the
+ * client has been submitted.
+ *
+ * SUPER_ADMIN and Branch Manager only — the same roles the joining form's KYC
+ * capture is limited to. Every uploaded file is re-validated from storage
+ * metadata (JPEG / PNG / WebP / PDF, 1 byte – 5 MB, known KYC kind) before a
+ * `clientDocuments` row is written, and removed rows have their stored file
+ * deleted too. Nothing here touches the client's KYC status, verification,
+ * loans or approvals.
+ */
+export const addClientDocuments = mutation({
+  args: {
+    clientId: v.id("clients"),
+    coApplicant: v.optional(v.boolean()),
+    documents: v.optional(
+      v.array(
+        v.object({
+          docKind: v.string(),
+          fileName: v.string(),
+          storageId: v.id("_storage"),
+        }),
+      ),
+    ),
+    removeDocumentIds: v.optional(v.array(v.id("clientDocuments"))),
+    device: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx);
+    requireRole(me, "SUPER_ADMIN", "BRANCH_MANAGER");
+    const client = await ctx.db.get(args.clientId);
+    if (!client) throw new AppError("Client not found.");
+    if (me.role === "BRANCH_MANAGER" && client.branchId !== me.branchId) {
+      throw new AppError("This client belongs to another branch.");
+    }
+
+    const now = Date.now();
+    const isCo = args.coApplicant === true;
+    const subject = isCo ? "Co-applicant document" : "Applicant document";
+
+    // ---- Removals (replace) ---------------------------------------------
+    let removed = 0;
+    for (const docId of args.removeDocumentIds ?? []) {
+      const doc = await ctx.db.get(docId);
+      if (!doc || doc.clientId !== args.clientId) {
+        throw new AppError("Document does not belong to this client.");
+      }
+      if (Boolean(doc.coApplicant) !== isCo) {
+        throw new AppError("Document belongs to the other applicant section.");
+      }
+      if (doc.storageId) {
+        try {
+          await ctx.storage.delete(doc.storageId);
+        } catch {
+          // file already gone — the row removal below is what matters
+        }
+      }
+      await ctx.db.delete(docId);
+      removed += 1;
+    }
+
+    // ---- New uploads -----------------------------------------------------
+    const incoming = (args.documents ?? []).slice(0, isCo ? 8 : 12);
+    let added = 0;
+    if (incoming.length > 0) {
+      const validated = await validateUploadedKycDocs(ctx, incoming, subject);
+      for (const d of validated) {
+        await ctx.db.insert("clientDocuments", {
+          clientId: args.clientId,
+          type: "KYC",
+          fileName: d.fileName,
+          status: "UPLOADED",
+          uploadedBy: me._id,
+          storageId: d.storageId,
+          sizeBytes: d.sizeBytes,
+          mimeType: d.mimeType,
+          docKind: d.docKind,
+          ...(isCo ? { coApplicant: true } : {}),
+          createdAt: now,
+        });
+      }
+      added = validated.length;
+    }
+
+    if (removed > 0 || added > 0) {
+      await logAudit(ctx, {
+        actorId: me._id,
+        actorName: me.name,
+        role: me.role,
+        action: "CLIENT_DOCUMENTS_UPDATED",
+        entity: "clients",
+        entityId: client.code,
+        before: { removed },
+        after: { added, coApplicant: isCo },
+        referenceId: client.code,
+        branchId: client.branchId,
+        device: args.device,
+      });
+    }
+
+    return { ok: true, added, removed };
   },
 });
 

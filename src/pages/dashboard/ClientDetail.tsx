@@ -152,6 +152,17 @@ export default function ClientDetail() {
         )}
       </div>
 
+      {can("edit_client") && (
+        <Button
+          size="lg"
+          variant="outline"
+          className="w-full"
+          onClick={() => navigate(`/dashboard/clients/${client._id}/edit`)}
+        >
+          <NotebookPen /> Edit full details
+        </Button>
+      )}
+
       <Tabs defaultValue="overview">
         <TabsList className="h-auto w-full flex-wrap border-2 border-ink bg-white p-1">
           <TabsTrigger value="overview" className="flex-1 text-xs font-black uppercase">

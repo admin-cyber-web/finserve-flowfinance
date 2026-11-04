@@ -12,6 +12,7 @@ import Audit from "./dashboard/Audit";
 import Accounting from "./dashboard/Accounting";
 import Cash from "./dashboard/Cash";
 import ClientDetail from "./dashboard/ClientDetail";
+import ClientEdit from "./dashboard/ClientEdit";
 import ClientNew from "./dashboard/ClientNew";
 import ClientHome from "./dashboard/ClientHome";
 import Clients from "./dashboard/Clients";
@@ -123,6 +124,7 @@ export default function Dashboard() {
       <Route path="clients" element={<Clients />} />
       <Route path="clients/new" element={<ClientNew />} />
       <Route path="clients/:id" element={<ClientDetail />} />
+      <Route path="clients/:id/edit" element={<ClientEdit />} />
       <Route path="loans" element={<Loans />} />
       <Route path="loans/new" element={<LoanNew />} />
       <Route path="loans/:id" element={<LoanDetail />} />
