@@ -157,6 +157,9 @@ export const dashboard = query({
     const notifications = await ctx.db.query("notifications").collect();
     const recoveries = await ctx.db.query("recoveryActivities").collect();
     const grievances = await ctx.db.query("grievances").collect();
+    // Posted journal entries are the only source of cash / bank balances.
+    // Nothing is stored or edited: the balance is the sum of posted lines.
+    const journal = await ctx.db.query("journalEntries").collect();
     const byId = new Map(profiles.map((p) => [p._id, p]));
     const branchById = new Map(branches.map((b) => [b._id, b]));
 
@@ -164,6 +167,19 @@ export const dashboard = query({
       me.role === "SUPER_ADMIN" || me.role === "ACCOUNTANT"
         ? true
         : b === me.branchId;
+
+    /** Posted ledger balance for one chart-of-accounts code in the viewer's scope. */
+    const ledgerBalance = (code: string): number =>
+      journal
+        .filter((e) => branchOk(e.branchId))
+        .reduce(
+          (sum, e) =>
+            sum +
+            e.lines
+              .filter((l) => l.code === code)
+              .reduce((x, l) => x + l.debit - l.credit, 0),
+          0,
+        );
 
     const todayCollections = collections.filter(
       (c) =>
@@ -209,12 +225,12 @@ export const dashboard = query({
             branchOk(t.branchId),
         )
         .reduce((s, t) => s + t.amount, 0),
-      cashWithBM: cashHandovers
-        .filter(
-          (h) => h.status === "ACCEPTED" && branchOk(h.branchId),
-        )
-        .reduce((s, h) => s + h.amount, 0),
-      bankBalance: 0,
+      // Branch counter cash = posted balance of "Cash in Hand — Branch / BM"
+      // (1015). Never the sum of handover rows: accepting a handover moves
+      // cash and issuing it back moves the same cash again, so only the
+      // ledger balance is a true counter balance.
+      cashWithBM: Math.round(ledgerBalance("1015") * 100) / 100,
+      bankBalance: Math.round(ledgerBalance("1020") * 100) / 100,
     };
 
     const pending = {

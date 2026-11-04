@@ -5,6 +5,7 @@ import {
   RowSkeleton,
   StatCard,
 } from "@/components/fs/primitives";
+import { BranchCashPanel } from "@/components/fs/BranchCashPanel";
 import { useQuery } from "convex/react";
 import { Button } from "@/components/ui/button";
 import { useProfile } from "@/hooks/use-profile";
@@ -105,6 +106,8 @@ export default function AdminHome() {
         />
       </div>
 
+      {/* Branch cash — ledger-derived counter balance, today and month */}
+      <BranchCashPanel />
 
       {/* Quick links */}
       <div className="grid grid-cols-3 gap-2">

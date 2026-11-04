@@ -137,6 +137,349 @@ export const dayBook = query({
   },
 });
 
+/* ------------------------- Branch counter cash ---------------------------- */
+
+/**
+ * Chart-of-accounts codes used by the branch cash view.
+ *
+ *   1010 — Cash in Hand, Field Staff
+ *   1015 — Cash in Hand, Branch / BM   ← the branch counter
+ *   1020 — Bank Account
+ *
+ * Every figure below is a read of the immutable double-entry journal. Nothing
+ * is stored, nothing is editable and no amount is ever assumed: each 1015
+ * rupee is counted once, in exactly one bucket (in: handovers / other,
+ * out: issues / expenses / bank deposits / other), so the same money can
+ * never be counted twice.
+ */
+const STAFF_CASH_CODE = "1010";
+const COUNTER_CASH_CODE = "1015";
+const BANK_CODE = "1020";
+
+type JournalDoc = Doc<"journalEntries">;
+
+const r2 = (n: number) => Math.round(n * 100) / 100;
+
+/** Debit or credit amount for one account code inside an entry. */
+function amountOn(entry: JournalDoc, code: string, side: "debit" | "credit"): number {
+  return entry.lines
+    .filter((l) => l.code === code)
+    .reduce((s, l) => s + l[side], 0);
+}
+
+interface CashWindow {
+  /** Counter cash at the start of the window. */
+  opening: number;
+  /** Everything that came into the counter during the window. */
+  received: number;
+  /** Part of `received` that arrived as accepted staff handovers. */
+  handoversIn: number;
+  /** Part of `received` from any other authorised counter entry. */
+  otherIn: number;
+  /** Counter cash issued to field staff wallets. */
+  issuedToStaff: number;
+  /** Approved expenses paid from the counter. */
+  expenses: number;
+  /** Counter cash transferred out to the bank. */
+  bankDeposits: number;
+  /** Any other authorised counter outflow. */
+  otherOut: number;
+  netChange: number;
+  /** Counter cash at the end of the window (matches the ledger). */
+  closing: number;
+  /** Cash actually paid out to clients (all funding sources). */
+  disbursedToClients: number;
+  disbursementCount: number;
+  /** Cash repayments received from clients (UPI/bank excluded). */
+  cashCollections: number;
+  cashCollectionCount: number;
+  /** opening + buckets must equal closing — false means a ledger anomaly. */
+  reconciled: boolean;
+}
+
+function emptyWindow(opening: number): CashWindow {
+  return {
+    opening,
+    received: 0,
+    handoversIn: 0,
+    otherIn: 0,
+    issuedToStaff: 0,
+    expenses: 0,
+    bankDeposits: 0,
+    otherOut: 0,
+    netChange: 0,
+    closing: opening,
+    disbursedToClients: 0,
+    disbursementCount: 0,
+    cashCollections: 0,
+    cashCollectionCount: 0,
+    reconciled: true,
+  };
+}
+
+/** Adds one journal entry to a window — each line lands in one bucket only. */
+function applyEntry(window: CashWindow, entry: JournalDoc): void {
+  const counterIn = amountOn(entry, COUNTER_CASH_CODE, "debit");
+  const counterOut = amountOn(entry, COUNTER_CASH_CODE, "credit");
+
+  if (counterIn > 0) {
+    window.received += counterIn;
+    if (entry.refType === "CASH_HANDOVER") window.handoversIn += counterIn;
+    else window.otherIn += counterIn;
+  }
+
+  if (counterOut > 0) {
+    const toBank = amountOn(entry, BANK_CODE, "debit");
+    if (entry.refType === "CASH_ISSUE") window.issuedToStaff += counterOut;
+    else if (entry.refType === "EXPENSE") window.expenses += counterOut;
+    else if (toBank > 0 || /BANK/i.test(entry.refType)) window.bankDeposits += counterOut;
+    else window.otherOut += counterOut;
+  }
+
+  // Disbursal: cash (staff wallet / counter) or bank leaves the branch and the
+  // client receives it. The receivable debit is NOT the cash that moved when a
+  // processing fee was deducted, so the paid-out cash legs are used instead.
+  if (entry.refType === "DISBURSEMENT") {
+    const paidOut =
+      amountOn(entry, STAFF_CASH_CODE, "credit") +
+      counterOut +
+      amountOn(entry, BANK_CODE, "credit");
+    if (paidOut > 0) {
+      window.disbursedToClients += paidOut;
+      window.disbursementCount += 1;
+    }
+  }
+
+  // Cash repayment only — UPI/bank collections settle into the bank account
+  // and must never be reported as counter cash.
+  if (entry.refType === "COLLECTION") {
+    const cashIn = amountOn(entry, STAFF_CASH_CODE, "debit") + counterIn;
+    if (cashIn > 0) {
+      window.cashCollections += cashIn;
+      window.cashCollectionCount += 1;
+    }
+  }
+}
+
+function finaliseWindow(window: CashWindow, closing: number, opening: number): CashWindow {
+  const netChange = r2(closing - opening);
+  const out = r2(
+    window.issuedToStaff +
+      window.expenses +
+      window.bankDeposits +
+      window.otherOut,
+  );
+  const fromBuckets = r2(window.received - out);
+  return {
+    ...window,
+    opening: r2(opening),
+    received: r2(window.received),
+    handoversIn: r2(window.handoversIn),
+    otherIn: r2(window.otherIn),
+    issuedToStaff: r2(window.issuedToStaff),
+    expenses: r2(window.expenses),
+    bankDeposits: r2(window.bankDeposits),
+    otherOut: r2(window.otherOut),
+    netChange,
+    closing: r2(closing),
+    disbursedToClients: r2(window.disbursedToClients),
+    cashCollections: r2(window.cashCollections),
+    reconciled: Math.abs(netChange - fromBuckets) < 0.005,
+  };
+}
+
+interface BranchCashRow {
+  branchId: string | null;
+  code: string;
+  name: string;
+  counter: number;
+  staffCash: number;
+  bank: number;
+  totalCash: number;
+  today: CashWindow;
+  month: CashWindow;
+  entries: number;
+}
+
+/**
+ * Branch counter cash, straight from the journal ledger.
+ *
+ * Scope is enforced server-side: a Branch Manager only ever receives their own
+ * branch; SUPER_ADMIN / ACCOUNTANT receive every authorised branch plus a
+ * per-branch breakdown. Nothing is derived from handover rows, wallet limits
+ * or any stored balance — only posted journal entries.
+ */
+export const branchCash = query({
+  args: {},
+  handler: async (ctx) => {
+    const me = await requireProfile(ctx, { allowInactive: true });
+    if (!["SUPER_ADMIN", "BRANCH_MANAGER", "ACCOUNTANT"].includes(me.role)) {
+      throw new AppError("Branch cash is only visible to branch and finance managers.");
+    }
+
+    const now = Date.now();
+    const todayKey = istDateKey(now);
+    const monthStartKey = `${todayKey.slice(0, 7)}-01`;
+
+    const allBranches = await ctx.db.query("branches").collect();
+    const orgWide = me.role === "SUPER_ADMIN" || me.role === "ACCOUNTANT";
+    const visibleBranches = orgWide
+      ? allBranches
+      : allBranches.filter((b) => b._id === me.branchId);
+
+    if (!orgWide && visibleBranches.length === 0) {
+      return {
+        generatedAt: now,
+        todayKey,
+        monthKey: todayKey.slice(0, 7),
+        orgWide: false,
+        branches: [],
+        totals: emptyBranchRow(null, "No branch linked"),
+        entryCount: 0,
+      };
+    }
+
+    const visibleIds = new Set(visibleBranches.map((b) => b._id));
+    const entries = (await ctx.db.query("journalEntries").collect())
+      .filter((e) => e.createdAt <= now)
+      .sort((a, b) => a.createdAt - b.createdAt);
+    const scoped = entries.filter((e) => e.branchId && visibleIds.has(e.branchId));
+    const unassigned = orgWide ? entries.filter((e) => !e.branchId) : [];
+
+    const rows: BranchCashRow[] = visibleBranches.map((branch) =>
+      buildBranchRow(
+        branch._id,
+        branch.code,
+        branch.name,
+        scoped.filter((e) => e.branchId === branch._id),
+        todayKey,
+        monthStartKey,
+      ),
+    );
+
+    if (unassigned.length > 0) {
+      rows.push(
+        buildBranchRow(null, "—", "Unassigned ledger entries", unassigned, todayKey, monthStartKey),
+      );
+    }
+
+    rows.sort((a, b) => a.name.localeCompare(b.name));
+
+    const totals = rows.reduce(
+      (acc, row) => mergeRows(acc, row),
+      emptyBranchRow(null, orgWide ? "All branches" : (rows[0]?.name ?? "—")),
+    );
+
+    return {
+      generatedAt: now,
+      todayKey,
+      monthKey: todayKey.slice(0, 7),
+      orgWide,
+      branches: rows.map((row) => ({ ...row, isAggregate: false })),
+      totals: { ...totals, isAggregate: true },
+      entryCount: scoped.length + unassigned.length,
+    };
+  },
+});
+
+function emptyBranchRow(branchId: Id<"branches"> | null, name: string): BranchCashRow {
+  return {
+    branchId,
+    code: "—",
+    name,
+    counter: 0,
+    staffCash: 0,
+    bank: 0,
+    totalCash: 0,
+    today: emptyWindow(0),
+    month: emptyWindow(0),
+    entries: 0,
+  };
+}
+
+/** Builds one branch's counter / staff / bank picture from its journal rows. */
+function buildBranchRow(
+  branchId: Id<"branches"> | null,
+  code: string,
+  name: string,
+  entries: JournalDoc[],
+  todayKey: string,
+  monthStartKey: string,
+): BranchCashRow {
+  let counter = 0;
+  let staffCash = 0;
+  let bank = 0;
+  let openingToday = 0;
+  let openingMonth = 0;
+  const today = emptyWindow(0);
+  const month = emptyWindow(0);
+
+  for (const entry of entries) {
+    const key = entry.dateKey || istDateKey(entry.createdAt);
+    counter += amountOn(entry, COUNTER_CASH_CODE, "debit") - amountOn(entry, COUNTER_CASH_CODE, "credit");
+    staffCash += amountOn(entry, STAFF_CASH_CODE, "debit") - amountOn(entry, STAFF_CASH_CODE, "credit");
+    bank += amountOn(entry, BANK_CODE, "debit") - amountOn(entry, BANK_CODE, "credit");
+
+    if (key < todayKey) {
+      openingToday +=
+        amountOn(entry, COUNTER_CASH_CODE, "debit") - amountOn(entry, COUNTER_CASH_CODE, "credit");
+    }
+    if (key < monthStartKey) {
+      openingMonth +=
+        amountOn(entry, COUNTER_CASH_CODE, "debit") - amountOn(entry, COUNTER_CASH_CODE, "credit");
+    }
+    if (key === todayKey) applyEntry(today, entry);
+    if (key >= monthStartKey) applyEntry(month, entry);
+  }
+
+  return {
+    branchId,
+    code,
+    name,
+    counter: r2(counter),
+    staffCash: r2(staffCash),
+    bank: r2(bank),
+    totalCash: r2(counter + staffCash),
+    today: finaliseWindow(today, counter, openingToday),
+    month: finaliseWindow(month, counter, openingMonth),
+    entries: entries.length,
+  };
+}
+
+function mergeRows(a: BranchCashRow, b: BranchCashRow): BranchCashRow {
+  const add = (x: number, y: number) => r2(x + y);
+  const mergeWindow = (x: CashWindow, y: CashWindow): CashWindow => ({
+    opening: add(x.opening, y.opening),
+    received: add(x.received, y.received),
+    handoversIn: add(x.handoversIn, y.handoversIn),
+    otherIn: add(x.otherIn, y.otherIn),
+    issuedToStaff: add(x.issuedToStaff, y.issuedToStaff),
+    expenses: add(x.expenses, y.expenses),
+    bankDeposits: add(x.bankDeposits, y.bankDeposits),
+    otherOut: add(x.otherOut, y.otherOut),
+    netChange: add(x.netChange, y.netChange),
+    closing: add(x.closing, y.closing),
+    disbursedToClients: add(x.disbursedToClients, y.disbursedToClients),
+    disbursementCount: x.disbursementCount + y.disbursementCount,
+    cashCollections: add(x.cashCollections, y.cashCollections),
+    cashCollectionCount: x.cashCollectionCount + y.cashCollectionCount,
+    reconciled: x.reconciled && y.reconciled,
+  });
+
+  return {
+    branchId: null,
+    code: a.code,
+    name: a.name,
+    counter: add(a.counter, b.counter),
+    staffCash: add(a.staffCash, b.staffCash),
+    bank: add(a.bank, b.bank),
+    totalCash: add(a.totalCash, b.totalCash),
+    today: mergeWindow(a.today, b.today),
+    month: mergeWindow(a.month, b.month),
+    entries: a.entries + b.entries,
+  };
+}
+
 /** Staff submits the day's closing; shortages require an explanation. */
 export const submitClosing = mutation({
   args: {
