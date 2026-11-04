@@ -22,6 +22,7 @@ import {
   type DateReportPreset,
 } from "@/lib/finance/dateReport";
 import { formatINR } from "@/lib/finance/money";
+import { formatMeetingDateShort } from "@/lib/meeting";
 import { cn, fmtId } from "@/lib/utils";
 import { useQuery } from "convex/react";
 import { Download, FileBarChart, Lock } from "lucide-react";
@@ -69,7 +70,14 @@ const COMMON_HEAD = [
 const TAILS: Record<ReportKey, string[]> = {
   disbursement: [],
   collection: ["MOB", "Paid Date", "Paid Amount"],
-  due: ["MOB", "Arrear", "Arrear Days", "Total Due Amount"],
+  due: [
+    "Meeting Day",
+    "Next Due Date",
+    "MOB",
+    "Arrear",
+    "Arrear Days",
+    "Total Due Amount",
+  ],
   overdue: ["BKT 1 (1–7 days)", "BKT 2 (8–15 days)", "BKT 3 (16–22 days)"],
   statement: [],
 };
@@ -266,6 +274,8 @@ export default function Reports() {
           r.loanAmount,
           r.tenure,
           r.emi,
+          r.centerMeetingDay,
+          formatMeetingDateShort(r.nextDueDate),
           r.mob ?? "—",
           r.arrear,
           r.arrearDays,
@@ -591,6 +601,8 @@ export default function Reports() {
                         extra={
                           <>
                             <td className={cellBlank} />
+                            <td className={cellBlank} />
+                            <td className={cellBlank} />
                             <td className={cell}>
                               {sum(dueRows, (r) => r.arrear)}
                             </td>
@@ -607,6 +619,12 @@ export default function Reports() {
                   {dueRows.map((r) => (
                     <tr key={r.loanId} className="hover:bg-sky/40">
                       <CommonCells row={r} />
+                      <td className={cn(TD_CLS, "whitespace-nowrap")}>
+                        {r.centerMeetingDay}
+                      </td>
+                      <td className={cn(TD_CLS, "whitespace-nowrap")}>
+                        {formatMeetingDateShort(r.nextDueDate)}
+                      </td>
                       <td className={cn(TD_CLS, "text-center")}>
                         {r.mob ?? "—"}
                       </td>

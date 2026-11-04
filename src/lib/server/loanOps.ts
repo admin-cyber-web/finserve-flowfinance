@@ -231,13 +231,18 @@ export async function disburseLoan(
   // The schedule is regenerated from the terms stored ON THE LOAN (written
   // by the approval step from the fixed backend terms) — never from a
   // product record and never from anything the client supplied.
+  //
+  // The calendar ANCHOR is the manually selected first meeting date, so the
+  // installments fall on the centre meeting weekday the Admin chose. Legacy
+  // loans without one keep the original disbursement-date anchor. Only dates
+  // move — rate, method, tenure and installment amounts are untouched.
   const rows = baseScheduleRows({
     principal: loan.principal,
     interestRate: loan.interestRate,
     interestMethod: loan.interestMethod as InterestMethod,
     frequency: loan.frequency as Frequency,
     tenure: loan.tenure,
-    disbursedOn: nowMs,
+    disbursedOn: loan.firstMeetingDate ?? nowMs,
     graceDays: FIXED_LOAN_TERMS.graceDays,
     // The processing fee is NOT financed into the repayment schedule. The
     // schedule (and therefore the client's debt) is principal + reducing-

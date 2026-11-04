@@ -21,6 +21,10 @@ import { LOAN_STATUS_LABELS, RECOVERY_KINDS, RECOVERY_LABELS } from "@/lib/finan
 import { round2 } from "@/lib/finance/money";
 import { rowOutstanding } from "@/lib/finance/schedule";
 import { cn, fmtId } from "@/lib/utils";
+import {
+  formatMeetingDate,
+  formatMeetingDateShort,
+} from "@/lib/meeting";
 import { useMutation, useQuery } from "convex/react";
 import {
   CheckCircle2,
@@ -265,6 +269,28 @@ export default function LoanDetail() {
         </section>
       )}
 
+      {/* Centre meeting schedule — the manually selected values saved on the
+          loan, plus the next actual due date with its weekday. */}
+      <section className="border-2 border-ink bg-card p-4 shadow-hard-sm">
+        <SectionTitle>Centre meeting schedule</SectionTitle>
+        <KeyValue
+          k="Center Meeting Day"
+          v={loan.centerMeetingDay ?? "—"}
+        />
+        <KeyValue
+          k="First Meeting Date"
+          v={formatMeetingDate(loan.firstMeetingDate)}
+        />
+        <KeyValue
+          k="Next Due Date"
+          v={
+            view.nextDueDate
+              ? formatMeetingDate(view.nextDueDate)
+              : "No open installments"
+          }
+        />
+      </section>
+
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <div className="border-2 border-ink bg-white p-2.5 shadow-hard-sm">
           <div className="text-[10px] font-black uppercase text-muted-foreground">Rate</div>
@@ -342,7 +368,9 @@ export default function LoanDetail() {
                         )}
                       >
                         <td className="px-2 py-1.5 font-mono font-black">{r.index}</td>
-                        <td className="px-2 py-1.5 font-semibold">{formatDate(r.dueDate)}</td>
+                        <td className="px-2 py-1.5 font-semibold whitespace-nowrap">
+                          {formatMeetingDateShort(r.dueDate)}
+                        </td>
                         <td className="px-2 py-1.5 text-right font-mono tabular-nums">
                           ₹{r.principal.toLocaleString("en-IN")}
                         </td>
@@ -495,6 +523,11 @@ export default function LoanDetail() {
             <KeyValue k="Total payable" v={<Money value={loan.totalPayable} />} />
             <KeyValue k="Paid to date" v={<Money value={loan.paidTotal} />} />
             <KeyValue k="Interest booked" v={<Money value={loan.interestTotal} />} />
+            <KeyValue k="Center Meeting Day" v={loan.centerMeetingDay ?? "—"} />
+            <KeyValue
+              k="First Meeting Date"
+              v={formatMeetingDate(loan.firstMeetingDate)}
+            />
             <KeyValue k="Disbursed" v={formatDate(loan.disbursedAt)} />
             <KeyValue k="Approved by" v={staff?.name ?? "—"} />
             <KeyValue k="Created" v={formatDate(loan.createdAt)} />

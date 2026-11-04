@@ -8,6 +8,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { useProfile } from "@/hooks/use-profile";
 import { formatINR } from "@/lib/finance/money";
+import { formatMeetingDateShort } from "@/lib/meeting";
 import { newIdempotencyKey } from "@/lib/offline";
 import { cn, fmtId } from "@/lib/utils";
 import { useMutation, useQuery } from "convex/react";
@@ -193,6 +194,8 @@ export default function Collection() {
                   "Client ID",
                   "Loan ID",
                   "Customer Name",
+                  "Meeting Day",
+                  "Due Date",
                   "Arrear",
                   "Total Due",
                   "Collect Amount",
@@ -218,6 +221,12 @@ export default function Collection() {
                       {fmtId(r.loanId)}
                     </td>
                     <td className={TD_CLS}>{r.customerName}</td>
+                    <td className={cn(TD_CLS, "whitespace-nowrap")}>
+                      {r.centerMeetingDay ?? "—"}
+                    </td>
+                    <td className={cn(TD_CLS, "whitespace-nowrap")}>
+                      {r.dueDate ? formatMeetingDateShort(r.dueDate) : "—"}
+                    </td>
                     <td
                       className={cn(
                         TD_CLS,

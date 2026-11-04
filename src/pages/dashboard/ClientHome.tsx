@@ -11,6 +11,7 @@ import {
 } from "@/components/fs/primitives";
 import { Button } from "@/components/ui/button";
 import { fmtId } from "@/lib/utils";
+import { formatMeetingDateShort } from "@/lib/meeting";
 import { useQuery } from "convex/react";
 import { FileText, HandCoins } from "lucide-react";
 import { useNavigate } from "react-router";
@@ -78,7 +79,8 @@ export default function ClientHome() {
                 </div>
                 <div className="mt-1 flex items-end justify-between">
                   <span className="text-[11px] font-semibold text-muted-foreground">
-                    Next due {view.nextDueDate ? formatDate(view.nextDueDate) : "—"}
+                    Next due {view.nextDueDate ? formatMeetingDateShort(view.nextDueDate) : "—"}
+                    {loan.centerMeetingDay ? ` · meeting ${loan.centerMeetingDay}` : ""}
                   </span>
                   <Money value={loan.outstanding} className="text-base" />
                 </div>

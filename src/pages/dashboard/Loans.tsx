@@ -12,6 +12,7 @@ import { LoanActions } from "@/components/fs/LoanActions";
 import { useProfile } from "@/hooks/use-profile";
 import { LOAN_STATUS_LABELS } from "@/lib/finance/types";
 import { cn, fmtId } from "@/lib/utils";
+import { formatMeetingDateShort } from "@/lib/meeting";
 import { useQuery } from "convex/react";
 import { Archive, HandCoins, Plus, Search } from "lucide-react";
 import { useState } from "react";
@@ -135,6 +136,11 @@ export default function Loans() {
                   <span className="block truncate text-[11px] font-semibold text-muted-foreground">
                     {client?.name ?? "—"} · {client?.code ?? ""}
                   </span>
+                  {loan.centerMeetingDay && (
+                    <span className="mt-1 inline-block border-2 border-ink bg-sky px-1.5 py-0.5 text-[9px] font-black uppercase">
+                      Meeting {loan.centerMeetingDay}
+                    </span>
+                  )}
                 </div>
                 <StatusChip status={view.displayStatus} />
               </div>
@@ -153,7 +159,7 @@ export default function Loans() {
                 <span className="text-[10px] font-black uppercase text-muted-foreground">
                   {LOAN_STATUS_LABELS[view.displayStatus] ?? view.displayStatus} ·{" "}
                   {Math.round(view.progressPct)}% paid
-                  {nextDue ? ` · next ${formatDate(nextDue.dueDate)}` : ""}
+                  {nextDue ? ` · next ${formatMeetingDateShort(nextDue.dueDate)}` : ""}
                 </span>
                 <span className="text-right">
                   <Money value={loan.outstanding} className="block text-sm" />

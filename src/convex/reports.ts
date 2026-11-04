@@ -887,6 +887,11 @@ export const overdue = query({
       staffName: string;
       lastPayment: number | null;
       village: string;
+      /** Manual centre meeting schedule stored on the loan. */
+      centerMeetingDay: string | null;
+      firstMeetingDate: number | null;
+      /** Oldest unpaid overdue installment — shown with its weekday. */
+      oldestDueDate: number;
     }[] = [];
 
     for (const loan of loans) {
@@ -914,6 +919,9 @@ export const overdue = query({
         bucket,
         staffName: profileById.get(loan.staffId)?.name ?? "—",
         lastPayment: loan.lastPaymentAt ?? null,
+        centerMeetingDay: loan.centerMeetingDay ?? null,
+        firstMeetingDate: loan.firstMeetingDate ?? null,
+        oldestDueDate: Math.min(...overdueRows.map((r) => r.dueDate)),
       });
     }
     rows.sort((a, b) => b.daysOverdue - a.daysOverdue);
@@ -1189,6 +1197,8 @@ export const rangeReports = query({
         principal: loan.principal,
         tenure: loan.tenure,
         installment: loan.installment,
+        centerMeetingDay: loan.centerMeetingDay,
+        firstMeetingDate: loan.firstMeetingDate,
       };
     };
 

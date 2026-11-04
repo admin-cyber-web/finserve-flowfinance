@@ -82,9 +82,18 @@ export const today = query({
       byClient.set(loan.clientId, entry);
     }
 
+    // The centre meeting schedule of each client's loan, so the collection
+    // list can show the meeting day and the next due date with its weekday.
+    const loanByClient = new Map<Id<"clients">, Doc<"loans">>();
+    for (const l of loans) {
+      if (loanByClient.has(l.clientId)) continue;
+      loanByClient.set(l.clientId, l);
+    }
+
     const dueList = [...byClient.entries()]
       .map(([clientId, stat]) => {
         const client = clientById.get(clientId)!;
+        const loan = loanByClient.get(clientId);
         const collectedToday = todayCollections
           .filter((c) => c.clientId === clientId)
           .reduce((s, c) => s + c.amount, 0);
@@ -95,6 +104,9 @@ export const today = query({
           village: client.village,
           mobile: client.mobile,
           kycStatus: client.kycStatus,
+          // Manually selected schedule stored on the loan.
+          centerMeetingDay: loan?.centerMeetingDay ?? null,
+          firstMeetingDate: loan?.firstMeetingDate ?? null,
           ...stat,
           dueToday: Math.round(stat.dueToday * 100) / 100,
           overdue: Math.round(stat.overdue * 100) / 100,
@@ -390,13 +402,19 @@ export const dueList = query({
       groupName: string;
       arrear: number;
       totalDue: number;
+      /** Manual centre meeting day stored on the loan. */
+      centerMeetingDay: string | null;
+      /** Oldest unpaid installment — displayed together with its weekday. */
+      dueDate: number | null;
     }[] = [];
     for (const loan of scopedLoans) {
       let arrear = 0;
       let totalDue = 0;
+      let oldestDue: number | null = null;
       for (const s of schedulesByLoan.get(loan._id) ?? []) {
         const rem = rowOutstanding(s);
         if (rem <= 0) continue;
+        if (oldestDue === null || s.dueDate < oldestDue) oldestDue = s.dueDate;
         if (s.dueDate <= now) totalDue += rem;
         if (overdueDays(s.dueDate, now) >= 1) arrear += rem;
       }
@@ -415,6 +433,8 @@ export const dueList = query({
         groupName: group?.name ?? "",
         arrear,
         totalDue,
+        centerMeetingDay: loan.centerMeetingDay ?? null,
+        dueDate: oldestDue,
       });
     }
 

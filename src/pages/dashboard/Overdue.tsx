@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { useProfile } from "@/hooks/use-profile";
 import { BUCKET_LABELS, RECOVERY_KINDS, RECOVERY_LABELS, OVERDUE_BUCKETS } from "@/lib/finance/types";
 import { cn, fmtId } from "@/lib/utils";
+import { formatMeetingDateShort } from "@/lib/meeting";
 import { useMutation, useQuery } from "convex/react";
 import { AlertTriangle, PhoneCall } from "lucide-react";
 import { useState } from "react";
@@ -121,6 +122,10 @@ export default function Overdue() {
                   </p>
                   <p className="text-[11px] font-semibold text-muted-foreground">
                     {r.daysOverdue} days overdue · bucket {BUCKET_LABELS[r.bucket as keyof typeof BUCKET_LABELS]}
+                  </p>
+                  <p className="text-[11px] font-semibold text-muted-foreground">
+                    Meeting {r.centerMeetingDay ?? "—"} · oldest due{" "}
+                    {formatMeetingDateShort(r.oldestDueDate)}
                   </p>
                 </div>
                 <div className="shrink-0 text-right">

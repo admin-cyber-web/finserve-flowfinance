@@ -7,8 +7,15 @@ import {
   SectionTitle,
   StatusChip,
 } from "@/components/fs/primitives";
+import { MeetingSchedulePicker } from "@/components/fs/MeetingSchedulePicker";
 import { Button } from "@/components/ui/button";
 import { fmtId } from "@/lib/utils";
+import {
+  formatMeetingDate,
+  formatMeetingDateShort,
+  type MeetingDay,
+} from "@/lib/meeting";
+import { addPeriods } from "@/lib/finance/schedule";
 import { useMutation, useQuery } from "convex/react";
 import { Check, CheckCircle2, Search, Users } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -47,6 +54,16 @@ export function CenterWiseLoan() {
 
   // — Batch —
   const [amountStr, setAmountStr] = useState("");
+  // MANUAL centre meeting schedule. Both values are the Admin's / Branch
+  // Manager's own choice: nothing is pre-selected and nothing is derived from
+  // the disbursement date or from each other.
+  const [meetingDay, setMeetingDay] = useState<MeetingDay | null>(null);
+  const [firstMeetingDate, setFirstMeetingDate] = useState<number | null>(null);
+  const meetingReady = meetingDay !== null && firstMeetingDate !== null;
+  const firstInstallmentDate =
+    firstMeetingDate !== null
+      ? addPeriods(firstMeetingDate, "WEEKLY", 1)
+      : null;
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirming, setConfirming] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -101,9 +118,10 @@ export function CenterWiseLoan() {
   const totalFees = selectedRows.reduce((s, r) => s + (r.charges ?? 0), 0);
 
   const toggle = (clientId: string, eligible: boolean) => {
-    // Selection stays closed until the amount has been entered and the
-    // server has scored the row against the policy.
-    if (!eligible || !roster?.scored) return;
+    // Selection stays closed until the amount has been entered, the server
+    // has scored the row against the policy, and the manual meeting day +
+    // first meeting date have both been chosen.
+    if (!eligible || !roster?.scored || !meetingReady) return;
     setSelected((cur) => {
       const next = new Set(cur);
       if (next.has(clientId)) next.delete(clientId);
@@ -124,6 +142,10 @@ export function CenterWiseLoan() {
 
   const onConfirm = async () => {
     if (!centerDbId || amount <= 0) return;
+    if (!meetingDay || firstMeetingDate === null) {
+      toast.error("Select the centre meeting day and first meeting date first.");
+      return;
+    }
     setSubmitting(true);
     try {
       const res = await submitBatch({
@@ -131,6 +153,9 @@ export function CenterWiseLoan() {
         amount,
         clientIds: [...selected] as Id<"clients">[],
         device: typeof navigator !== "undefined" ? navigator.userAgent.slice(0, 60) : undefined,
+        // Both selections are persisted on EVERY loan of this batch.
+        meetingDay,
+        firstMeetingDate,
       });
       setConfirming(false);
       setResult(res);
@@ -277,9 +302,23 @@ export function CenterWiseLoan() {
       {/* 2 — loan amount: appears only once a search has matched. Terms are
           fixed by the backend (79% reducing, 24 weekly, no product). */}
       {results && (
-        <section className="space-y-2 border-2 border-ink bg-card p-4 shadow-hard-sm">
+        <section className="space-y-3 border-2 border-ink bg-card p-4 shadow-hard-sm">
           <h2 className={sectionLabel}>2 · Loan amount (each member)</h2>
           <MoneyInput value={amountStr} onChange={setAmountStr} label="Loan amount" />
+
+          {/* Attendance schedule — selected MANUALLY, right below the amount, and
+              before the member list can be used. */}
+          <MeetingSchedulePicker
+            meetingDay={meetingDay}
+            firstMeetingDate={firstMeetingDate}
+            onChange={(next) => {
+              if (next.meetingDay !== undefined) setMeetingDay(next.meetingDay);
+              if (next.firstMeetingDate !== undefined) {
+                setFirstMeetingDate(next.firstMeetingDate);
+              }
+            }}
+          />
+
           <p className="border-2 border-ink bg-sky p-2 text-[11px] font-bold">
             Every loan in this batch uses the fixed backend terms — 79% p.a.
             reducing balance · 24 weekly installments · no processing fee. Only
@@ -298,7 +337,7 @@ export function CenterWiseLoan() {
               <div className="flex gap-1.5">
                 <button
                   onClick={selectAll}
-                  disabled={eligibleRows.length === 0}
+                  disabled={eligibleRows.length === 0 || !meetingReady}
                   className="border-2 border-ink bg-mint px-2.5 py-1.5 text-[10px] font-black uppercase shadow-hard-sm disabled:opacity-50"
                 >
                   Select all eligible ({eligibleRows.length})
@@ -328,10 +367,16 @@ export function CenterWiseLoan() {
                   against the policy before selecting them.
                 </p>
               )}
+              {roster.scored && !meetingReady && (
+                <p className="border-2 border-ink bg-gold p-2 text-[11px] font-black uppercase">
+                  Select the center meeting day and the first meeting date in
+                  step 2 before choosing members.
+                </p>
+              )}
               <div className="flex flex-col gap-2">
                 {roster.rows.map((r) => {
                   const checked = selected.has(r.client._id);
-                  const selectable = r.eligible && roster.scored;
+                  const selectable = r.eligible && roster.scored && meetingReady;
                   return (
                     <div
                       key={r.client._id}
@@ -440,7 +485,7 @@ export function CenterWiseLoan() {
       )}
 
       {/* 4 — review */}
-      {roster?.scored && selectedRows.length > 0 && (
+      {roster?.scored && meetingReady && selectedRows.length > 0 && (
         <section className="space-y-3 border-2 border-ink bg-navy p-4 text-paper shadow-hard">
           <div className="text-[10px] font-black uppercase tracking-[0.18em] text-gold">
             4 · Review the batch
@@ -470,6 +515,22 @@ export function CenterWiseLoan() {
                 Processing fees
               </div>
               <Money value={totalFees} className="text-lg" />
+            </div>
+            <div className="col-span-2 border-2 border-paper/30 p-2">
+              <div className="text-[9px] font-black uppercase text-paper/60">
+                Centre schedule — saved on every loan
+              </div>
+              <div className="text-sm font-black">
+                Center Meeting Day: {meetingDay ?? "—"} · First Meeting Date:{" "}
+                {formatMeetingDate(firstMeetingDate)}
+              </div>
+              {firstInstallmentDate !== null && (
+                <div className="text-[11px] font-bold text-paper/80">
+                  First installment due {" "}
+                  {formatMeetingDateShort(firstInstallmentDate)} · then weekly on{" "}
+                  {meetingDay}
+                </div>
+              )}
             </div>
             <div className="col-span-2 border-2 border-paper/30 p-2">
               <div className="text-[9px] font-black uppercase text-paper/60">
@@ -527,6 +588,12 @@ export function CenterWiseLoan() {
           <SectionTitle>
             Batch report — {result.centerName} ({fmtId(result.centerCode)})
           </SectionTitle>
+          <p className="border-2 border-ink bg-sky p-2 text-[11px] font-bold">
+            Every loan in this batch carries Center Meeting Day {" "}
+            <span className="font-black">{meetingDay ?? "—"}</span> and First
+            Meeting Date {" "}
+            <span className="font-black">{formatMeetingDate(firstMeetingDate)}</span>.
+          </p>
           {result.createdCount > 0 && (
             <div>
               <p className="mb-1 text-[10px] font-black uppercase text-muted-foreground">
@@ -612,6 +679,10 @@ export function CenterWiseLoan() {
                 {totalPrincipal.toLocaleString("en-IN")} · fees ₹
                 {totalFees.toLocaleString("en-IN")}
               </div>
+              <div className="mt-2 border-2 border-ink bg-gold p-2 text-[11px] font-black uppercase">
+                Center Meeting Day: {meetingDay} · First Meeting Date:{" "}
+                {formatMeetingDate(firstMeetingDate)}
+              </div>
               <div className="mt-3 grid grid-cols-2 gap-2">
                 <Button
                   variant="outline"
@@ -621,7 +692,7 @@ export function CenterWiseLoan() {
                   Cancel
                 </Button>
                 <Button
-                  disabled={submitting || selectedRows.length === 0}
+                  disabled={submitting || selectedRows.length === 0 || !meetingReady}
                   onClick={() => void onConfirm()}
                 >
                   {submitting ? "Submitting…" : "Confirm"}

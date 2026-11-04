@@ -12,6 +12,7 @@ import {
 import { formatINR } from "@/lib/finance/money";
 import { newIdempotencyKey, enqueueCollection } from "@/lib/offline";
 import { cn, fmtId } from "@/lib/utils";
+import { formatMeetingDateShort } from "@/lib/meeting";
 import { useMutation, useQuery } from "convex/react";
 import {
   ArrowLeft,
@@ -202,6 +203,10 @@ export default function Collect() {
                   <span className="block text-[11px] font-semibold text-muted-foreground">
                     {fmtId(d.code)} · {d.village}
                   </span>
+                  <span className="mt-1 block text-[10px] font-black uppercase text-muted-foreground">
+                    {d.centerMeetingDay ? `Meeting ${d.centerMeetingDay}` : "Meeting day not set"}
+                    {d.nextDue ? ` · next due ${formatMeetingDateShort(d.nextDue)}` : ""}
+                  </span>
                   <span className="mt-1 flex gap-1">
                     {d.kycStatus !== "VERIFIED" && (
                       <StatusChip label="KYC pending" tone="warn" />
@@ -361,11 +366,25 @@ export default function Collect() {
           </span>
         </div>
       ) : loanEntry ? (
-        <div className="flex items-center justify-between border-2 border-ink bg-white px-3 py-2 text-xs font-black uppercase">
-          <span className="text-muted-foreground">Posting to loan</span>
-          <span className="font-mono">
-            {loanEntry.product?.code ?? "LOAN"} · {loanEntry.view.displayStatus}
-          </span>
+        <div className="space-y-1 border-2 border-ink bg-white px-3 py-2 text-xs font-black uppercase">
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground">Posting to loan</span>
+            <span className="font-mono">
+              {loanEntry.product?.code ?? "LOAN"} · {loanEntry.view.displayStatus}
+            </span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground">Center meeting day</span>
+            <span>{loanEntry.loan.centerMeetingDay ?? "—"}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground">Next due</span>
+            <span className="normal-case">
+              {loanEntry.view.nextDueDate
+                ? formatMeetingDateShort(loanEntry.view.nextDueDate)
+                : "—"}
+            </span>
+          </div>
         </div>
       ) : null}
 

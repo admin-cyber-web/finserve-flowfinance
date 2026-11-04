@@ -46,12 +46,44 @@ import {
   oneOf,
 } from "../lib/finance/validate";
 import { RECOVERY_KINDS } from "../lib/finance/types";
+import {
+  MEETING_DAYS,
+  isValidMeetingDate,
+  type MeetingDay,
+} from "../lib/meeting";
 
 const MONTH_FACTOR: Record<string, number> = {
   WEEKLY: 4.33,
   FORTNIGHTLY: 2.17,
   MONTHLY: 1,
 };
+
+/**
+ * The manually selected centre meeting schedule, validated on the SERVER.
+ *
+ * Both values are optional so historical callers (and loans created before
+ * the fields existed) keep working; when supplied, the meeting day must be a
+ * real weekday and the first meeting date a real calendar date. Nothing here
+ * derives either value from the disbursement date — the selection is the
+ * Admin's / Branch Manager's alone.
+ */
+function meetingSchedule(
+  meetingDay: string | undefined,
+  firstMeetingDate: number | undefined,
+): { centerMeetingDay?: MeetingDay; firstMeetingDate?: number } {
+  const day = meetingDay
+    ? oneOf(meetingDay, MEETING_DAYS, "meetingDay")
+    : undefined;
+  if (firstMeetingDate !== undefined && !isValidMeetingDate(firstMeetingDate)) {
+    throw new ValidationError(
+      "Invalid firstMeetingDate: select a valid calendar date.",
+    );
+  }
+  return {
+    centerMeetingDay: day,
+    firstMeetingDate,
+  };
+}
 
 async function scopeLoans(
   ctx: { db: any },
@@ -251,8 +283,13 @@ export const preview = query({
   args: {
     clientId: v.id("clients"),
     amount: v.number(),
+    /** Manually selected meeting day — only moves the schedule calendar. */
+    meetingDay: v.optional(v.string()),
+    /** Manually selected first meeting date — the schedule anchor. */
+    firstMeetingDate: v.optional(v.number()),
   },
-  handler: async (ctx, { clientId, amount }) => {
+  handler: async (ctx, args) => {
+    const { clientId, amount } = args;
     const me = await requireProfile(ctx, { allowInactive: true });
     requirePermission(me, "create_loan");
     const client = await ctx.db.get(clientId);
@@ -260,6 +297,10 @@ export const preview = query({
     if (!Number.isFinite(amount) || amount <= 0) {
       throw new AppError("Enter a loan amount.");
     }
+    const { centerMeetingDay, firstMeetingDate } = meetingSchedule(
+      args.meetingDay,
+      args.firstMeetingDate,
+    );
 
     const loans = (await ctx.db.query("loans").collect()).filter(
       (l) => l.clientId === clientId,
@@ -274,8 +315,11 @@ export const preview = query({
       ),
     );
     // ONE backend calculation: the fixed weekly terms (79% reducing,
-    // 24 weekly installments) priced by the shared schedule engine.
-    const rows = baseScheduleRows(fixedScheduleInput(amount, Date.now()));
+    // 24 weekly installments) priced by the shared schedule engine, anchored
+    // on the selected first meeting date when the Admin has chosen one.
+    const rows = baseScheduleRows(
+      fixedScheduleInput(amount, firstMeetingDate ?? Date.now()),
+    );
     const proposedMonthly = round2(
       (rows[0]?.totalDue ?? amount) *
         (MONTH_FACTOR[FIXED_LOAN_TERMS.frequency] ?? 1),
@@ -307,6 +351,9 @@ export const preview = query({
       frequency: FIXED_LOAN_TERMS.frequency,
       interestRate: FIXED_LOAN_TERMS.interestRate,
       interestMethod: FIXED_LOAN_TERMS.interestMethod,
+      // Echoed back so the wizard confirms exactly what will be stored.
+      centerMeetingDay: centerMeetingDay ?? null,
+      firstMeetingDate: firstMeetingDate ?? null,
       schedule: rows.map((r) => ({
         index: r.index,
         dueDate: r.dueDate,
@@ -328,6 +375,10 @@ export const submit = mutation({
     amount: v.number(),
     remark: v.optional(v.string()),
     device: v.optional(v.string()),
+    /** Manually selected centre meeting day (Monday … Sunday). */
+    meetingDay: v.optional(v.string()),
+    /** Manually selected first meeting date — the repayment anchor. */
+    firstMeetingDate: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const me = await requireProfile(ctx);
@@ -336,6 +387,13 @@ export const submit = mutation({
     if (!client) throw new AppError("Client not found.");
     // Terms are NEVER client-supplied: the fixed backend terms + the shared
     // engine below are the only source for rate, frequency, tenure and fee.
+    // The meeting day / first meeting date are a MANUAL schedule choice and
+    // are validated + persisted here, not merely held in the browser.
+    const { centerMeetingDay, firstMeetingDate } = meetingSchedule(
+      args.meetingDay,
+      args.firstMeetingDate,
+    );
+    const scheduleAnchor = firstMeetingDate ?? Date.now();
     const amount = money(args.amount, "amount");
     if (me.role === "FIELD_STAFF" && client.assignedTo !== me._id) {
       throw new AppError("You can only apply for your own assigned clients.");
@@ -354,7 +412,7 @@ export const submit = mutation({
     const existingObligations = round2(
       active.reduce((s, l) => s + l.installment * (MONTH_FACTOR[l.frequency] ?? 1), 0),
     );
-    const rowsPreview = baseScheduleRows(fixedScheduleInput(amount, Date.now()));
+    const rowsPreview = baseScheduleRows(fixedScheduleInput(amount, scheduleAnchor));
     const proposedMonthly = round2(
       (rowsPreview[0]?.totalDue ?? amount) *
         (MONTH_FACTOR[FIXED_LOAN_TERMS.frequency] ?? 1),
@@ -411,6 +469,11 @@ export const submit = mutation({
         },
       ],
       eligibility,
+      // The manual meeting schedule is part of the application from the
+      // moment it is submitted — it is copied onto the loan at approval and
+      // used as the repayment anchor at disbursement.
+      centerMeetingDay,
+      firstMeetingDate,
       submittedAt: now,
       createdAt: now,
     });
@@ -427,6 +490,8 @@ export const submit = mutation({
         amount,
         terms: `${FIXED_LOAN_TERMS.interestRate}% ${FIXED_LOAN_TERMS.interestMethod} · ${FIXED_LOAN_TERMS.tenure} ${FIXED_LOAN_TERMS.frequency}`,
         obligationRatio: eligibility.obligationRatio,
+        centerMeetingDay,
+        firstMeetingDate,
       },
       referenceId: appId,
       branchId: applicationBranch,
@@ -742,6 +807,10 @@ export const submitCenterBatch = mutation({
     clientIds: v.array(v.id("clients")),
     remark: v.optional(v.string()),
     device: v.optional(v.string()),
+    /** Manually selected centre meeting day (Monday … Sunday). */
+    meetingDay: v.optional(v.string()),
+    /** Manually selected first meeting date — the repayment anchor. */
+    firstMeetingDate: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const me = await requireProfile(ctx);
@@ -752,7 +821,14 @@ export const submitCenterBatch = mutation({
       throw new AppError("This centre is outside your branch.");
     }
     // Rate, frequency, tenure and fee are fixed backend terms — only the
-    // principal is an input, and it is validated here on the server.
+    // principal is an input, and it is validated here on the server. The
+    // meeting day / first meeting date are the Admin's manual schedule choice
+    // and are attached to EVERY loan created by this batch.
+    const { centerMeetingDay, firstMeetingDate } = meetingSchedule(
+      args.meetingDay,
+      args.firstMeetingDate,
+    );
+    const scheduleAnchor = firstMeetingDate ?? Date.now();
     const amount = money(args.amount, "amount");
     // De-duplicate while preserving order; one batch covers one centre.
     const wanted = [...new Set(args.clientIds)];
@@ -838,7 +914,7 @@ export const submitCenterBatch = mutation({
           ),
         );
         const rowsPreview = baseScheduleRows(
-          fixedScheduleInput(amount, Date.now()),
+          fixedScheduleInput(amount, scheduleAnchor),
         );
         const proposedMonthly = round2(
           (rowsPreview[0]?.totalDue ?? amount) *
@@ -879,6 +955,8 @@ export const submitCenterBatch = mutation({
             },
           ],
           eligibility,
+          centerMeetingDay,
+          firstMeetingDate,
           submittedAt: now,
           createdAt: now,
         });
@@ -908,6 +986,8 @@ export const submitCenterBatch = mutation({
             terms: `${FIXED_LOAN_TERMS.interestRate}% ${FIXED_LOAN_TERMS.interestMethod} · ${FIXED_LOAN_TERMS.tenure} ${FIXED_LOAN_TERMS.frequency}`,
             center: center.code,
             mode: "CENTRE_WISE_BATCH",
+            centerMeetingDay,
+            firstMeetingDate,
           },
           referenceId: record.appId,
           branchId,
@@ -1078,6 +1158,10 @@ export const decide = mutation({
         tenure: FIXED_LOAN_TERMS.tenure,
         interestRate: FIXED_LOAN_TERMS.interestRate,
         interestMethod: FIXED_LOAN_TERMS.interestMethod,
+        // The manual meeting schedule travels application → loan here, so it
+        // survives approval, disbursement, logout and device changes.
+        centerMeetingDay: app.centerMeetingDay,
+        firstMeetingDate: app.firstMeetingDate,
         status: "APPROVED",
         outstanding: 0,
         paidTotal: 0,

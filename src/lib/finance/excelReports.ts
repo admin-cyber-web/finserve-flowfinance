@@ -35,6 +35,9 @@ export interface LoanFacts {
   principal: number;
   tenure: number;
   installment: number;
+  /** Manually selected centre meeting schedule (absent on legacy loans). */
+  centerMeetingDay?: string;
+  firstMeetingDate?: number;
 }
 
 export interface CollectionFacts extends LoanFacts {
@@ -82,6 +85,10 @@ export interface DueDateRow extends CommonReportRow {
   arrear: number;
   arrearDays: number;
   totalDueAmount: number;
+  /** Centre meeting day chosen for this loan (— when not recorded). */
+  centerMeetingDay: string;
+  /** First installment falling due inside the range — shown with weekday. */
+  nextDueDate: number;
 }
 
 export interface OverdueRow extends CommonReportRow {
@@ -259,6 +266,8 @@ export function buildDueDateRows(
         arrear,
         arrearDays,
         totalDueAmount,
+        centerMeetingDay: facts.centerMeetingDay ?? "—",
+        nextDueDate: Math.min(...inWindow.map((s) => s.dueDate)),
       },
     });
   }

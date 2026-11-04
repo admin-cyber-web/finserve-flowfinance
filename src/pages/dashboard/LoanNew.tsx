@@ -10,8 +10,14 @@ import {
   SectionTitle,
 } from "@/components/fs/primitives";
 import { CenterWiseLoan } from "@/components/fs/CenterWiseLoan";
+import { MeetingSchedulePicker } from "@/components/fs/MeetingSchedulePicker";
 import { Button } from "@/components/ui/button";
 import { fmtId } from "@/lib/utils";
+import {
+  formatMeetingDate,
+  formatMeetingDateShort,
+  type MeetingDay,
+} from "@/lib/meeting";
 import { useMutation, useQuery } from "convex/react";
 import { CLIENT_IMAGE_REQUIRED_MESSAGE } from "@/lib/clientImage";
 import { CheckCircle2, HandCoins, TriangleAlert, UserRound, Users } from "lucide-react";
@@ -34,6 +40,11 @@ export default function LoanNew() {
     params.get("client") ? "SINGLE" : "CHOOSE",
   );
   const [amount, setAmount] = useState("");
+  // MANUAL centre meeting schedule for this single loan — chosen by the
+  // Admin / Branch Manager, never pre-filled, never auto-adjusted.
+  const [meetingDay, setMeetingDay] = useState<MeetingDay | null>(null);
+  const [firstMeetingDate, setFirstMeetingDate] = useState<number | null>(null);
+  const meetingReady = meetingDay !== null && firstMeetingDate !== null;
   const [clientPicker, setClientPicker] = useState(false);
   const [clientSearch, setClientSearch] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -64,7 +75,16 @@ export default function LoanNew() {
   const previewReady = !!clientId && numericAmount > 0 && !imageBlocked;
   const preview = useQuery(
     api.loans.preview,
-    previewReady ? { clientId: clientId!, amount: numericAmount } : "skip",
+    previewReady
+      ? {
+          clientId: clientId!,
+          amount: numericAmount,
+          // The selected meeting schedule drives the preview dates as well,
+          // so what the user sees is what will be stored.
+          meetingDay: meetingDay ?? undefined,
+          firstMeetingDate: firstMeetingDate ?? undefined,
+        }
+      : "skip",
   );
   const submit = useMutation(api.loans.submit);
 
@@ -77,6 +97,10 @@ export default function LoanNew() {
       return;
     }
     if (!previewReady || !preview) return;
+    if (!meetingReady) {
+      toast.error("Select the center meeting day and the first meeting date.");
+      return;
+    }
     if (!preview.eligibility.eligible) {
       const blocker = preview.eligibility.issues.find((i) => i.level === "BLOCKER");
       toast.error(blocker?.message ?? "Lender policy blocks this application.");
@@ -88,6 +112,9 @@ export default function LoanNew() {
         clientId: clientId!,
         amount: numericAmount,
         device: navigator.userAgent.slice(0, 60),
+        // Persisted on the application and copied onto the loan at approval.
+        meetingDay: meetingDay!,
+        firstMeetingDate: firstMeetingDate!,
       });
       toast.success(`Application ${fmtId(result.appId)} submitted for approval`);
       navigate("/dashboard/loans");
@@ -225,6 +252,20 @@ export default function LoanNew() {
           2 · Amount
         </h2>
         <MoneyInput value={amount} onChange={setAmount} label="Loan amount" />
+
+        {/* Manual centre meeting schedule — sits directly below the amount,
+            before the schedule preview and the submit button. */}
+        <MeetingSchedulePicker
+          meetingDay={meetingDay}
+          firstMeetingDate={firstMeetingDate}
+          onChange={(next) => {
+            if (next.meetingDay !== undefined) setMeetingDay(next.meetingDay);
+            if (next.firstMeetingDate !== undefined) {
+              setFirstMeetingDate(next.firstMeetingDate);
+            }
+          }}
+        />
+
         <div className="border-2 border-ink bg-sky p-2 text-[11px] font-bold">
           Every new loan uses the same backend terms: 79% p.a. reducing
           balance · {preview?.tenure ?? 24} weekly installments · no
@@ -243,6 +284,18 @@ export default function LoanNew() {
         <section className="space-y-3 border-2 border-ink bg-navy p-4 text-paper shadow-hard">
           <div className="text-[10px] font-black uppercase tracking-[0.18em] text-gold">
             Server-side policy preview
+          </div>
+
+          <div className="border-2 border-paper/30 p-2 text-[11px] font-bold">
+            {meetingReady ? (
+              <>
+                Center Meeting Day:{" "}
+                <span className="font-black">{meetingDay}</span> · First Meeting
+                Date: <span className="font-black">{formatMeetingDate(firstMeetingDate)}</span>
+              </>
+            ) : (
+              <>Pick a meeting day and a first meeting date above to anchor this schedule.</>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-2">
@@ -328,10 +381,7 @@ export default function LoanNew() {
                 >
                   <span className="font-mono">{row.index}</span>
                   <span>
-                    {new Date(row.dueDate).toLocaleDateString("en-IN", {
-                      day: "2-digit",
-                      month: "short",
-                    })}
+                    {formatMeetingDateShort(row.dueDate)}
                   </span>
                   <span className="font-mono tabular-nums">
                     ₹{row.totalDue.toLocaleString("en-IN")}
@@ -353,6 +403,7 @@ export default function LoanNew() {
           disabled={
             imageBlocked ||
             !previewReady ||
+            !meetingReady ||
             !preview ||
             preview === undefined ||
             !preview.eligibility.eligible ||

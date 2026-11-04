@@ -409,6 +409,11 @@ const schema = defineSchema(
         }),
       ),
       eligibility: v.optional(v.any()), // snapshot of the policy evaluation
+      // Centre meeting schedule chosen MANUALLY by the Admin / Branch Manager
+      // on the New Loan screen (never derived from the disbursement date).
+      // Copied onto the loan at approval so it survives forever.
+      centerMeetingDay: v.optional(v.string()), // Monday … Sunday
+      firstMeetingDate: v.optional(v.number()),
       submittedAt: v.optional(v.number()),
       decidedAt: v.optional(v.number()),
       decisionReason: v.optional(v.string()),
@@ -463,6 +468,12 @@ const schema = defineSchema(
       // Branch Manager responsible for this loan's branch.
       // Derived server-side; mirrors the client's branch mapping.
       managerId: v.optional(v.id("profiles")),
+
+      // Centre meeting schedule — the manually selected meeting day and the
+      // first meeting date that anchors the repayment schedule. Stored on the
+      // loan itself, so it survives logout, refresh, approval and disburse.
+      centerMeetingDay: v.optional(v.string()), // Monday … Sunday
+      firstMeetingDate: v.optional(v.number()),
 
       archivedAt: v.optional(v.number()),
       nextDueDate: v.optional(v.number()),

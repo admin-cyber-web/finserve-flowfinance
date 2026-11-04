@@ -46,15 +46,23 @@ export const WEEKLY_RATE_PCT =
  * The exact schedule input used by every backend calculation for a new loan
  * (creation, approval, disbursement, preview, statement) so no call site can
  * drift from the fixed terms.
+ *
+ * `anchorOn` is the date the repayment schedule hangs off: the schedule engine
+ * puts the first installment exactly one repayment period after it. For a new
+ * loan this is the manually selected FIRST MEETING DATE (weekly meetings →
+ * installments on the same weekday); only when a loan has no first meeting
+ * date (legacy records) does it fall back to the disbursement moment. The
+ * interest, principal split, tenure and installment amount are untouched —
+ * only the calendar anchor moves.
  */
-export function fixedScheduleInput(principal: number, disbursedOn: number) {
+export function fixedScheduleInput(principal: number, anchorOn: number) {
   return {
     principal,
     interestRate: FIXED_LOAN_TERMS.interestRate,
     interestMethod: FIXED_LOAN_TERMS.interestMethod,
     frequency: FIXED_LOAN_TERMS.frequency,
     tenure: FIXED_LOAN_TERMS.tenure,
-    disbursedOn,
+    disbursedOn: anchorOn,
     graceDays: FIXED_LOAN_TERMS.graceDays,
     // The fee is never financed into the schedule — principal + reducing-
     // balance interest only.
