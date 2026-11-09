@@ -2,6 +2,10 @@ import { api } from "@/convex/_generated/api";
 import type { Doc, Id } from "@/convex/_generated/dataModel";
 import { DocCapture, type DocItem } from "@/components/fs/DocCapture";
 import { ClientImagePanel } from "@/components/fs/ClientImagePanel";
+import {
+  ClientPhotoCapture,
+  type CapturedClientPhoto,
+} from "@/components/fs/ClientPhotoCapture";
 import { EmptyState, PageHeader, RowSkeleton } from "@/components/fs/primitives";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,7 +20,16 @@ import {
 import { ageFromDob } from "@/lib/finance/validate";
 import { cn, fmtId, sentenceCase } from "@/lib/utils";
 import { useMutation, useQuery } from "convex/react";
-import { ArrowLeft, Loader2, Save, Trash2 } from "lucide-react";
+import {
+  ArrowLeft,
+  Camera,
+  Check,
+  ImageOff,
+  Loader2,
+  Save,
+  Trash2,
+  Upload,
+} from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
@@ -112,6 +125,7 @@ export default function ClientEdit() {
         client={data.client}
         documents={data.documents}
         centerName={data.center?.name ?? null}
+        coApplicantPhotoUrl={data.coApplicantPhotoUrl ?? null}
         canManageKyc={canManageKyc}
         hasOfficeUse={Boolean(data.client.officeUse)}
         onDone={() => navigate(`/dashboard/clients/${clientId}`)}
@@ -124,6 +138,7 @@ function ClientEditForm({
   client,
   documents,
   centerName,
+  coApplicantPhotoUrl,
   canManageKyc,
   hasOfficeUse,
   onDone,
@@ -131,6 +146,7 @@ function ClientEditForm({
   client: ClientDoc;
   documents: ({ url: string | null } & Doc<"clientDocuments">)[];
   centerName: string | null;
+  coApplicantPhotoUrl: string | null;
   canManageKyc: boolean;
   hasOfficeUse: boolean;
   onDone: () => void;
@@ -138,6 +154,8 @@ function ClientEditForm({
   const updateFull = useMutation(api.clients.updateFull);
   const updateOfficeUse = useMutation(api.clients.updateOfficeUse);
   const addClientDocuments = useMutation(api.clients.addClientDocuments);
+  const getPhotoUploadUrl = useMutation(api.clients.photoUploadUrl);
+  const attachCoApplicantPhoto = useMutation(api.clients.attachCoApplicantPhoto);
 
   const co = client.coApplicant;
 
@@ -228,6 +246,15 @@ function ClientEditForm({
   const [coDocs, setCoDocs] = useState<DocItem[]>([]);
   const [pendingRemoval, setPendingRemoval] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Co-applicant photo — captured (geo-tagged) or uploaded, saved with the
+  // rest of the form. `coPhotoMethod` decides which source is used.
+  const [coPhotoMethod, setCoPhotoMethod] = useState<
+    "GEO_TAGGING" | "PHOTO_UPLOAD"
+  >("GEO_TAGGING");
+  const [coPhoto, setCoPhoto] = useState<CapturedClientPhoto | null>(null);
+  const [coPhotoFile, setCoPhotoFile] = useState<File | null>(null);
+  const [coPhotoPreview, setCoPhotoPreview] = useState<string | null>(null);
 
   const set = (k: string) => (value: string) =>
     setForm((s) => ({ ...s, [k]: value }));
@@ -580,7 +607,49 @@ function ClientEditForm({
         });
       }
 
-      toast.success(`${form.name.trim()} updated`);
+      // Co-applicant photograph — only when a NEW capture/upload is pending
+      // and the co-applicant block still exists. The file and (for Take Photo)
+      // the GPS fix are re-validated server-side; a manual upload never claims
+      // coordinates.
+      const coPhotoBlob =
+        coPhotoMethod === "GEO_TAGGING" ? coPhoto?.blob ?? null : coPhotoFile;
+      if (hasCo && coPhotoBlob) {
+        const uploadUrl = await getPhotoUploadUrl({});
+        const resp = await fetch(uploadUrl, {
+          method: "POST",
+          headers: { "Content-Type": coPhotoBlob.type || "image/jpeg" },
+          body: coPhotoBlob,
+        });
+        if (!resp.ok) {
+          throw new Error("Co-applicant photo upload failed — please retry.");
+        }
+        const { storageId } = (await resp.json()) as {
+          storageId: Id<"_storage">;
+        };
+        await attachCoApplicantPhoto({
+          clientId: client._id,
+          photoStorageId: storageId,
+          photoMethod: coPhotoMethod,
+          device: navigator.userAgent.slice(0, 60),
+          geo:
+            coPhotoMethod === "GEO_TAGGING" && coPhoto
+              ? {
+                  latitude: coPhoto.geo.latitude,
+                  longitude: coPhoto.geo.longitude,
+                  accuracyMeters: coPhoto.geo.accuracyMeters,
+                  capturedAt: coPhoto.geo.capturedAt,
+                  photoCapturedAt: coPhoto.frameAt,
+                  permissionStatus: coPhoto.geo.permissionStatus,
+                }
+              : undefined,
+        });
+      }
+
+      toast.success(
+        hasCo && coPhotoBlob
+          ? `${form.name.trim()} updated — co-applicant photo saved`
+          : `${form.name.trim()} updated`,
+      );
       onDone();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not save changes");
@@ -886,6 +955,20 @@ function ClientEditForm({
             ))}
           </div>
         )}
+        {hasCo && (
+          <CoApplicantPhotoEditor
+            existingUrl={coApplicantPhotoUrl}
+            method={coPhotoMethod}
+            setMethod={setCoPhotoMethod}
+            captured={coPhoto}
+            setCaptured={setCoPhoto}
+            file={coPhotoFile}
+            setFile={setCoPhotoFile}
+            preview={coPhotoPreview}
+            setPreview={setCoPhotoPreview}
+            disabled={busy}
+          />
+        )}
       </Section>
 
       {/* --------------------------- Documents --------------------------- */}
@@ -1023,6 +1106,168 @@ function Select({
         ))}
       </select>
     </label>
+  );
+}
+
+/**
+ * Co-applicant photograph — "Take Photo" (device camera with live GPS; the
+ * capture is geo-stamped and location permission is required) or "Upload
+ * File" (an existing JPEG/PNG/WebP, never carrying coordinates).
+ *
+ * The selection is saved only when the main Save runs, so it can be retaken,
+ * replaced or removed first. A saved photo can be replaced but is never
+ * deleted by this form.
+ */
+function CoApplicantPhotoEditor({
+  existingUrl,
+  method,
+  setMethod,
+  captured,
+  setCaptured,
+  file,
+  setFile,
+  preview,
+  setPreview,
+  disabled,
+}: {
+  existingUrl: string | null;
+  method: "GEO_TAGGING" | "PHOTO_UPLOAD";
+  setMethod: (m: "GEO_TAGGING" | "PHOTO_UPLOAD") => void;
+  captured: CapturedClientPhoto | null;
+  setCaptured: (v: CapturedClientPhoto | null) => void;
+  file: File | null;
+  setFile: (f: File | null) => void;
+  preview: string | null;
+  setPreview: (p: string | null) => void;
+  disabled: boolean;
+}) {
+  const clearUpload = () => {
+    if (preview) URL.revokeObjectURL(preview);
+    setPreview(null);
+    setFile(null);
+  };
+
+  const pending = method === "GEO_TAGGING" ? Boolean(captured) : Boolean(file);
+
+  const tab = (value: "GEO_TAGGING" | "PHOTO_UPLOAD", text: string, icon: ReactNode) => (
+    <button
+      type="button"
+      onClick={() => {
+        if (method === value) return;
+        setMethod(value);
+        if (value === "PHOTO_UPLOAD") setCaptured(null);
+        else clearUpload();
+      }}
+      className={cn(
+        "flex items-center justify-center gap-1.5 border-2 border-ink px-2 py-2 text-[11px] font-black uppercase shadow-hard-sm",
+        method === value ? "bg-gold" : "bg-white",
+      )}
+    >
+      {icon} {text}
+    </button>
+  );
+
+  return (
+    <div className="mt-4 border-t-2 border-ink pt-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="text-[11px] font-black uppercase tracking-wide">
+          Co-applicant photo
+        </span>
+        <span
+          className={cn(
+            "flex items-center gap-1 border-2 border-ink px-2 py-0.5 text-[10px] font-black uppercase",
+            existingUrl ? "bg-mint" : "bg-blush",
+          )}
+        >
+          {existingUrl ? <Check className="size-3" /> : <ImageOff className="size-3" />}
+          {existingUrl ? "Photo on record" : "No photo"}
+        </span>
+      </div>
+
+      {existingUrl && (
+        <div className="mb-3 space-y-1">
+          <img
+            src={existingUrl}
+            alt="Saved co-applicant photograph"
+            className="block w-32 border-2 border-ink object-cover"
+          />
+          <p className="text-[10px] font-bold uppercase text-muted-foreground">
+            Saved — choose a new photo below to replace it.
+          </p>
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 gap-2">
+        {tab("GEO_TAGGING", "Take Photo", <Camera className="size-3.5" />)}
+        {tab("PHOTO_UPLOAD", "Upload File", <Upload className="size-3.5" />)}
+      </div>
+
+      <p className="mt-2 text-[10px] font-bold uppercase text-muted-foreground">
+        {method === "GEO_TAGGING"
+          ? "Live camera capture with device GPS — location permission required. The photo is stamped with the actual fix."
+          : "Existing photograph — JPEG, PNG or WebP up to 5 MB. No GPS is recorded for an upload."}
+      </p>
+
+      {method === "GEO_TAGGING" ? (
+        <div className="mt-2">
+          <ClientPhotoCapture value={captured} onChange={setCaptured} />
+        </div>
+      ) : (
+        <div className="mt-2 space-y-2">
+          <label className="flex w-full cursor-pointer items-center justify-center gap-2 border-2 border-ink bg-white px-3 py-2.5 text-xs font-black uppercase shadow-hard-sm">
+            <Upload className="size-4" />
+            {file ? "Choose a different photo" : "Select photo"}
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              className="hidden"
+              disabled={disabled}
+              onChange={(e) => {
+                const picked = e.target.files?.[0] ?? null;
+                e.target.value = "";
+                if (!picked) return;
+                if (
+                  !["image/jpeg", "image/png", "image/webp"].includes(picked.type)
+                ) {
+                  toast.error("Choose a JPEG, PNG or WebP image.");
+                  return;
+                }
+                if (picked.size <= 0 || picked.size > 5 * 1024 * 1024) {
+                  toast.error("Photo must be smaller than 5 MB.");
+                  return;
+                }
+                if (preview) URL.revokeObjectURL(preview);
+                setFile(picked);
+                setPreview(URL.createObjectURL(picked));
+              }}
+            />
+          </label>
+          {preview && (
+            <>
+              <img
+                src={preview}
+                alt="Selected co-applicant photograph"
+                className="block w-full border-2 border-ink object-cover"
+              />
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={clearUpload}
+                disabled={disabled}
+              >
+                <Trash2 className="size-4" /> Remove photo
+              </Button>
+            </>
+          )}
+        </div>
+      )}
+
+      <p className="mt-2 border-2 border-ink bg-sky p-2 text-[10px] font-bold">
+        {pending
+          ? "Will be saved against this co-applicant when you press Save changes."
+          : "Nothing new selected — the existing photo (if any) stays unchanged."}
+      </p>
+    </div>
   );
 }
 

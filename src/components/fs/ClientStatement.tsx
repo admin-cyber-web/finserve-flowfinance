@@ -301,8 +301,8 @@ export default function ClientStatement() {
   <div><span>PAN</span><br>${htmlEsc(data.revealAllowed && reveal && c.pan ? c.pan : orNA(c.panMasked))}</div>
   <div><span>Voter ID</span><br>${htmlEsc(data.revealAllowed && reveal && c.voter ? c.voter : orNA(c.voterMasked))}</div>
   <div><span>KYC status</span><br>${htmlEsc(c.kycStatus)}</div>
-  <div><span>Centre</span><br>${htmlEsc(c.center ? `${fmtId(c.center.code)} · ${orNA(c.center.name)}` : NA)}</div>
-  <div><span>Group</span><br>${htmlEsc(c.group ? `${fmtId(c.group.code)} · ${orNA(c.group.name)}` : NA)}</div>
+  <div><span>Center Name</span><br>${htmlEsc(c.center?.name ?? "Not Assigned")}</div>
+  <div><span>Center ID</span><br>${htmlEsc(c.center?.code ? fmtId(c.center.code) : "Not Assigned")}</div>
   <div><span>Branch</span><br>${htmlEsc(c.branch ? `${fmtId(c.branch.code)} · ${orNA(c.branch.name)}` : NA)}</div>
   <div><span>Account opened</span><br>${htmlEsc(formatDate(c.createdAt))}</div>
   <div><span>Registered by</span><br>${htmlEsc(c.registeredBy ? `${c.registeredBy.name} (${c.registeredBy.profileId})` : NA)}</div>
@@ -754,20 +754,17 @@ ${upcoming}
                     mono
                   />
                   <KeyValue
-                    k="Centre"
-                    v={
-                      data.client.center
-                        ? `${fmtId(data.client.center.code)} · ${orNA(data.client.center.name)}`
-                        : NA
-                    }
+                    k="Center Name"
+                    v={data.client.center?.name ?? "Not Assigned"}
                   />
                   <KeyValue
-                    k="Group"
+                    k="Center ID"
                     v={
-                      data.client.group
-                        ? `${fmtId(data.client.group.code)} · ${orNA(data.client.group.name)}`
-                        : NA
+                      data.client.center?.code
+                        ? fmtId(data.client.center.code)
+                        : "Not Assigned"
                     }
+                    mono
                   />
                   <KeyValue
                     k="Branch"

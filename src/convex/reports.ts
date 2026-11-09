@@ -1154,10 +1154,11 @@ export const rangeReports = query({
     }
     const staffFilter: string | null = me.role === "FIELD_STAFF" ? me._id : null;
 
-    const [loans, clients, groups, schedules, collections] = await Promise.all([
+    const [loans, clients, centers, schedules, collections] = await Promise.all([
       ctx.db.query("loans").collect(),
       ctx.db.query("clients").collect(),
-      ctx.db.query("groups").collect(),
+      // Centres are the source of the report's Center Name / Center ID.
+      ctx.db.query("centers").collect(),
       // Everything that could be due on or before the end of the To date —
       // arrears of earlier installments ride along so the Due Date and
       // Overdue rows can be computed without a second read.
@@ -1174,7 +1175,9 @@ export const rangeReports = query({
     ]);
 
     const clientById = new Map(clients.map((c) => [c._id, c]));
-    const groupByCode = new Map(groups.map((g) => [g.code, g]));
+    const centerById = new Map(centers.map((c) => [c._id, c]));
+    const centerByCode = new Map(centers.map((c) => [c.code, c]));
+    const NO_CENTER = "Not Assigned";
     const scopedLoans = loans.filter(
       (l) =>
         (!branchFilter || l.branchId === branchFilter) &&
@@ -1184,15 +1187,20 @@ export const rangeReports = query({
 
     const facts = (loan: Doc<"loans">): LoanFacts => {
       const client = clientById.get(loan.clientId);
-      const groupCode = client?.groupCode;
-      const group = groupCode ? groupByCode.get(groupCode) : undefined;
+      // The centre actually linked to the client: permanent reference first,
+      // then the stored Centre ID (legacy clients). No record → "Not Assigned";
+      // a centre is never guessed from a group or a name.
+      const center = client
+        ? (client.centerId ? centerById.get(client.centerId) : undefined) ??
+          (client.centerCode ? centerByCode.get(client.centerCode) : undefined)
+        : undefined;
       return {
         loanPk: loan._id,
         loanId: loan.loanId,
         clientCode: client?.code ?? "—",
         customerName: client?.name ?? "—",
-        groupId: groupCode ?? "—",
-        groupName: group?.name ?? groupCode ?? "—",
+        centerId: center?.code ?? NO_CENTER,
+        centerName: center?.name ?? NO_CENTER,
         disbursedAt: loan.disbursedAt,
         principal: loan.principal,
         tenure: loan.tenure,

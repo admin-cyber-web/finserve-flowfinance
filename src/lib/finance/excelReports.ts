@@ -23,14 +23,18 @@ export interface DateBounds {
   to: number; // end of the To date (IST), inclusive
 }
 
-/** Facts about a loan + its client + its group, already joined by the query. */
+/**
+ * Facts about a loan + its client + its centre, already joined by the query.
+ * `centerId` / `centerName` come from the centre record the client is linked
+ * to; both read "Not Assigned" when the client has no linked centre.
+ */
 export interface LoanFacts {
   loanPk: string; // loans._id — used only for grouping/sorting
   loanId: string; // LAN, e.g. LN-000123
   clientCode: string; // Client ID, e.g. C-000128
   customerName: string;
-  groupId: string; // group code, "—" when the client is in no group
-  groupName: string;
+  centerId: string; // Centre ID (centre.code), "Not Assigned" when unlinked
+  centerName: string;
   disbursedAt?: number;
   principal: number;
   tenure: number;
@@ -61,8 +65,8 @@ export interface CommonReportRow {
   sr: number;
   clientCode: string;
   loanId: string;
-  groupName: string;
-  groupId: string;
+  centerName: string;
+  centerId: string;
   customerName: string;
   disbursedAt: number | null;
   loanAmount: number;
@@ -153,8 +157,8 @@ function commonRow(facts: LoanFacts, sr: number): CommonReportRow {
     sr,
     clientCode: facts.clientCode,
     loanId: facts.loanId,
-    groupName: facts.groupName,
-    groupId: facts.groupId,
+    centerName: facts.centerName,
+    centerId: facts.centerId,
     customerName: facts.customerName,
     disbursedAt: facts.disbursedAt ?? null,
     loanAmount: facts.principal,

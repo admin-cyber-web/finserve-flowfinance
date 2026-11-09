@@ -58,8 +58,8 @@ const COMMON_HEAD = [
   "Sr. No.",
   "Client ID",
   "Loan ID",
-  "Group Name",
-  "Group ID",
+  "Center Name",
+  "Center ID",
   "Customer Name",
   "Disbursement Date",
   "Loan Amount",
@@ -96,8 +96,10 @@ function CommonCells({ row }: { row: CommonReportRow }) {
         {fmtId(row.clientCode)}
       </td>
       <td className={cn(TD_CLS, "font-mono whitespace-nowrap")}>{fmtId(row.loanId)}</td>
-      <td className={TD_CLS}>{row.groupName}</td>
-      <td className={cn(TD_CLS, "font-mono whitespace-nowrap")}>{fmtId(row.groupId)}</td>
+      <td className={TD_CLS}>{row.centerName}</td>
+      <td className={cn(TD_CLS, "font-mono whitespace-nowrap")}>
+        {row.centerId === "Not Assigned" ? row.centerId : fmtId(row.centerId)}
+      </td>
       <td className={TD_CLS}>{row.customerName}</td>
       <td className={cn(TD_CLS, "whitespace-nowrap")}>
         {row.disbursedAt ? formatDate(row.disbursedAt) : "—"}
@@ -234,8 +236,8 @@ export default function Reports() {
           r.sr,
           fmtId(r.clientCode),
           fmtId(r.loanId),
-          r.groupName,
-          fmtId(r.groupId),
+          r.centerName,
+          r.centerId,
           r.customerName,
           r.disbursedAt ? formatDate(r.disbursedAt) : "—",
           r.loanAmount,
@@ -249,8 +251,8 @@ export default function Reports() {
           r.sr,
           fmtId(r.clientCode),
           fmtId(r.loanId),
-          r.groupName,
-          fmtId(r.groupId),
+          r.centerName,
+          r.centerId,
           r.customerName,
           r.disbursedAt ? formatDate(r.disbursedAt) : "—",
           r.loanAmount,
@@ -267,8 +269,8 @@ export default function Reports() {
           r.sr,
           fmtId(r.clientCode),
           fmtId(r.loanId),
-          r.groupName,
-          fmtId(r.groupId),
+          r.centerName,
+          r.centerId,
           r.customerName,
           r.disbursedAt ? formatDate(r.disbursedAt) : "—",
           r.loanAmount,
@@ -288,8 +290,8 @@ export default function Reports() {
           r.sr,
           fmtId(r.clientCode),
           fmtId(r.loanId),
-          r.groupName,
-          fmtId(r.groupId),
+          r.centerName,
+          r.centerId,
           r.customerName,
           r.disbursedAt ? formatDate(r.disbursedAt) : "—",
           r.loanAmount,

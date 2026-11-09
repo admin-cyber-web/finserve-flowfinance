@@ -1474,6 +1474,131 @@ export const attachPhoto = mutation({
   },
 });
 
+/**
+ * Save / replace the CO-APPLICANT photograph on an EXISTING client.
+ *
+ * Same rules as the applicant's image (`attachPhoto`): the file must already be
+ * in private storage, is re-validated from storage metadata (JPEG/PNG/WebP,
+ * 1 byte–5 MB), and a Geo Tagging capture must carry a genuine, recent GPS fix
+ * validated by `prepareClientImageRow` — an upload never claims coordinates.
+ *
+ * The capture is stored against the co-applicant block:
+ *   • a `clientGeoPhotos` row flagged `coApplicant: true` (so it can never be
+ *     surfaced as the applicant's own image), and
+ *   • `clients.coApplicant.photoStorageId` for the co-applicant card.
+ * The applicant's photo, Client ID, branch, KYC status and every loan record
+ * are untouched.
+ */
+export const attachCoApplicantPhoto = mutation({
+  args: {
+    clientId: v.id("clients"),
+    photoStorageId: v.id("_storage"),
+    photoMethod: v.string(),
+    device: v.optional(v.string()),
+    geo: v.optional(
+      v.object({
+        latitude: v.number(),
+        longitude: v.number(),
+        accuracyMeters: v.number(),
+        capturedAt: v.number(),
+        photoCapturedAt: v.optional(v.number()),
+        permissionStatus: v.optional(v.string()),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx);
+    requirePermission(me, "edit_client");
+    const client = await ctx.db.get(args.clientId);
+    if (!client) throw new AppError("Client not found.");
+    if (me.role === "FIELD_STAFF" && client.assignedTo !== me._id) {
+      if (client.branchId !== me.branchId) throw new AppError("Not your client.");
+    }
+    if (me.role === "BRANCH_MANAGER" && client.branchId !== me.branchId) {
+      throw new AppError("This client belongs to another branch.");
+    }
+    if (!client.coApplicant) {
+      throw new AppError(
+        "This client has no co-applicant — save the co-applicant details first.",
+      );
+    }
+
+    const method = oneOf(
+      args.photoMethod,
+      CLIENT_IMAGE_METHODS,
+      "photoMethod",
+    ) as ClientImageMethod;
+    const now = Date.now();
+    const geoFix: GeoFix | null = args.geo
+      ? {
+          latitude: args.geo.latitude,
+          longitude: args.geo.longitude,
+          accuracyMeters: args.geo.accuracyMeters,
+          capturedAt: args.geo.capturedAt,
+          permissionStatus: args.geo.permissionStatus ?? "granted",
+        }
+      : null;
+
+    const imageRow = await prepareClientImageRow(ctx, {
+      clientId: args.clientId,
+      code: client.code,
+      storageId: args.photoStorageId,
+      method,
+      geo: method === "GEO_TAGGING" ? geoFix : null,
+      photoCapturedAt: args.geo?.photoCapturedAt,
+      uploadedBy: me._id,
+      branchId: client.branchId,
+      device: args.device,
+      now,
+      coApplicant: true,
+    });
+    await ctx.db.insert("clientGeoPhotos", imageRow);
+
+    // Point the co-applicant block at the new file. `photoStorageId` is the
+    // only field changed — every edited detail stays exactly as saved.
+    await ctx.db.patch(args.clientId, {
+      coApplicant: { ...client.coApplicant, photoStorageId: args.photoStorageId },
+    });
+
+    await ctx.db.insert("clientDocuments", {
+      clientId: args.clientId,
+      type: "OTHER",
+      fileName: imageRow.fileName,
+      status: "UPLOADED",
+      uploadedBy: me._id,
+      storageId: args.photoStorageId,
+      sizeBytes: imageRow.sizeBytes,
+      mimeType: imageRow.mimeType,
+      coApplicant: true,
+      createdAt: now,
+    });
+
+    await logAudit(ctx, {
+      actorId: me._id,
+      actorName: me.name,
+      role: me.role,
+      action: "CLIENT_CO_APPLICANT_PHOTO_CAPTURED",
+      entity: "clients",
+      entityId: client.code,
+      after: {
+        method,
+        fileName: imageRow.fileName,
+        sizeBytes: imageRow.sizeBytes,
+        latitude: imageRow.latitude,
+        longitude: imageRow.longitude,
+        accuracyMeters: imageRow.accuracyMeters,
+        capturedAt: imageRow.capturedAt,
+        source: method === "GEO_TAGGING" ? "device-reported" : "manual-upload",
+      },
+      referenceId: client.code,
+      branchId: client.branchId,
+      device: args.device,
+    });
+
+    return { ok: true, captureMethod: method };
+  },
+});
+
 export const update = mutation({
   args: {
     clientId: v.id("clients"),
