@@ -53,6 +53,20 @@ const MAX_SESSION_LIFETIME_MS = 12 * 60 * 60 * 1000;
 
 const OPERATOR_ID_RE = /^[A-Z0-9][A-Z0-9-]{2,19}$/;
 
+/**
+ * The one-time activation code must never become the permanent PIN. It lives
+ * here (server bundle only) so the plaintext never reaches the frontend.
+ */
+const BOOTSTRAP_PIN_BLOCKLIST = "9560";
+
+function assertPinAllowed(pin: string): void {
+  const error = pinPolicyError(pin);
+  if (error) throw new AppError(error);
+  if (pin === BOOTSTRAP_PIN_BLOCKLIST) {
+    throw new AppError("That is the one-time activation PIN.");
+  }
+}
+
 /* ------------------------------- helpers --------------------------------- */
 
 async function readConfig(ctx: Ctx): Promise<Doc<"securityConfig"> | null> {
@@ -538,8 +552,7 @@ export const completeActivation = mutation({
     }
     const cfg = await readConfig(ctx);
     if (!cfg) throw new AppError("Security Department is not provisioned.");
-    const pinError = pinPolicyError(args.newPin);
-    if (pinError) throw new AppError(pinError);
+    assertPinAllowed(args.newPin);
     if (args.newPin !== args.confirmPin) throw new AppError("PINs do not match.");
     const credError = credentialPolicyError(args.credential);
     if (credError) throw new AppError(credError);
@@ -957,8 +970,7 @@ export const changePin = mutation({
     if (!(await verifySecret(args.currentPin.trim(), cfg.pinHash))) {
       throw new AppError("Current security PIN is incorrect.");
     }
-    const error = pinPolicyError(args.newPin);
-    if (error) throw new AppError(error);
+    assertPinAllowed(args.newPin);
     if (args.newPin !== args.confirmPin) throw new AppError("PINs do not match.");
     if (await verifySecret(args.newPin, grant.operator.credentialHash)) {
       throw new AppError("PIN must differ from your operator credential.");
@@ -2016,8 +2028,7 @@ export const recover = mutation({
           : "Wrong recovery code.",
       );
     }
-    const pinError = pinPolicyError(args.newPin);
-    if (pinError) throw new AppError(pinError);
+    assertPinAllowed(args.newPin);
     if (args.newPin !== args.confirmPin) throw new AppError("PINs do not match.");
     const credError = credentialPolicyError(args.newCredential);
     if (credError) throw new AppError(credError);
@@ -2360,8 +2371,7 @@ export const ownerRecovery = internalMutation({
     }
     const cfg = await readConfig(ctx);
     if (!cfg) throw new AppError("Security Department is not provisioned.");
-    const pinError = pinPolicyError(args.newPin);
-    if (pinError) throw new AppError(pinError);
+    assertPinAllowed(args.newPin);
     const credError = credentialPolicyError(args.newCredential);
     if (credError) throw new AppError(credError);
     const target = (await listOperators(ctx)).find(

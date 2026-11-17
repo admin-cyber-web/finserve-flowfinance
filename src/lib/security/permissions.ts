@@ -93,12 +93,12 @@ export function credentialPolicyError(credential: string): string | null {
 }
 
 /**
- * Department PIN policy after activation: six digits, no repeats, no runs,
- * never the one-time bootstrap code.
+ * Department PIN policy after activation: six digits, no repeats, no runs.
+ * The one-time activation code is refused separately, server-side only, so the
+ * bootstrap PIN never ships to the browser bundle.
  */
-export function pinPolicyError(pin: string, bootstrapPin = "9560"): string | null {
+export function pinPolicyError(pin: string): string | null {
   if (!/^\d{6}$/.test(pin)) return "New PIN must be exactly 6 digits.";
-  if (pin === bootstrapPin) return "That is the one-time activation PIN.";
   if (/^(\d)\1{5}$/.test(pin)) return "PIN cannot be a single repeated digit.";
   const digits = pin.split("").map(Number);
   const ascending = digits.every((d, i) => i === 0 || d === digits[i - 1] + 1);
