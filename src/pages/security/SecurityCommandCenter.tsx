@@ -333,6 +333,19 @@ function OverviewModule({
         <SecStat label="Session policy" value={`${data.config.sessionPolicyMinutes}m`} hint="idle timeout" />
       </div>
 
+      <div className="mt-5 grid grid-cols-2 gap-px border border-[#1f232a] bg-[#1f232a] sm:grid-cols-4">
+        <SecStat label="SUPER_ADMIN devices" value={data.devices.superAdmin} hint="no bypass — same rules" />
+        <SecStat label="Staff devices" value={data.devices.staff} hint="staff-level enrollments" />
+        <SecStat label="Operator devices" value={data.devices.securityOperator} hint="operators use PIN + credential" />
+        <SecStat
+          label="Cryptographic keys"
+          value={data.devices.cryptographicallyEnrolled}
+          hint={`${data.devices.pendingKeys} legacy pending without a key`}
+          tone={data.devices.pendingKeys ? "warn" : "ok"}
+        />
+        <SecStat label="KMC sign-ins / 24h" value={data.loginAttempts.total24h} hint={`${data.loginAttempts.failed24h} failed`} tone={data.loginAttempts.failed24h ? "warn" : "neutral"} />
+      </div>
+
       <div className="mt-5 grid gap-4 lg:grid-cols-2">
         <section className={cn(SEC.panel, "p-4")}>
           <div className="mb-3 flex items-center justify-between">
@@ -417,16 +430,18 @@ function DevicesModule({ token, session }: { token: string; session: SecSession 
   const unblock = useMutation(api.security.unblockDevice);
   const revoke = useMutation(api.security.revokeDevice);
   const replace = useMutation(api.security.replaceDevice);
+  const revokeSessions = useMutation(api.security.revokeDeviceSessions);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [action, setAction] = useState<{
-    kind: "approve" | "reject" | "block" | "unblock" | "revoke" | "replace";
+    kind: "approve" | "reject" | "block" | "unblock" | "revoke" | "replace" | "sessions";
     deviceId: string;
     staffName: string;
     staffId?: string | null;
   } | null>(null);
   const [replacementId, setReplacementId] = useState<string>("");
+  const [detailsId, setDetailsId] = useState<Id<"securityDevices"> | null>(null);
 
   const canApprove = canSecurity(session, "security.devices.approve");
   const canBlock = canSecurity(session, "security.devices.block");
@@ -464,6 +479,9 @@ function DevicesModule({ token, session }: { token: string; session: SecSession 
           break;
         case "revoke":
           await revoke({ token, deviceId: action.deviceId as Id<"securityDevices">, reason, confirmCredential: credential });
+          break;
+        case "sessions":
+          await revokeSessions({ token, deviceId: action.deviceId as Id<"securityDevices">, reason, confirmCredential: credential });
           break;
         case "replace": {
           if (!replacementId) throw new Error("Select the pending replacement device.");
@@ -521,7 +539,7 @@ function DevicesModule({ token, session }: { token: string; session: SecSession 
           <table className="w-full min-w-[980px] border-collapse text-left">
             <thead>
               <tr className="bg-[#0b0d10] text-[9px] uppercase tracking-[0.16em] text-zinc-500">
-                {["Staff", "Device", "Status", "Fingerprint", "Last seen", "Requested", "Decision", "Actions"].map((h) => (
+                {["Staff", "Device", "Status", "Enrollment key", "Last verified", "Requested", "Decision", "Actions"].map((h) => (
                   <th key={h} className="border-b border-[#1f232a] px-3 py-2 font-black">{h}</th>
                 ))}
               </tr>
@@ -535,17 +553,33 @@ function DevicesModule({ token, session }: { token: string; session: SecSession 
                   </td>
                   <td className="px-3 py-2.5">
                     <p className="flex items-center gap-1.5 text-[11px] text-zinc-300"><Smartphone className="size-3 text-zinc-600" />{d.label}</p>
-                    <p className="text-[10px] text-zinc-600">{d.platform ?? "Web"} · {d.source.toLowerCase()}</p>
+                    <p className="text-[10px] text-zinc-600">
+                      {[d.category, d.os, d.browser && `${d.browser} ${d.browserVersion ?? ""}`.trim()]
+                        .filter(Boolean)
+                        .join(" · ") || d.platform || "Web"}
+                      {" "}· reported
+                    </p>
                   </td>
                   <td className="px-3 py-2.5">
                     <SecBadge tone={statusTone(d.status)}>{d.status}</SecBadge>
                     {d.multipleAuthorized ? <p className="mt-1 text-[9px] uppercase tracking-[0.1em] text-[#f87171]">policy conflict</p> : null}
                   </td>
                   <td className="px-3 py-2.5">
-                    <span className={SEC.mono}>{d.fingerprintShort}</span>
+                    {d.enrollmentId ? (
+                      <>
+                        <span className="block font-mono text-[10px] font-bold text-zinc-300">{d.enrollmentId}</span>
+                        <span className="font-mono text-[9px] text-zinc-600">
+                          {d.publicKeyFingerprint ?? "no key fingerprint"}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-[10px] text-zinc-500">legacy request · no key</span>
+                    )}
                     <p className="text-[10px] text-zinc-600">{d.ip ?? "ip unavailable"}</p>
                   </td>
-                  <td className="px-3 py-2.5 text-[10px] text-zinc-400">{fmtAgo(d.lastSeenAt)}</td>
+                  <td className="px-3 py-2.5 text-[10px] text-zinc-400">
+                    {d.lastVerifiedAt ? fmtAgo(d.lastVerifiedAt) : <span className="text-zinc-600">never</span>}
+                  </td>
                   <td className="px-3 py-2.5 text-[10px] text-zinc-500">{fmtDateTime(d.requestedAt)}</td>
                   <td className="px-3 py-2.5 text-[10px] text-zinc-500">
                     {d.decidedBy ? <>{d.decidedBy}<br />{fmtDateTime(d.decidedAt)}</> : "—"}
@@ -587,6 +621,14 @@ function DevicesModule({ token, session }: { token: string; session: SecSession 
                           <Ban className="size-3" /> Revoke
                         </button>
                       ) : null}
+                      {canRevoke ? (
+                        <button type="button" onClick={() => setAction({ kind: "sessions", deviceId: d._id, staffName: d.staffName, staffId: d.staffId })} className={cn(SEC.button, SEC.ghost, "px-2 py-1")}>
+                          <LogOut className="size-3" /> Sessions
+                        </button>
+                      ) : null}
+                      <button type="button" onClick={() => setDetailsId(d._id as Id<"securityDevices">)} className={cn(SEC.button, SEC.ghost, "px-2 py-1")}>
+                        <Activity className="size-3" /> Details
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -596,6 +638,8 @@ function DevicesModule({ token, session }: { token: string; session: SecSession 
         </div>
       )}
 
+      <DeviceDetailDialog token={token} deviceId={detailsId} onClose={() => setDetailsId(null)} />
+
       <ActionDialog
         open={!!action}
         title={
@@ -604,13 +648,15 @@ function DevicesModule({ token, session }: { token: string; session: SecSession 
             : "Device action"
         }
         description={
-          action?.kind === "revoke" || action?.kind === "block" || action?.kind === "replace"
-            ? "This immediately invalidates the staff member's active sessions. The backend records it in the hash-chained audit log."
-            : "The Security Department is the only authority for this device action."
+          action?.kind === "sessions"
+            ? "Ends every KMC session for this staff member without changing the device decision. Recorded in the hash-chained audit log."
+            : action?.kind === "revoke" || action?.kind === "block" || action?.kind === "replace"
+              ? "This immediately invalidates the staff member's active sessions. The backend records it in the hash-chained audit log."
+              : "The Security Department is the only authority for this device action."
         }
-        submitLabel={action ? action.kind : "Confirm"}
+        submitLabel={action?.kind === "sessions" ? "Revoke sessions" : action ? action.kind : "Confirm"}
         requireReason={action?.kind !== "approve" && action?.kind !== "unblock"}
-        requireCredential={action?.kind === "block" || action?.kind === "revoke" || action?.kind === "replace"}
+        requireCredential={action?.kind === "block" || action?.kind === "revoke" || action?.kind === "replace" || action?.kind === "sessions"}
         busy={busy}
         error={error}
         onClose={close}
@@ -640,6 +686,85 @@ function DevicesModule({ token, session }: { token: string; session: SecSession 
   );
 }
 
+function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex items-start justify-between gap-4 border-b border-[#15181d] py-1.5">
+      <span className="text-[9px] font-black uppercase tracking-[0.16em] text-zinc-600">{label}</span>
+      <span className="text-right text-[11px] font-semibold text-zinc-300">{value}</span>
+    </div>
+  );
+}
+
+function DeviceDetailDialog({
+  token,
+  deviceId,
+  onClose,
+}: {
+  token: string;
+  deviceId: Id<"securityDevices"> | null;
+  onClose: () => void;
+}) {
+  const detail = useQuery(
+    api.security.deviceDetails,
+    deviceId ? { token, deviceId } : "skip",
+  );
+  const d = detail?.device;
+  return (
+    <SecModal
+      open={!!deviceId}
+      title="Device details"
+      subtitle="Cryptographic enrollment, reported browser information and the complete device history."
+      onClose={onClose}
+    >
+      {!d ? (
+        <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-zinc-600">
+          <Loader2 className="size-4 animate-spin" /> Loading device
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <div>
+            <DetailRow label="Enrollment ID" value={<span className="font-mono">{d.enrollmentId ?? "legacy (no key)"}</span>} />
+            <DetailRow label="Owner" value={`${d.staffName} · ${d.staffId ?? "—"} · ${d.role}`} />
+            <DetailRow label="Status" value={<SecBadge tone={statusTone(d.status)}>{d.status}</SecBadge>} />
+            <DetailRow label="Key enrolled" value={d.keyEnrolled ? "ECDSA P-256 public key" : "none"} />
+            <DetailRow label="Key fingerprint" value={<span className="font-mono text-[10px]">{d.publicKeyFingerprint ?? "—"}</span>} />
+            <DetailRow label="Reported browser" value={`${d.browser ?? "—"} ${d.browserVersion ?? ""}`.trim()} />
+            <DetailRow label="Reported OS" value={d.os ?? "—"} />
+            <DetailRow label="Device category" value={`${d.category ?? "—"} (reported, not verified hardware)`} />
+            <DetailRow label="First registered" value={fmtDateTime(d.enrolledAt ?? d.requestedAt)} />
+            <DetailRow label="Last verified" value={d.lastVerifiedAt ? fmtDateTime(d.lastVerifiedAt) : "never"} />
+            <DetailRow label="Last IP" value={d.ip ?? "not recorded"} />
+            <DetailRow label="Revoked" value={d.revokedAt ? `${fmtDateTime(d.revokedAt)} — ${d.revokeReason ?? "no reason"}` : "no"} />
+            <DetailRow label="Active KMC sessions" value={detail.activeSessions} />
+            <DetailRow label="Decision" value={d.decidedBy ? `${d.decidedBy} · ${fmtDateTime(d.decidedAt)}` : "—"} />
+          </div>
+          <div>
+            <p className="mb-2 text-[9px] font-black uppercase tracking-[0.18em] text-zinc-500">
+              Enrollment & login history
+            </p>
+            {detail.history.length === 0 ? (
+              <p className="text-[11px] text-zinc-600">No events recorded.</p>
+            ) : (
+              <ul className="max-h-64 space-y-2 overflow-y-auto">
+                {detail.history.map((e) => (
+                  <li key={e._id} className="border-l-2 border-[#b91c1c]/60 pl-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] font-black uppercase tracking-[0.12em] text-zinc-300">{e.kind}</span>
+                      <span className="shrink-0 text-[9px] text-zinc-600">{fmtDateTime(e.at)}</span>
+                    </div>
+                    <p className="text-[10px] text-zinc-500">{e.detail ?? "—"}</p>
+                    <p className="font-mono text-[9px] text-zinc-700">actor {e.actor}{e.ip ? ` · ${e.ip}` : ""}</p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
+    </SecModal>
+  );
+}
+
 /* --------------------------------- events --------------------------------- */
 
 const EVENT_FILTERS = [
@@ -659,6 +784,7 @@ function EventsModule({ token }: { token: string }) {
     kind: filter === "ALL" ? undefined : filter,
     limit: 150,
   });
+  const attempts = useQuery(api.security.loginAttempts, { token, limit: 40 });
   return (
     <div>
       <ModuleHeader
@@ -685,6 +811,38 @@ function EventsModule({ token }: { token: string }) {
           </div>
         }
       />
+      <div className={cn(SEC.panel, "mb-4")}>
+        <div className="flex items-center justify-between border-b border-[#1f232a] px-3 py-2">
+          <p className="text-[9px] font-black uppercase tracking-[0.18em] text-zinc-500">
+            Recent authentication attempts
+          </p>
+          <span className="font-mono text-[9px] text-zinc-700">security + KMC sign-in</span>
+        </div>
+        {attempts === undefined ? (
+          <p className="px-3 py-3 text-[10px] uppercase tracking-[0.16em] text-zinc-600">Loading attempts…</p>
+        ) : attempts.length === 0 ? (
+          <p className="px-3 py-3 text-[11px] text-zinc-600">No authentication attempts recorded yet.</p>
+        ) : (
+          <ul className="divide-y divide-[#15181d]">
+            {attempts.map((a) => (
+              <li key={a._id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">
+                <SecBadge tone={a.outcome === "SUCCESS" ? "ok" : "danger"}>
+                  {a.outcome}
+                </SecBadge>
+                <span className="text-[10px] font-black uppercase tracking-[0.12em] text-zinc-400">
+                  {a.kind.replace(/_/g, " ")}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-[10px] text-zinc-500">
+                  {a.detail ?? a.operatorId ?? "—"}
+                </span>
+                <span className="text-[9px] uppercase tracking-[0.12em] text-zinc-700">{a.ip ?? "no ip"}</span>
+                <span className="text-[9px] text-zinc-600">{fmtDateTime(a.at)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
       {events === undefined ? (
         <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-zinc-600"><Loader2 className="size-4 animate-spin" /> Loading events</div>
       ) : events.length === 0 ? (

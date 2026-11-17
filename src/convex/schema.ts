@@ -880,6 +880,18 @@ const schema = defineSchema(
       role: v.string(),
       fingerprint: v.string(),
       deviceKey: v.string(),
+      // Server-generated enrollment identity for the cryptographic key pair.
+      // Never trusted from the client: it is looked up, then the signature over
+      // a server challenge is verified against `publicKeyJwk`.
+      enrollmentId: v.optional(v.string()),
+      publicKeyJwk: v.optional(v.string()),
+      publicKeyFingerprint: v.optional(v.string()), // SHA-256 of the SPKI
+      // Browser-derived information — clearly REPORTED, never hardware-verified.
+      browser: v.optional(v.string()),
+      browserVersion: v.optional(v.string()),
+      os: v.optional(v.string()),
+      category: v.optional(v.string()), // Desktop | Laptop | Mobile | Tablet
+      reportedInfo: v.optional(v.boolean()),
       label: v.string(),
       platform: v.optional(v.string()),
       userAgent: v.optional(v.string()),
@@ -888,6 +900,10 @@ const schema = defineSchema(
       source: v.string(), // BASELINE | SECURITY_APPROVAL | REPLACEMENT | REGISTRATION
       requestedAt: v.number(),
       lastSeenAt: v.number(),
+      enrolledAt: v.optional(v.number()),
+      lastVerifiedAt: v.optional(v.number()),
+      revokedAt: v.optional(v.number()),
+      revokeReason: v.optional(v.string()),
       decidedAt: v.optional(v.number()),
       decidedBy: v.optional(v.string()),
       reason: v.optional(v.string()),
@@ -896,7 +912,51 @@ const schema = defineSchema(
     })
       .index("by_profile", ["profileId"])
       .index("by_key", ["deviceKey"])
+      .index("by_enrollment", ["enrollmentId"])
       .index("by_status", ["status"]),
+
+    /**
+     * One-shot cryptographic challenges. A challenge is only ever usable once
+     * and expires quickly; the signature is verified against the enrolled
+     * public key, so a copied device id cannot be replayed.
+     */
+    securityDeviceChallenges: defineTable({
+      ref: v.string(),
+      purpose: v.string(), // ENROLL | VERIFY
+      challenge: v.string(),
+      challengeHash: v.string(),
+      enrollmentId: v.optional(v.string()),
+      deviceKey: v.optional(v.string()),
+      staffId: v.optional(v.string()),
+      profileId: v.optional(v.id("profiles")),
+      publicKeyJwk: v.optional(v.string()),
+      issuedAt: v.number(),
+      expiresAt: v.number(),
+      usedAt: v.optional(v.number()),
+      ip: v.optional(v.string()),
+    })
+      .index("by_ref", ["ref"])
+      .index("by_enrollment", ["enrollmentId"])
+      .index("by_staff", ["staffId"]),
+
+    /**
+     * Short-lived, single-use proof that THIS device passed signature
+     * verification for a staff profile. Staff login requires one; the proof is
+     * consumed by the sign-in mutation and can never be replayed.
+     */
+    securityDeviceProofs: defineTable({
+      tokenHash: v.string(),
+      enrollmentId: v.string(),
+      deviceKey: v.string(),
+      profileId: v.id("profiles"),
+      staffId: v.string(),
+      issuedAt: v.number(),
+      expiresAt: v.number(),
+      usedAt: v.optional(v.number()),
+      ip: v.optional(v.string()),
+    })
+      .index("by_token", ["tokenHash"])
+      .index("by_device", ["enrollmentId"]),
 
     securityDeviceEvents: defineTable({
       ref: v.string(),

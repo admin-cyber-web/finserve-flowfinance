@@ -57,6 +57,26 @@ async function signIn(
   });
 }
 
+/** Browser-side key pair used to prove device possession in tests. */
+async function deviceKeyPair(): Promise<{ pair: CryptoKeyPair; jwk: string }> {
+  const pair = (await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign", "verify"],
+  )) as CryptoKeyPair;
+  const jwk = await crypto.subtle.exportKey("jwk", pair.publicKey);
+  return { pair, jwk: JSON.stringify(jwk) };
+}
+
+async function signMessage(pair: CryptoKeyPair, message: string): Promise<string> {
+  const signature = await crypto.subtle.sign(
+    { name: "ECDSA", hash: "SHA-256" },
+    pair.privateKey,
+    new TextEncoder().encode(message),
+  );
+  return Buffer.from(new Uint8Array(signature)).toString("base64");
+}
+
 /** SUPER_ADMIN staff identity (the role that must have zero security power). */
 async function seedSuperAdmin(t: TestConvex) {
   return await t.run(async (ctx) => {
@@ -441,13 +461,23 @@ describe("Device authorization", () => {
     const staff = await seedStaff(t, "0001", "Super Admin");
     const asStaff = t.withIdentity({ subject: staff.userId, issuer: "https://kmc.test" });
 
-    // First device of the staff ID becomes the baseline authorization.
+    // No device is grandfathered in — the first request is PENDING and the
+    // staff API stays closed until a Security Operator approves it.
     const first = await asStaff.mutation(api.security.registerDevice, {
       fingerprint: "fp-device-primary-0001",
       label: "Chrome · Windows",
       platform: "Windows",
     });
-    expect(first.status).toBe("AUTHORIZED");
+    expect(first.status).toBe("PENDING");
+    await expect(asStaff.query(api.clients.list, {})).rejects.toThrow(
+      /not authorized by the Security Department/i,
+    );
+    const requested = await t.query(api.security.devices, { token: activation.token });
+    const approved = await t.mutation(api.security.approveDevice, {
+      token: activation.token,
+      deviceId: requested.find((d) => d.status === "PENDING")!._id,
+    });
+    expect(approved.ok).toBe(true);
 
     // Business API works while the device is authorized.
     expect(Array.isArray(await asStaff.query(api.clients.list, {}))).toBe(true);
@@ -530,6 +560,7 @@ describe("Device authorization", () => {
     const dashboard = await t.query(api.security.dashboard, { token: activation.token });
     expect(dashboard.unauthorizedAttempts24h).toBeGreaterThanOrEqual(1);
     expect(dashboard.devices.pending).toBe(0);
+    expect(dashboard.devices.authorized).toBe(0);
   });
 
   it("denies approval when the staff already has an active device (without replace)", async () => {
@@ -540,6 +571,11 @@ describe("Device authorization", () => {
     await asStaff.mutation(api.security.registerDevice, {
       fingerprint: "fp-device-approval-a01",
       label: "Chrome",
+    });
+    const active = (await t.query(api.security.devices, { token: activation.token }))[0];
+    await t.mutation(api.security.approveDevice, {
+      token: activation.token,
+      deviceId: active._id,
     });
     await asStaff.mutation(api.security.registerDevice, {
       fingerprint: "fp-device-approval-b02",
@@ -566,6 +602,10 @@ describe("Device authorization", () => {
       label: "Chrome",
     });
     const device = (await t.query(api.security.devices, { token: activation.token }))[0];
+    await t.mutation(api.security.approveDevice, {
+      token: activation.token,
+      deviceId: device._id,
+    });
     await expect(
       t.mutation(api.security.blockDevice, {
         token: activation.token,
@@ -574,6 +614,229 @@ describe("Device authorization", () => {
         confirmCredential: "wrong-credential-9",
       }),
     ).rejects.toThrow(/Additional verification failed/i);
+  });
+});
+
+describe("Cryptographic device enrollment", () => {
+  type TestPair = CryptoKeyPair;
+
+  async function newDeviceKey(): Promise<{ pair: TestPair; jwk: string }> {
+    const pair = (await crypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-256" },
+      true,
+      ["sign", "verify"],
+    )) as TestPair;
+    const jwk = await crypto.subtle.exportKey("jwk", pair.publicKey);
+    return { pair, jwk: JSON.stringify(jwk) };
+  }
+
+  async function sign(pair: TestPair, message: string): Promise<string> {
+    const signature = await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" },
+      pair.privateKey,
+      new TextEncoder().encode(message),
+    );
+    return Buffer.from(new Uint8Array(signature)).toString("base64");
+  }
+
+  async function enroll(t: TestConvex, staffId: string, jwk: string, pair: TestPair) {
+    const start = await t.mutation(api.securityDevice.deviceChallenge, {
+      purpose: "ENROLL",
+      staffId,
+      publicKeyJwk: jwk,
+    });
+    if (!start.ok) throw new Error("enrollment challenge was refused");
+    return await t.mutation(api.securityDevice.completeEnrollment, {
+      challengeRef: start.ref,
+      signature: await sign(pair, start.challenge),
+      label: "P-256 test device",
+      category: "Desktop",
+      os: "Linux",
+      browser: "TestBrowser",
+    });
+  }
+
+  async function approve(t: TestConvex, token: string, enrollmentId: string) {
+    const devices = await t.query(api.security.devices, { token });
+    const row = devices.find((d) => d.enrollmentId === enrollmentId);
+    if (!row) throw new Error("device row missing");
+    return await t.mutation(api.security.approveDevice, {
+      token,
+      deviceId: row._id,
+    });
+  }
+
+  async function verifyStart(t: TestConvex, enrollmentId: string) {
+    const start = await t.mutation(api.securityDevice.deviceChallenge, {
+      purpose: "VERIFY",
+      enrollmentId,
+    });
+    if (!start.ok) throw new Error("verify challenge was refused");
+    return start;
+  }
+
+  it("enrolls a real key, stays pending until approved, and issues a proof only then", async () => {
+    const t = await freshDeployment();
+    const token = (await activate(t)).token;
+    await seedStaff(t, "0021", "Key Staff");
+    const key = await newDeviceKey();
+
+    const enrolled = await enroll(t, "0021", key.jwk, key.pair);
+    expect(enrolled.ok).toBe(true);
+    expect(enrolled.status).toBe("PENDING");
+
+    // Not approved yet → no proof, no access.
+    const before = await verifyStart(t, enrolled.enrollmentId!);
+    const pendingResult = await t.mutation(api.securityDevice.verifyDevice, {
+      challengeRef: before.ref,
+      signature: await sign(key.pair, before.challenge),
+    });
+    expect(pendingResult.status).toBe("PENDING");
+    expect("proof" in pendingResult).toBe(false);
+
+    expect((await approve(t, token, enrolled.enrollmentId!)).ok).toBe(true);
+
+    const start = await verifyStart(t, enrolled.enrollmentId!);
+    const authorized = await t.mutation(api.securityDevice.verifyDevice, {
+      challengeRef: start.ref,
+      signature: await sign(key.pair, start.challenge),
+    });
+    expect(authorized.status).toBe("AUTHORIZED");
+    expect(typeof (authorized as { proof?: string }).proof).toBe("string");
+
+    // Recorded information: fingerprints, category, last verification.
+    const devices = await t.query(api.security.devices, { token });
+    const row = devices.find((d) => d.enrollmentId === enrolled.enrollmentId)!;
+    expect(row.publicKeyFingerprint).toBeTruthy();
+    expect(row.category).toBe("Desktop");
+    expect(row.reportedInfo).toBe(true);
+    expect(row.lastVerifiedAt).toBeTruthy();
+    expect(row.enrolledAt).toBeTruthy();
+
+    const details = await t.query(api.security.deviceDetails, {
+      token,
+      deviceId: row._id,
+    });
+    expect(details.device.keyEnrolled).toBe(true);
+    expect(details.history.some((e) => e.kind === "DEVICE_ENROLLED")).toBe(true);
+  });
+
+  it("rejects an invalid signature and a replayed challenge", async () => {
+    const t = await freshDeployment();
+    const token = (await activate(t)).token;
+    await seedStaff(t, "0022", "Sig Staff");
+    const key = await newDeviceKey();
+    const enrolled = await enroll(t, "0022", key.jwk, key.pair);
+    await approve(t, token, enrolled.enrollmentId!);
+
+    const start = await verifyStart(t, enrolled.enrollmentId!);
+    // Signed a different message → backend refuses.
+    const bad = await t.mutation(api.securityDevice.verifyDevice, {
+      challengeRef: start.ref,
+      signature: await sign(key.pair, `${start.challenge}-tampered`),
+    });
+    expect(bad.status).toBe("INVALID_SIGNATURE");
+    expect("proof" in bad).toBe(false);
+
+    // The challenge was burned by the failed attempt.
+    await expect(
+      t.mutation(api.securityDevice.verifyDevice, {
+        challengeRef: start.ref,
+        signature: await sign(key.pair, start.challenge),
+      }),
+    ).rejects.toThrow(/already used/i);
+
+    // A fresh challenge still works, and then cannot be replayed.
+    const second = await verifyStart(t, enrolled.enrollmentId!);
+    const sig = await sign(key.pair, second.challenge);
+    const ok = await t.mutation(api.securityDevice.verifyDevice, {
+      challengeRef: second.ref,
+      signature: sig,
+    });
+    expect(ok.status).toBe("AUTHORIZED");
+    await expect(
+      t.mutation(api.securityDevice.verifyDevice, {
+        challengeRef: second.ref,
+        signature: sig,
+      }),
+    ).rejects.toThrow(/already used/i);
+  });
+
+  it("denies verification for an unknown enrollment id (missing key)", async () => {
+    const t = await freshDeployment();
+    await activate(t);
+    const start = await t.mutation(api.securityDevice.deviceChallenge, {
+      purpose: "VERIFY",
+      enrollmentId: "DEV-ABCDEFGH23",
+    });
+    expect(start.ok).toBe(false);
+  });
+
+  it("denies a revoked device and a blocked device", async () => {
+    const t = await freshDeployment();
+    const token = (await activate(t)).token;
+    await seedStaff(t, "0023", "Revoked Staff");
+    const key = await newDeviceKey();
+    const enrolled = await enroll(t, "0023", key.jwk, key.pair);
+    await approve(t, token, enrolled.enrollmentId!);
+    const devices = await t.query(api.security.devices, { token });
+    const row = devices.find((d) => d.enrollmentId === enrolled.enrollmentId)!;
+
+    await t.mutation(api.security.revokeDevice, {
+      token,
+      deviceId: row._id,
+      reason: "Laptop returned to inventory",
+      confirmCredential: CREDENTIAL,
+    });
+    const revokedStart = await verifyStart(t, enrolled.enrollmentId!);
+    const revoked = await t.mutation(api.securityDevice.verifyDevice, {
+      challengeRef: revokedStart.ref,
+      signature: await sign(key.pair, revokedStart.challenge),
+    });
+    expect(revoked.status).toBe("REVOKED");
+    expect("proof" in revoked).toBe(false);
+
+    // A second device: approve then block.
+    const key2 = await newDeviceKey();
+    const enrolled2 = await enroll(t, "0023", key2.jwk, key2.pair);
+    await approve(t, token, enrolled2.enrollmentId!);
+    const rows = await t.query(api.security.devices, { token });
+    const row2 = rows.find((d) => d.enrollmentId === enrolled2.enrollmentId)!;
+    await t.mutation(api.security.blockDevice, {
+      token,
+      deviceId: row2._id,
+      reason: "Reported stolen",
+      confirmCredential: CREDENTIAL,
+    });
+    const blockedStart = await verifyStart(t, enrolled2.enrollmentId!);
+    const blocked = await t.mutation(api.securityDevice.verifyDevice, {
+      challengeRef: blockedStart.ref,
+      signature: await sign(key2.pair, blockedStart.challenge),
+    });
+    expect(blocked.status).toBe("BLOCKED");
+    expect("proof" in blocked).toBe(false);
+  });
+
+  it("denies enrollment for client profiles and unapproved staff accounts", async () => {
+    const t = await freshDeployment();
+    await activate(t);
+    await t.run(async (ctx) => {
+      await ctx.db.insert("profiles", {
+        name: "Suspended Staff",
+        staffId: "0098",
+        role: "STAFF",
+        status: "SUSPENDED",
+        createdAt: Date.now(),
+      });
+    });
+    const key = await newDeviceKey();
+    await expect(
+      t.mutation(api.securityDevice.deviceChallenge, {
+        purpose: "ENROLL",
+        staffId: "0098",
+        publicKeyJwk: key.jwk,
+      }),
+    ).rejects.toThrow(/suspended/i);
   });
 });
 
@@ -668,11 +931,102 @@ describe("Existing KMC functionality", () => {
       });
       return { userId, profileId };
     });
-    const result = await t.mutation(internal.users.staffCredentialsSignIn, {
+    // Credentials alone are refused: a device proof is mandatory now.
+    const withoutDevice = await t.mutation(internal.users.staffCredentialsSignIn, {
       systemId: "0007",
       credential: "1234",
     });
+    expect(withoutDevice.ok).toBe(false);
+
+    // Enroll a real key, have Security approve it, then present the proof.
+    const token = (await activate(t)).token;
+    const key = await deviceKeyPair();
+    const start = await t.mutation(api.securityDevice.deviceChallenge, {
+      purpose: "ENROLL",
+      staffId: "0007",
+      publicKeyJwk: key.jwk,
+    });
+    if (!start.ok) throw new Error("enrollment challenge refused");
+    const enrolled = await t.mutation(api.securityDevice.completeEnrollment, {
+      challengeRef: start.ref,
+      signature: await signMessage(key.pair, start.challenge),
+      label: "Staff workstation",
+    });
+    expect(enrolled.status).toBe("PENDING");
+
+    const devices = await t.query(api.security.devices, { token });
+    const row = devices.find((d) => d.enrollmentId === enrolled.enrollmentId)!;
+    await t.mutation(api.security.approveDevice, { token, deviceId: row._id });
+
+    const verifyStart = await t.mutation(api.securityDevice.deviceChallenge, {
+      purpose: "VERIFY",
+      enrollmentId: enrolled.enrollmentId!,
+    });
+    if (!verifyStart.ok) throw new Error("verify challenge refused");
+    const verified = await t.mutation(api.securityDevice.verifyDevice, {
+      challengeRef: verifyStart.ref,
+      signature: await signMessage(key.pair, verifyStart.challenge),
+    });
+    expect(verified.status).toBe("AUTHORIZED");
+    const proof = (verified as { proof?: string }).proof!;
+
+    // Approved device + WRONG PIN → denied (the proof is spent).
+    const wrongPin = await t.mutation(internal.users.staffCredentialsSignIn, {
+      systemId: "0007",
+      credential: "9999",
+      deviceEnrollmentId: enrolled.enrollmentId!,
+      deviceProof: proof,
+    });
+    expect(wrongPin.ok).toBe(false);
+
+    // A device proof is bound to its enrollment: another pending device of the
+    // same staff ID cannot borrow this authorised device's proof.
+    const other = await deviceKeyPair();
+    const otherStart = await t.mutation(api.securityDevice.deviceChallenge, {
+      purpose: "ENROLL",
+      staffId: "0007",
+      publicKeyJwk: other.jwk,
+    });
+    if (!otherStart.ok) throw new Error("enrollment challenge refused");
+    const otherEnrollment = await t.mutation(api.securityDevice.completeEnrollment, {
+      challengeRef: otherStart.ref,
+      signature: await signMessage(other.pair, otherStart.challenge),
+      label: "Second laptop",
+    });
+    const fresh = await t.mutation(api.securityDevice.deviceChallenge, {
+      purpose: "VERIFY",
+      enrollmentId: enrolled.enrollmentId!,
+    });
+    if (!fresh.ok) throw new Error("verify challenge refused");
+    const verifiedAgain = await t.mutation(api.securityDevice.verifyDevice, {
+      challengeRef: fresh.ref,
+      signature: await signMessage(key.pair, fresh.challenge),
+    });
+    const freshProof = (verifiedAgain as { proof?: string }).proof!;
+    const borrowed = await t.mutation(internal.users.staffCredentialsSignIn, {
+      systemId: "0007",
+      credential: "1234",
+      deviceEnrollmentId: otherEnrollment.enrollmentId!,
+      deviceProof: freshProof,
+    });
+    expect(borrowed.ok).toBe(false);
+
+    const result = await t.mutation(internal.users.staffCredentialsSignIn, {
+      systemId: "0007",
+      credential: "1234",
+      deviceEnrollmentId: enrolled.enrollmentId!,
+      deviceProof: proof,
+    });
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.userId).toBe(seeded.userId);
+
+    // The proof is single use: replaying it must fail.
+    const replay = await t.mutation(internal.users.staffCredentialsSignIn, {
+      systemId: "0007",
+      credential: "1234",
+      deviceEnrollmentId: enrolled.enrollmentId!,
+      deviceProof: proof,
+    });
+    expect(replay.ok).toBe(false);
   });
 });

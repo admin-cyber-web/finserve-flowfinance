@@ -23,6 +23,7 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { AppError, getActor, makeCode, revokeUserSessions } from "../lib/server/convexHelpers";
+import { appendSecurityAudit as appendAudit } from "../lib/server/securityAudit";
 import {
   auditHash,
   auditPayload,
@@ -108,67 +109,6 @@ function deviceState(d: Doc<"securityDevices">): string {
     decidedBy: d.decidedBy ?? null,
     reason: d.reason ?? null,
   });
-}
-
-/** Append-only audit row with a hash chain over the previous row. */
-async function appendAudit(
-  ctx: MutationCtx,
-  entry: {
-    operatorId: string;
-    operatorName: string;
-    action: string;
-    targetType: string;
-    targetId: string;
-    previousState?: string;
-    newState?: string;
-    reason?: string;
-    eventRef?: string;
-    ip?: string;
-  },
-): Promise<{ ref: string; at: number }> {
-  const last = await ctx.db
-    .query("securityAudit")
-    .withIndex("by_seq")
-    .order("desc")
-    .first();
-  const seq = (last?.seq ?? 0) + 1;
-  const prevHash = last?.hash ?? "GENESIS";
-  const at = Date.now();
-  const ref = `SEC-${String(seq).padStart(6, "0")}`;
-  const payload = auditPayload({
-    seq,
-    ref,
-    operatorId: entry.operatorId,
-    operatorName: entry.operatorName,
-    action: entry.action,
-    targetType: entry.targetType,
-    targetId: entry.targetId,
-    previousState: entry.previousState ?? "",
-    newState: entry.newState ?? "",
-    reason: entry.reason ?? "",
-    eventRef: entry.eventRef ?? "",
-    ip: entry.ip ?? "unavailable",
-    at,
-  });
-  const hash = await auditHash(prevHash, payload);
-  await ctx.db.insert("securityAudit", {
-    seq,
-    ref,
-    operatorId: entry.operatorId,
-    operatorName: entry.operatorName,
-    action: entry.action,
-    targetType: entry.targetType,
-    targetId: entry.targetId,
-    previousState: entry.previousState ?? "",
-    newState: entry.newState ?? "",
-    reason: entry.reason ?? "",
-    eventRef: entry.eventRef ?? "",
-    ip: entry.ip ?? "unavailable",
-    at,
-    prevHash,
-    hash,
-  });
-  return { ref, at };
 }
 
 async function logEvent(
@@ -1049,6 +989,17 @@ export const dashboard = query({
         revoked: count("REVOKED") + count("REPLACED"),
         rejected: count("REJECTED"),
         total: devices.length,
+        // Ownership split for the command-center sections. A "security
+        // operator device" would be a device enrolled for an operator account;
+        // operators currently authenticate with PIN + credential instead, so
+        // this stays 0 rather than showing invented numbers.
+        superAdmin: devices.filter((d) => d.role === "SUPER_ADMIN").length,
+        staff: devices.filter((d) => d.role !== "SUPER_ADMIN").length,
+        securityOperator: 0,
+        pendingKeys: devices.filter(
+          (d) => !d.publicKeyJwk && d.status === "PENDING",
+        ).length,
+        cryptographicallyEnrolled: devices.filter((d) => !!d.publicKeyJwk).length,
       },
       unauthorizedAttempts24h: events.filter(
         (e) => e.kind === "UNAUTHORIZED_ATTEMPT" && e.at >= dayAgo,
@@ -1070,6 +1021,13 @@ export const dashboard = query({
         failedLogins24h: attempts.filter(
           (a) => a.outcome !== "SUCCESS" && a.at >= dayAgo,
         ).length,
+      },
+      loginAttempts: {
+        total24h: attempts.filter((a) => a.at >= dayAgo).length,
+        failed24h: attempts.filter(
+          (a) => a.outcome !== "SUCCESS" && a.at >= dayAgo,
+        ).length,
+        recent: attempts.slice(0, 10),
       },
       recentEvents: events.slice(0, 12),
       recentAudit: audit,
@@ -1107,6 +1065,17 @@ export const devices = query({
       platform: d.platform ?? null,
       fingerprint: d.fingerprint,
       fingerprintShort: `${d.fingerprint.slice(0, 8)}…${d.fingerprint.slice(-4)}`,
+      enrollmentId: d.enrollmentId ?? null,
+      publicKeyFingerprint: d.publicKeyFingerprint ?? null,
+      browser: d.browser ?? null,
+      browserVersion: d.browserVersion ?? null,
+      os: d.os ?? null,
+      category: d.category ?? null,
+      reportedInfo: d.reportedInfo ?? true,
+      enrolledAt: d.enrolledAt ?? null,
+      lastVerifiedAt: d.lastVerifiedAt ?? null,
+      revokedAt: d.revokedAt ?? null,
+      revokeReason: d.revokeReason ?? null,
       status: d.status,
       priorStatus: d.priorStatus ?? null,
       source: d.source,
@@ -1188,6 +1157,8 @@ export const approveDevice = mutation({
       decidedAt: now,
       decidedBy: grant.operator.operatorId,
       reason: args.reason,
+      revokedAt: undefined,
+      revokeReason: undefined,
     });
     const updated = await deviceById(ctx, device._id);
     const eventRef = await logEvent(ctx, {
@@ -1390,12 +1361,15 @@ export const revokeDevice = mutation({
     await confirmOperator(grant.operator, args.confirmCredential);
     const device = await deviceById(ctx, args.deviceId);
     const before = deviceState(device);
+    const revokedAt = Date.now();
     await ctx.db.patch(device._id, {
       status: "REVOKED",
       priorStatus: device.status,
-      decidedAt: Date.now(),
+      decidedAt: revokedAt,
       decidedBy: grant.operator.operatorId,
       reason: args.reason,
+      revokedAt,
+      revokeReason: args.reason,
     });
     const sessions = await revokeStaffSessions(ctx, device.profileId);
     const updated = await deviceById(ctx, device._id);
@@ -1527,6 +1501,141 @@ export const incidents = query({
     await authenticate(ctx, args.token, { permission: "security.events.read" });
     const rows = await ctx.db.query("securityIncidents").collect();
     return rows.sort((a, b) => b.updatedAt - a.updatedAt);
+  },
+});
+
+/** One device plus its complete login / enrollment history. */
+export const deviceDetails = query({
+  args: { token: v.string(), deviceId: v.id("securityDevices") },
+  handler: async (ctx, args) => {
+    await authenticate(ctx, args.token, { permission: "security.devices.read" });
+    const device = await ctx.db.get(args.deviceId);
+    if (!device) throw new AppError("Device record not found.");
+    const history = await ctx.db
+      .query("securityDeviceEvents")
+      .withIndex("by_device", (q) => q.eq("deviceKey", device.deviceKey))
+      .collect();
+    const profile = await ctx.db.get(device.profileId);
+    const activeSessions = profile?.userId
+      ? (
+          await ctx.db
+            .query("authSessions")
+            .withIndex("userId", (q) => q.eq("userId", profile.userId!))
+            .collect()
+        ).length
+      : 0;
+    return {
+      device: {
+        _id: device._id,
+        enrollmentId: device.enrollmentId ?? null,
+        staffId: device.staffId ?? null,
+        staffName: device.staffName,
+        role: device.role,
+        label: device.label,
+        status: device.status,
+        priorStatus: device.priorStatus ?? null,
+        source: device.source,
+        category: device.category ?? null,
+        browser: device.browser ?? null,
+        browserVersion: device.browserVersion ?? null,
+        os: device.os ?? null,
+        platform: device.platform ?? null,
+        userAgent: device.userAgent ?? null,
+        reportedInfo: device.reportedInfo ?? true,
+        publicKeyFingerprint: device.publicKeyFingerprint ?? null,
+        keyEnrolled: !!device.publicKeyJwk,
+        requestedAt: device.requestedAt,
+        enrolledAt: device.enrolledAt ?? null,
+        lastSeenAt: device.lastSeenAt,
+        lastVerifiedAt: device.lastVerifiedAt ?? null,
+        revokedAt: device.revokedAt ?? null,
+        revokeReason: device.revokeReason ?? null,
+        decidedAt: device.decidedAt ?? null,
+        decidedBy: device.decidedBy ?? null,
+        reason: device.reason ?? null,
+        ip: device.ip ?? null,
+      },
+      history: history.sort((a, b) => b.at - a.at),
+      activeSessions,
+    };
+  },
+});
+
+/** Staff / SUPER_ADMIN login attempts recorded by the sign-in mutation. */
+export const loginAttempts = query({
+  args: { token: v.string(), limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    await authenticate(ctx, args.token, { permission: "security.events.read" });
+    const limit = Math.min(300, Math.max(1, args.limit ?? 100));
+    return await ctx.db
+      .query("securityLoginAttempts")
+      .withIndex("by_at")
+      .order("desc")
+      .take(limit);
+  },
+});
+
+/** Live Security Operator sessions (operators do not use enrolled KMC devices). */
+export const operatorSessions = query({
+  args: { token: v.string() },
+  handler: async (ctx, args) => {
+    await authenticate(ctx, args.token, { permission: "security.events.read" });
+    const now = Date.now();
+    const rows = await ctx.db.query("securitySessions").collect();
+    return rows
+      .filter((s) => !s.revokedAt && s.expiresAt > now)
+      .sort((a, b) => b.lastSeenAt - a.lastSeenAt)
+      .map((s) => ({
+        operatorId: s.operatorId,
+        mode: s.mode,
+        issuedAt: s.issuedAt,
+        expiresAt: s.expiresAt,
+        lastSeenAt: s.lastSeenAt,
+        ip: s.ip ?? null,
+      }));
+  },
+});
+
+/** Revoke every KMC session belonging to the device's staff profile. */
+export const revokeDeviceSessions = mutation({
+  args: {
+    token: v.string(),
+    deviceId: v.id("securityDevices"),
+    reason: v.string(),
+    confirmCredential: v.string(),
+    ip: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const grant = await authenticate(ctx, args.token, {
+      permission: "security.devices.revoke",
+    });
+    await confirmOperator(grant.operator, args.confirmCredential);
+    const device = await deviceById(ctx, args.deviceId);
+    const sessions = await revokeStaffSessions(ctx, device.profileId);
+    const eventRef = await logEvent(ctx, {
+      kind: "SESSIONS_REVOKED",
+      deviceKey: device.deviceKey,
+      profileId: device.profileId,
+      staffId: device.staffId,
+      staffName: device.staffName,
+      ip: args.ip,
+      detail: `${sessions} active session(s) revoked — ${args.reason}`,
+      actor: grant.operator.operatorId,
+    });
+    await appendAudit(ctx, {
+      operatorId: grant.operator.operatorId,
+      operatorName: grant.operator.name,
+      action: "DEVICE_SESSIONS_REVOKED",
+      targetType: "securityDevice",
+      targetId: device.deviceKey,
+      previousState: JSON.stringify({ status: device.status }),
+      newState: JSON.stringify({ sessionsRevoked: sessions }),
+      reason: args.reason,
+      eventRef,
+      ip: args.ip,
+    });
+    await touchSession(ctx, grant.session, await readConfig(ctx), args.ip);
+    return { ok: true, sessionsRevoked: sessions };
   },
 });
 
@@ -2150,7 +2259,8 @@ export const auditLog = query({
         break;
       }
     }
-    // Continuity: each older row's hash must be the newer row's prevHash.
+    // Continuity: each older row's hash must be the newer row's prevHash, and
+    // sequence numbers must be contiguous (a deleted/reordered row breaks it).
     if (chainOk) {
       for (let i = 0; i + 1 < rows.length; i += 1) {
         if (rows[i].prevHash !== rows[i + 1].hash) {
@@ -2158,6 +2268,19 @@ export const auditLog = query({
           firstBrokenRef = rows[i + 1].ref;
           break;
         }
+        if (rows[i].seq - 1 !== rows[i + 1].seq) {
+          chainOk = false;
+          firstBrokenRef = rows[i + 1].ref;
+          break;
+        }
+      }
+    }
+    // The first row ever written must anchor on GENESIS.
+    if (chainOk && rows.length > 0) {
+      const oldest = rows[rows.length - 1];
+      if (oldest.seq === 1 && oldest.prevHash !== "GENESIS") {
+        chainOk = false;
+        firstBrokenRef = oldest.ref;
       }
     }
     return {
@@ -2254,11 +2377,9 @@ export const registerDevice = mutation({
       };
     }
 
-    const hasAuthorized = existing.some((d) => d.status === "AUTHORIZED");
-    const hasHistory = existing.length > 0;
-    // First-ever device for this staff ID is grandfathered as the baseline so
-    // existing KMC staff keep working; every later device needs Security.
-    const status = hasHistory ? "PENDING" : "AUTHORIZED";
+    // No device ever authorizes itself, not even the first one for a staff ID.
+    // A legacy (non-cryptographic) registration can only create a PENDING
+    // request; sign-in additionally requires a proof from an enrolled key.
     const eventRef = await makeCode(ctx, "securityEvent", "EVT", 6);
     const id = await ctx.db.insert("securityDevices", {
       profileId: profile._id,
@@ -2270,31 +2391,25 @@ export const registerDevice = mutation({
       label: args.label.slice(0, 80) || "Unnamed device",
       platform: args.platform,
       userAgent: args.userAgent,
-      status,
-      source: hasHistory ? "REGISTRATION" : "BASELINE",
+      status: "PENDING",
+      source: "REGISTRATION",
       requestedAt: now,
       lastSeenAt: now,
-      decidedAt: hasHistory ? undefined : now,
-      decidedBy: hasHistory ? undefined : "BASELINE_MIGRATION",
       eventRef,
     });
     await logEvent(ctx, {
-      kind: hasHistory ? "DEVICE_REQUESTED" : "DEVICE_AUTHORIZED_BASELINE",
+      kind: "DEVICE_REQUESTED",
       deviceKey,
       profileId: profile._id,
       staffId: profile.staffId,
       staffName: profile.name,
       userAgent: args.userAgent,
-      detail: hasHistory
-        ? "New device request — awaiting Security Department approval"
-        : `Baseline device authorized${hasAuthorized ? " (conflict)" : ""}`,
+      detail: "Legacy device request — awaiting Security Department approval",
       actor: "STAFF",
     });
     return {
-      status: status as "AUTHORIZED" | "PENDING",
-      message: hasHistory
-        ? "New device request submitted. A Security Operator must approve it."
-        : "Device registered as the baseline authorized device.",
+      status: "PENDING" as const,
+      message: "New device request submitted. A Security Operator must approve it.",
       deviceId: id,
     };
   },

@@ -16,8 +16,56 @@ import { FS_ROLES, USER_STATUSES } from "../lib/finance/types";
 import { oneOf, requiredString, optionalString, money } from "../lib/finance/validate";
 import { normalizeCredential, hashCredential, verifyCredential } from "../lib/server/credentials";
 import { staffIdMatches } from "../lib/server/idMatch";
+import type { Doc } from "./_generated/dataModel";
+import type { MutationCtx } from "./_generated/server";
+import { appendSecurityAudit } from "../lib/server/securityAudit";
+import {
+  consumeDeviceProof,
+  logDeviceEvent,
+  proofFailureMessage,
+} from "../lib/server/securityDevice";
 
 export const SUPER_ADMIN_EMAIL = "tiwarijhumki@gmail.com";
+
+/**
+ * Record a KMC staff login attempt for the Security Department.
+ *
+ * Every attempt lands in the security attempt log; successful logins, denied
+ * devices and lockouts also append to the hash-chained security audit. The
+ * actor is prefixed `SYSTEM:` so it can never be mistaken for an operator.
+ */
+async function recordStaffLogin(
+  ctx: MutationCtx,
+  args: {
+    profile?: Doc<"profiles">;
+    staffId: string;
+    staffName?: string;
+    action: string;
+    outcome: "SUCCESS" | "FAILED" | "LOCKED";
+    reason?: string;
+    deviceKey?: string;
+    deviceLabel?: string;
+  },
+): Promise<void> {
+  await ctx.db.insert("securityLoginAttempts", {
+    kind: args.profile?.role === "SUPER_ADMIN" ? "SUPER_ADMIN_LOGIN" : "STAFF_LOGIN",
+    outcome: args.outcome,
+    operatorId: args.profile?.staffId ?? args.staffId,
+    detail: [args.reason, args.deviceLabel].filter(Boolean).join(" · ") || undefined,
+    at: Date.now(),
+  });
+  if (args.outcome === "FAILED" && args.reason?.startsWith("Invalid")) return;
+  await appendSecurityAudit(ctx, {
+    operatorId: `SYSTEM:${args.staffId || "login"}`,
+    operatorName: args.staffName ?? args.staffId ?? "Unknown staff",
+    action: args.action,
+    targetType: "staffLogin",
+    targetId: args.deviceKey ?? args.profile?.staffId ?? args.staffId,
+    previousState: "",
+    newState: JSON.stringify({ outcome: args.outcome }),
+    reason: [args.reason, args.deviceLabel].filter(Boolean).join(" · "),
+  });
+}
 
 
 export const me = query({
@@ -59,8 +107,11 @@ export const verifyStaffLogin = mutation({
   args: {
     systemId: v.string(),
     credential: v.string(),
+    deviceEnrollmentId: v.optional(v.string()),
+    deviceProof: v.optional(v.string()),
   },
-  handler: async (ctx, { systemId, credential }) => {
+  handler: async (ctx, args) => {
+    const { systemId, credential } = args;
     const trimmedSystemId = systemId.trim().toUpperCase();
     const profiles = await ctx.db.query("profiles").collect();
     const target = profiles.find(
@@ -87,6 +138,14 @@ export const verifyStaffLogin = mutation({
       await bumpFailedAttempt(ctx, target._id);
       throw new AppError("Invalid system ID or credentials.");
     }
+    // Device authorization is part of authentication: a correct PIN is never
+    // enough on its own, for any role (SUPER_ADMIN included).
+    const device = await consumeDeviceProof(ctx, {
+      proof: args.deviceProof,
+      enrollmentId: args.deviceEnrollmentId,
+      profile: target,
+    });
+    if (!device.ok) throw new AppError(proofFailureMessage(device.reason));
     await clearFailedAttempts(ctx, target._id);
     await touchLastLogin(ctx, target._id);
     return {
@@ -111,10 +170,18 @@ export const verifyStaffLogin = mutation({
  * the lockout. The provider throws after this mutation commits.
  */
 export const staffCredentialsSignIn = internalMutation({
-  args: { systemId: v.string(), credential: v.string() },
-  handler: async (ctx, { systemId, credential }): Promise<
+  args: {
+    systemId: v.string(),
+    credential: v.string(),
+    deviceEnrollmentId: v.optional(v.string()),
+    deviceProof: v.optional(v.string()),
+    ip: v.optional(v.string()),
+    userAgent: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<
     { ok: true; userId: Id<"users"> } | { ok: false; message: string }
   > => {
+    const { systemId, credential } = args;
     const trimmed = systemId.trim().toUpperCase();
     if (!trimmed || !credential) {
       return { ok: false, message: "Enter your System ID and PIN." };
@@ -126,9 +193,23 @@ export const staffCredentialsSignIn = internalMutation({
         p.role !== "CLIENT" && staffIdMatches(p.staffId, p.legacyStaffIds, trimmed),
     );
     if (!target) {
+      await recordStaffLogin(ctx, {
+        staffId: trimmed,
+        action: "STAFF_LOGIN_FAILED",
+        outcome: "FAILED",
+        reason: "Invalid system ID",
+      });
       return { ok: false, message: "Invalid system ID or credentials." };
     }
     if (target.lockedUntil && target.lockedUntil > Date.now()) {
+      await recordStaffLogin(ctx, {
+        profile: target,
+        staffId: target.staffId,
+        staffName: target.name,
+        action: "STAFF_LOGIN_LOCKED",
+        outcome: "LOCKED",
+        reason: "Account lockout active",
+      });
       return {
         ok: false,
         message: "Too many failed attempts. This account is locked for 15 minutes.",
@@ -156,10 +237,65 @@ export const staffCredentialsSignIn = internalMutation({
       // Commits because this mutation returns normally; the provider then
       // throws with the message below.
       await bumpFailedAttempt(ctx, target._id);
+      await recordStaffLogin(ctx, {
+        profile: target,
+        staffId: target.staffId,
+        staffName: target.name,
+        action: "STAFF_LOGIN_FAILED",
+        outcome: "FAILED",
+        reason: "Incorrect PIN",
+      });
       return { ok: false, message: "Invalid system ID or credentials." };
     }
+
+    // ---- Device authorization: required for EVERY role, SUPER_ADMIN included.
+    // A valid PIN without a proven, authorized, cryptographically-enrolled
+    // device never creates a session.
+    const deviceCheck = await consumeDeviceProof(ctx, {
+      proof: args.deviceProof,
+      enrollmentId: args.deviceEnrollmentId,
+      profile: target,
+    });
+    if (!deviceCheck.ok) {
+      await logDeviceEvent(ctx, {
+        kind: "LOGIN_DENIED_DEVICE",
+        deviceKey: args.deviceEnrollmentId ?? "unverified",
+        enrollmentId: args.deviceEnrollmentId,
+        profileId: target._id,
+        staffId: target.staffId,
+        staffName: target.name,
+        ip: args.ip,
+        userAgent: args.userAgent,
+        detail: `Sign-in denied: ${deviceCheck.reason}`,
+        actor: "STAFF",
+      });
+      await recordStaffLogin(ctx, {
+        profile: target,
+        staffId: target.staffId,
+        staffName: target.name,
+        action: "STAFF_LOGIN_DENIED_DEVICE",
+        outcome: "FAILED",
+        reason: deviceCheck.reason,
+        deviceKey: args.deviceEnrollmentId,
+      });
+      // A correct PIN from an unauthorized device is still a failed sign-in.
+      await bumpFailedAttempt(ctx, target._id);
+      return { ok: false, message: proofFailureMessage(deviceCheck.reason) };
+    }
+
     await clearFailedAttempts(ctx, target._id);
     await touchLastLogin(ctx, target._id);
+    await recordStaffLogin(ctx, {
+      profile: target,
+      staffId: target.staffId,
+      staffName: target.name,
+      action:
+        target.role === "SUPER_ADMIN" ? "SUPER_ADMIN_LOGIN" : "STAFF_LOGIN",
+      outcome: "SUCCESS",
+      reason: "Device verified cryptographically",
+      deviceKey: deviceCheck.device?.enrollmentId ?? args.deviceEnrollmentId,
+      deviceLabel: deviceCheck.device?.label,
+    });
 
     // Resolve the Convex user this session acts as. Admin-created staff may
     // not have one yet: reuse the user for the same email if present,

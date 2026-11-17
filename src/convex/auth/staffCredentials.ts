@@ -25,10 +25,16 @@ export const staffCredentials: ConvexCredentialsConfig = ConvexCredentials({
       typeof credentials.systemId === "string" ? credentials.systemId : "";
     const credential =
       typeof credentials.credential === "string" ? credentials.credential : "";
+    const deviceEnrollmentId =
+      typeof credentials.deviceEnrollmentId === "string"
+        ? credentials.deviceEnrollmentId
+        : "";
+    const deviceProof =
+      typeof credentials.deviceProof === "string" ? credentials.deviceProof : "";
 
     const result = await ctx.runMutation(
       internal.users.staffCredentialsSignIn,
-      { systemId, credential },
+      { systemId, credential, deviceEnrollmentId, deviceProof },
     );
     if (!result.ok) {
       // Thrown in the action (outside the mutation's transaction), so the

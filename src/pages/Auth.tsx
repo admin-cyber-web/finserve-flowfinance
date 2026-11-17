@@ -1,6 +1,7 @@
 import { api } from "@/convex/_generated/api";
 import { useMutation } from "convex/react";
 import { useAuth } from "@/hooks/use-auth";
+import { useSecurityDevice } from "@/hooks/use-security-device";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -45,8 +46,11 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
   const [otp, setOtp] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [pendingEmail, setPendingEmail] = useState<string | null>(null);
 
   const linkProfile = useMutation(api.profiles.linkByEmail);
+  const { enroll, verify } = useSecurityDevice();
 
   // Real authentication only: once a session exists, link it to its
   // workspace profile and go straight to the destination dashboard.
@@ -56,7 +60,49 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
     let cancelled = false;
     (async () => {
       try {
-        const result = await linkProfile({});
+        const attempt = (proof?: { proof: string; enrollmentId: string }) =>
+          linkProfile({
+            deviceProof: proof?.proof,
+            deviceEnrollmentId: proof?.enrollmentId,
+          });
+
+        let result = await attempt();
+
+        // Email-OTP proves the mailbox, not the device. If the workspace is
+        // withheld, prove this browser's key and try once more.
+        if (!result.ok && result.reason === "device-required") {
+          let verified = await verify();
+          if (verified.status === "NOT_ENROLLED" || verified.status === "UNKNOWN") {
+            const created = await enroll({
+              staffEmail: pendingEmail ?? undefined,
+            });
+            verified =
+              created.status === "AUTHORIZED"
+                ? await verify()
+                : {
+                    status: created.status,
+                    message: created.message,
+                    enrollmentId: created.enrollmentId,
+                  };
+          }
+          if (
+            verified.status !== "AUTHORIZED" ||
+            !verified.proof ||
+            !verified.enrollmentId
+          ) {
+            if (!cancelled) {
+              setNotice(verified.message || "Device authorization is required.");
+              setStep("signIn");
+            }
+            await signOut();
+            return;
+          }
+          result = await attempt({
+            proof: verified.proof,
+            enrollmentId: verified.enrollmentId,
+          });
+        }
+
         if (cancelled) return;
         if (result.ok) {
           navigate(redirect);
@@ -66,7 +112,9 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
         setError(
           result.reason === "no-workspace"
             ? "No account is registered for this email. Ask your administrator to create your user."
-            : "This sign-in has no verified email address. Use the email your administrator registered.",
+            : result.reason === "device-required"
+              ? (result.message ?? "Device authorization is required for this account.")
+              : "This sign-in has no verified email address. Use the email your administrator registered.",
         );
         await signOut();
       } catch (err) {
@@ -81,16 +129,19 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
     return () => {
       cancelled = true;
     };
-  }, [authLoading, isAuthenticated, linkProfile, navigate, redirect, signOut]);
+  }, [authLoading, isAuthenticated, linkProfile, navigate, redirect, signOut, enroll, verify, pendingEmail]);
 
   const signInEmail = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setIsLoading(true);
     setError(null);
+    setNotice(null);
     try {
       const formData = new FormData(event.currentTarget);
+      const email = formData.get("email") as string;
+      setPendingEmail(email);
       await signIn("email-otp", formData);
-      setStep({ email: formData.get("email") as string });
+      setStep({ email });
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Failed to send verification code. Please try again.",
@@ -100,18 +151,43 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
     }
   };
 
-  // System ID + PIN sign-in for admin-created staff. Reuses the same Convex
-  // Auth session as email OTP — on success the link effect above attaches the
-  // profile and routes by the user's actual role (no persona/workspace step).
+  // System ID + PIN sign-in for admin-created staff. The device is proven
+  // FIRST: the PIN is only sent with a single-use device proof, so credentials
+  // alone can never create a session.
   const signInSystem = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setIsLoading(true);
     setError(null);
+    setNotice(null);
     try {
       const formData = new FormData(event.currentTarget);
+      const systemId = String(formData.get("systemId") ?? "").trim();
+      const credential = String(formData.get("credential") ?? "");
+
+      let verified = await verify();
+      if (verified.status === "NOT_ENROLLED" || verified.status === "UNKNOWN") {
+        const created = await enroll({ staffId: systemId.toUpperCase() });
+        setNotice(
+          `${created.message}${created.enrollmentId ? ` Enrollment ID: ${created.enrollmentId} — quote this to the Security Department.` : ""}`,
+        );
+        return;
+      }
+      if (
+        verified.status !== "AUTHORIZED" ||
+        !verified.proof ||
+        !verified.enrollmentId
+      ) {
+        setNotice(
+          `${verified.message}${verified.enrollmentId ? ` Enrollment ID: ${verified.enrollmentId}.` : ""}`,
+        );
+        return;
+      }
+
       await signIn("staff-credentials", {
-        systemId: String(formData.get("systemId") ?? ""),
-        credential: String(formData.get("credential") ?? ""),
+        systemId,
+        credential,
+        deviceEnrollmentId: verified.enrollmentId,
+        deviceProof: verified.proof,
       });
     } catch (err) {
       setError(prettyError(err));
@@ -235,6 +311,11 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                             )}
                           </Button>
                         </div>
+                        {notice && (
+                          <p className="mt-2 border-2 border-ink bg-sky px-2 py-1.5 text-[11px] font-bold">
+                            {notice}
+                          </p>
+                        )}
                         {error && (
                           <p className="mt-2 text-sm font-bold text-danger">{error}</p>
                         )}
@@ -270,6 +351,11 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                           required
                         />
                       </div>
+                      {notice && (
+                        <p className="border-2 border-ink bg-sky px-2 py-1.5 text-[11px] font-bold">
+                          {notice}
+                        </p>
+                      )}
                       {error && (
                         <p className="text-sm font-bold text-danger">{error}</p>
                       )}

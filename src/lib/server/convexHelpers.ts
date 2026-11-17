@@ -79,9 +79,10 @@ export async function requireActor(ctx: Ctx): Promise<Actor> {
  *
  * Once a staff ID has device records, at least one must be AUTHORIZED for the
  * account to use the business API at all — so a block or revocation applied by
- * Security cuts access to every module, not just the shell. Staff IDs with no
- * device row yet are left alone until their browser registers (the first
- * device becomes the baseline authorization).
+ * Security cuts access to every module, not just the shell. A staff profile
+ * with no device record at all is denied: the only way to obtain a KMC session
+ * is a signed device proof, so "no record" means the caller did not come
+ * through the device handshake (or its enrollment was deleted).
  */
 export async function assertDeviceAuthorized(
   ctx: Ctx,
@@ -92,7 +93,6 @@ export async function assertDeviceAuthorized(
     .query("securityDevices")
     .withIndex("by_profile", (q) => q.eq("profileId", profile._id))
     .collect();
-  if (devices.length === 0) return;
   if (devices.some((d) => d.status === "AUTHORIZED")) return;
   throw new AppError(
     "This device is not authorized by the Security Department. Contact security with your staff ID — device approval is not handled by SUPER_ADMIN.",
