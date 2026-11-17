@@ -245,7 +245,7 @@ export default function LoanNew() {
         )}
       </section>
 
-      {/* Step 2 — amount. Terms are fixed by the backend (79% reducing
+      {/* Step 2 — amount. Terms are fixed by the backend (78.5% reducing
           balance, 24 weekly installments) — there is no product to pick. */}
       <section className="space-y-3 border-2 border-ink bg-card p-4 shadow-hard-sm">
         <h2 className="text-xs font-black uppercase tracking-[0.14em] text-muted-foreground">
@@ -267,7 +267,7 @@ export default function LoanNew() {
         />
 
         <div className="border-2 border-ink bg-sky p-2 text-[11px] font-bold">
-          Every new loan uses the same backend terms: 79% p.a. reducing
+          Every new loan uses the same backend terms: 78.5% p.a. reducing
           balance · {preview?.tenure ?? 24} weekly installments · no
           processing fee applies.
         </div>

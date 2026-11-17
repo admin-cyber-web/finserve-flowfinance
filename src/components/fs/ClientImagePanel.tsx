@@ -5,6 +5,7 @@ import {
   type CapturedClientPhoto,
 } from "@/components/fs/ClientPhotoCapture";
 import { Button } from "@/components/ui/button";
+import { ImageCropDialog } from "@/components/fs/ImageCropDialog";
 import { cn } from "@/lib/utils";
 import { useMutation, useQuery } from "convex/react";
 import {
@@ -53,6 +54,9 @@ export function ClientImagePanel({
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [captured, setCaptured] = useState<CapturedClientPhoto | null>(null);
+  // Picked image waiting for the crop step. Geo-tagging never sets this —
+  // the live camera path is untouched.
+  const [pendingCrop, setPendingCrop] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
 
   const resetEditor = () => {
@@ -258,9 +262,7 @@ export function ClientImagePanel({
                       toast.error("Photo must be smaller than 5 MB.");
                       return;
                     }
-                    if (preview) URL.revokeObjectURL(preview);
-                    setFile(picked);
-                    setPreview(URL.createObjectURL(picked));
+                    setPendingCrop(picked);
                   }}
                 />
               </label>
@@ -316,6 +318,20 @@ export function ClientImagePanel({
           </div>
         </div>
       )}
+
+      <ImageCropDialog
+        open={pendingCrop !== null}
+        file={pendingCrop}
+        title="Crop client photograph"
+        defaultAspect={3 / 4}
+        onCancel={() => setPendingCrop(null)}
+        onConfirm={(cropped) => {
+          if (preview) URL.revokeObjectURL(preview);
+          setFile(cropped);
+          setPreview(URL.createObjectURL(cropped));
+          setPendingCrop(null);
+        }}
+      />
     </section>
   );
 }

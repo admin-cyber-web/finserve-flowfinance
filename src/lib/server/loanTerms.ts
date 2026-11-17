@@ -9,7 +9,7 @@ import { PERIODS_PER_YEAR, type Frequency, type InterestMethod } from "../financ
  * interest rate, frequency, tenure or installment — it only sends the client
  * and the requested principal, so it can never override what follows.
  *
- *   Annual nominal rate .... 79% p.a.
+ *   Annual nominal rate .... 78.5% p.a.
  *   Method ................. reducing balance (interest on the outstanding)
  *   Frequency .............. weekly
  *   Tenure ................. 24 installments = 24 weeks
@@ -18,7 +18,11 @@ import { PERIODS_PER_YEAR, type Frequency, type InterestMethod } from "../financ
  * of periods per year used by the schedule engine
  * (`PERIODS_PER_YEAR.WEEKLY` = 52), i.e.
  *
- *     weekly rate r = 79% / 52 = 1.519230...% per week
+ *     weekly rate r = 78.5% / 52 = 1.509615...% per week
+ *
+ * On ₹15,000 over 24 weekly installments this prices the annuity at ₹749.70,
+ * which the engine rounds to a ₹750 whole-rupee installment — the amount the
+ * field actually collects.
  *
  * The same `PERIODS_PER_YEAR` value feeds `generateSchedule`, so the rate,
  * the amortization and every preview/EMI shown to the user share one
@@ -27,7 +31,7 @@ import { PERIODS_PER_YEAR, type Frequency, type InterestMethod } from "../financ
  */
 export const FIXED_LOAN_TERMS = {
   /** Annual nominal interest rate, in percent per annum. */
-  interestRate: 79,
+  interestRate: 78.5,
   interestMethod: "REDUCING" as InterestMethod,
   frequency: "WEEKLY" as Frequency,
   /** Number of installments — 24 weekly periods = 24 weeks of tenure. */
@@ -38,7 +42,7 @@ export const FIXED_LOAN_TERMS = {
   maxObligationRatio: 50,
 } as const;
 
-/** Periodic (weekly) interest rate in percent — 79 / 52. */
+/** Periodic (weekly) interest rate in percent — 78.5 / 52. */
 export const WEEKLY_RATE_PCT =
   FIXED_LOAN_TERMS.interestRate / PERIODS_PER_YEAR[FIXED_LOAN_TERMS.frequency];
 

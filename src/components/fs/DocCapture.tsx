@@ -12,6 +12,7 @@ import {
 } from "react";
 import { Camera, FileText, Upload } from "lucide-react";
 import { toast } from "sonner";
+import { ImageCropDialog } from "@/components/fs/ImageCropDialog";
 
 /**
  * Document capture + upload for the client application form.
@@ -99,6 +100,11 @@ export function DocCapture({
 }: DocCaptureProps) {
   const getUploadUrl = useMutation(api.clients.photoUploadUrl);
   const [kind, setKind] = useState<string>(kindOptions[0]?.id ?? "OTHER");
+  // Picked image awaiting the crop step. PDFs never enter this state.
+  const [pendingCrop, setPendingCrop] = useState<{
+    file: File;
+    retakeKey: string | null;
+  } | null>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   // Set by a per-row "Retake" click: the next camera capture REPLACES that
   // row in place (new preview + fresh upload) instead of appending another.
@@ -141,29 +147,19 @@ export function DocCapture({
     }
   };
 
-  const onPick = (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
-    const problem = validateDocFile(file, "Document");
-    if (problem) {
-      toast.error(problem);
-      return;
-    }
-    // A recent "Retake" click replaces its row in place — old preview is
-    // revoked, the new file uploads under the same key. These are always
-    // normal captures: documents are NEVER geo-tagged, regardless of how
-    // the person's photograph (which IS geo-tagged) was captured.
-    const retake = retakeRef.current;
-    retakeRef.current = null;
-    if (
-      retake &&
-      Date.now() - retake.at <= RETAKE_WINDOW_MS &&
-      value.some((d) => d.key === retake.key)
-    ) {
+  /**
+   * Accepts the FINAL file (already cropped when it is an image) and either
+   * replaces a retake target in place or appends a new row.
+   *
+   * These are always normal captures: documents are NEVER geo-tagged,
+   * regardless of how the person's photograph (which IS geo-tagged) was
+   * captured.
+   */
+  const acceptFile = (file: File, retakeKey: string | null) => {
+    if (retakeKey && value.some((d) => d.key === retakeKey)) {
       setValue((cur) =>
         cur.map((d) => {
-          if (d.key !== retake.key) return d;
+          if (d.key !== retakeKey) return d;
           URL.revokeObjectURL(d.previewUrl);
           return {
             ...d,
@@ -174,7 +170,7 @@ export function DocCapture({
           };
         }),
       );
-      void upload(retake.key, file);
+      void upload(retakeKey, file);
       return;
     }
     const key = newDocKey();
@@ -189,6 +185,35 @@ export function DocCapture({
       },
     ]);
     void upload(key, file);
+  };
+
+  const onPick = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    const problem = validateDocFile(file, "Document");
+    if (problem) {
+      toast.error(problem);
+      return;
+    }
+    // A recent "Retake" click replaces its row in place — resolved now, so a
+    // cancelled crop cannot leak the retake onto a later, unrelated pick.
+    const retake = retakeRef.current;
+    retakeRef.current = null;
+    const retakeKey =
+      retake &&
+      Date.now() - retake.at <= RETAKE_WINDOW_MS &&
+      value.some((d) => d.key === retake.key)
+        ? retake.key
+        : null;
+
+    // Images go through the crop step first; PDFs keep their original bytes
+    // and pages and upload immediately.
+    if (IMAGE_TYPES.includes(file.type)) {
+      setPendingCrop({ file, retakeKey });
+      return;
+    }
+    acceptFile(file, retakeKey);
   };
 
   const remove = (key: string) =>
@@ -265,6 +290,19 @@ export function DocCapture({
       </div>
 
       {hint && <p className="text-[11px] font-semibold text-muted-foreground">{hint}</p>}
+
+      <ImageCropDialog
+        open={pendingCrop !== null}
+        file={pendingCrop?.file ?? null}
+        title={`Crop ${label.toLowerCase()}`}
+        defaultAspect={null}
+        onCancel={() => setPendingCrop(null)}
+        onConfirm={(cropped) => {
+          const pending = pendingCrop;
+          setPendingCrop(null);
+          if (pending) acceptFile(cropped, pending.retakeKey);
+        }}
+      />
 
       {value.length > 0 && (
         <ul className="space-y-1.5">

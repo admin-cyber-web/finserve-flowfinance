@@ -29,6 +29,7 @@ import {
   UserPlus,
 } from "lucide-react";
 import { DocCapture, DOC_KIND_OPTIONS, type DocItem } from "@/components/fs/DocCapture";
+import { ImageCropDialog } from "@/components/fs/ImageCropDialog";
 import {
   FREQUENCIES,
   LOAN_PURPOSES,
@@ -362,6 +363,11 @@ export default function ClientNew() {
   const [coPhotoFile, setCoPhotoFile] = useState<File | null>(null);
   const [coPhotoPreview, setCoPhotoPreview] = useState<string | null>(null);
   const [coApplicantPhoto, setCoApplicantPhoto] = useState<CapturedClientPhoto | null>(null);
+  // Photo-upload cropping (Geo Tagging captures never pass through it).
+  const [pendingPhotoCrop, setPendingPhotoCrop] = useState<{
+    target: "applicant" | "coApplicant";
+    file: File;
+  } | null>(null);
   const [coApplicantDocs, setCoApplicantDocs] = useState<DocItem[]>([]);
   const [declaration, setDeclaration] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -1265,9 +1271,7 @@ export default function ClientNew() {
                     toast.error("Photo must be smaller than 5 MB.");
                     return;
                   }
-                  if (photoPreview) URL.revokeObjectURL(photoPreview);
-                  setPhotoFile(file);
-                  setPhotoPreview(URL.createObjectURL(file));
+                  setPendingPhotoCrop({ target: "applicant", file });
                 }}
               />
             </label>
@@ -1489,9 +1493,7 @@ export default function ClientNew() {
                     toast.error("Photo must be smaller than 5 MB.");
                     return;
                   }
-                  if (coPhotoPreview) URL.revokeObjectURL(coPhotoPreview);
-                  setCoPhotoFile(file);
-                  setCoPhotoPreview(URL.createObjectURL(file));
+                  setPendingPhotoCrop({ target: "coApplicant", file });
                 }}
               />
             </label>
@@ -1928,6 +1930,32 @@ export default function ClientNew() {
         The centre is re-verified on the server. If submission fails, this
         centre stays selected — fix the error and submit again.
       </p>
+
+      <ImageCropDialog
+        open={pendingPhotoCrop !== null}
+        file={pendingPhotoCrop?.file ?? null}
+        title={
+          pendingPhotoCrop?.target === "coApplicant"
+            ? "Crop co-applicant photograph"
+            : "Crop client photograph"
+        }
+        defaultAspect={3 / 4}
+        onCancel={() => setPendingPhotoCrop(null)}
+        onConfirm={(cropped) => {
+          const pending = pendingPhotoCrop;
+          setPendingPhotoCrop(null);
+          if (!pending) return;
+          if (pending.target === "coApplicant") {
+            if (coPhotoPreview) URL.revokeObjectURL(coPhotoPreview);
+            setCoPhotoFile(cropped);
+            setCoPhotoPreview(URL.createObjectURL(cropped));
+          } else {
+            if (photoPreview) URL.revokeObjectURL(photoPreview);
+            setPhotoFile(cropped);
+            setPhotoPreview(URL.createObjectURL(cropped));
+          }
+        }}
+      />
     </div>
   );
 }

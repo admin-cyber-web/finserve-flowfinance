@@ -39,7 +39,10 @@ export interface ScheduleResult {
   rows: ScheduleRow[];
   totalInterest: number;
   totalPayable: number;
-  /** Per-installment amount (equal installments; last one absorbs rounding). */
+  /**
+   * Per-installment amount in whole rupees (last installment absorbs the
+   * rounding remainder).
+   */
   installment: number;
   method: InterestMethod;
   frequency: Frequency;
@@ -136,27 +139,50 @@ export function generateSchedule(input: ScheduleInput): ScheduleResult {
   }
 
   // Reducing balance: classic annuity amortization.
+  //
+  // The installment is rounded to the WHOLE RUPEE before the rows are built:
+  // field collections are cash in whole rupees, so a displayed installment
+  // must be exactly the amount that settles an installment (a ₹749.70 row
+  // with a ₹750 collection is rejected as an overpayment). Interest is still
+  // computed at the exact annual rate on the declining balance; the last row
+  // absorbs the rounding remainder.
   const r = annualRate / 100 / periods;
   let balance = principal;
   const installment =
     r === 0
-      ? round2(principal / tenure)
-      : round2(
-          (principal * r) / (1 - Math.pow(1 + r, -tenure)),
+      ? Math.max(1, Math.round(principal / tenure))
+      : Math.max(
+          1,
+          Math.round((principal * r) / (1 - Math.pow(1 + r, -tenure))),
         );
   let totalInterest = 0;
 
   for (let i = 1; i <= tenure; i++) {
     const isLast = i === tenure;
-    const interest = round2(balance * r);
-    let p = isLast
-      ? round2(balance)
-      : round2(installment - interest);
-    if (isLast && round2(balance + interest) < installment) {
+    let interest = round2(balance * r);
+    let p: number;
+    let totalDue: number;
+    if (isLast) {
+      // The closing installment is a whole rupee too — it absorbs the
+      // sub-rupee rounding and settles the loan. Cash-in-hand collections
+      // can therefore always clear it exactly. Principal is repaid in full;
+      // the rounding rupee lands on interest, never on the principal ledger.
+      totalDue = Math.max(1, Math.round(round2(balance + interest)));
       p = round2(balance);
+      interest = round2(totalDue - p);
+      if (interest < 0) {
+        interest = 0;
+        totalDue = p;
+      }
+      balance = 0;
+    } else {
+      p = round2(installment - interest);
+      // Never repay more principal than is still outstanding (rounding can
+      // make the formula installment exceed the final balance by a rupee).
+      if (p > balance) p = round2(balance);
+      totalDue = round2(p + interest);
+      balance = round2(balance - p);
     }
-    const totalDue = isLast ? round2(p + interest) : installment;
-    balance = round2(balance - p);
     totalInterest = round2(totalInterest + interest);
     rows.push({
       index: i,
@@ -170,7 +196,11 @@ export function generateSchedule(input: ScheduleInput): ScheduleResult {
     });
   }
 
-  const totalPayable = round2(principal + totalInterest);
+  // The receivable is exactly what the rows ask for (the closing rupee
+  // rounding is included), so receivables and schedules can never disagree.
+  const totalPayable = round2(
+    rows.reduce((sum, row) => sum + row.totalDue, 0),
+  );
   return {
     rows: withPrincipalBalance(rows),
     totalInterest,

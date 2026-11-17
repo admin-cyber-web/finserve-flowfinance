@@ -314,7 +314,7 @@ export const preview = query({
         0,
       ),
     );
-    // ONE backend calculation: the fixed weekly terms (79% reducing,
+    // ONE backend calculation: the fixed weekly terms (78.5% reducing,
     // 24 weekly installments) priced by the shared schedule engine, anchored
     // on the selected first meeting date when the Admin has chosen one.
     const rows = baseScheduleRows(

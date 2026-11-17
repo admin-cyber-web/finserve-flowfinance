@@ -2,6 +2,7 @@ import { api } from "@/convex/_generated/api";
 import type { Doc, Id } from "@/convex/_generated/dataModel";
 import { DocCapture, type DocItem } from "@/components/fs/DocCapture";
 import { ClientImagePanel } from "@/components/fs/ClientImagePanel";
+import { ImageCropDialog } from "@/components/fs/ImageCropDialog";
 import {
   ClientPhotoCapture,
   type CapturedClientPhoto,
@@ -1141,6 +1142,9 @@ function CoApplicantPhotoEditor({
   setPreview: (p: string | null) => void;
   disabled: boolean;
 }) {
+  // Picked upload waiting for the crop step (geo-tagging bypasses this).
+  const [cropFile, setCropFile] = useState<File | null>(null);
+
   const clearUpload = () => {
     if (preview) URL.revokeObjectURL(preview);
     setPreview(null);
@@ -1236,9 +1240,7 @@ function CoApplicantPhotoEditor({
                   toast.error("Photo must be smaller than 5 MB.");
                   return;
                 }
-                if (preview) URL.revokeObjectURL(preview);
-                setFile(picked);
-                setPreview(URL.createObjectURL(picked));
+                setCropFile(picked);
               }}
             />
           </label>
@@ -1267,6 +1269,20 @@ function CoApplicantPhotoEditor({
           ? "Will be saved against this co-applicant when you press Save changes."
           : "Nothing new selected — the existing photo (if any) stays unchanged."}
       </p>
+
+      <ImageCropDialog
+        open={cropFile !== null}
+        file={cropFile}
+        title="Crop co-applicant photograph"
+        defaultAspect={3 / 4}
+        onCancel={() => setCropFile(null)}
+        onConfirm={(cropped) => {
+          if (preview) URL.revokeObjectURL(preview);
+          setFile(cropped);
+          setPreview(URL.createObjectURL(cropped));
+          setCropFile(null);
+        }}
+      />
     </div>
   );
 }

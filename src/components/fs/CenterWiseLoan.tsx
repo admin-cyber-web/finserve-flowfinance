@@ -300,7 +300,7 @@ export function CenterWiseLoan() {
       )}
 
       {/* 2 — loan amount: appears only once a search has matched. Terms are
-          fixed by the backend (79% reducing, 24 weekly, no product). */}
+          fixed by the backend (78.5% reducing, 24 weekly, no product). */}
       {results && (
         <section className="space-y-3 border-2 border-ink bg-card p-4 shadow-hard-sm">
           <h2 className={sectionLabel}>2 · Loan amount (each member)</h2>
@@ -320,7 +320,7 @@ export function CenterWiseLoan() {
           />
 
           <p className="border-2 border-ink bg-sky p-2 text-[11px] font-bold">
-            Every loan in this batch uses the fixed backend terms — 79% p.a.
+            Every loan in this batch uses the fixed backend terms — 78.5% p.a.
             reducing balance · 24 weekly installments · no processing fee. Only
             the principal below is an input.
           </p>
