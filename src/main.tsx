@@ -1,6 +1,7 @@
 import '@vly-ai/integrations';
 import { Toaster } from "@/components/ui/sonner";
 import { RequireAuth } from "@/components/RequireAuth";
+import { RequireDevice } from "@/components/RequireDevice";
 import { VlyToolbar } from "../vly-toolbar-readonly.tsx";
 import { ConvexAuthProvider } from "@convex-dev/auth/react";
 import { ConvexReactClient } from "convex/react";
@@ -19,6 +20,8 @@ import "./index.css";
 const AuthPage = lazy(() => import("./pages/Auth.tsx"));
 const Dashboard = lazy(() => import("./pages/Dashboard.tsx"));
 const NotFound = lazy(() => import("./pages/NotFound.tsx"));
+// Separate Security Department portal — its own guard and backend module.
+const SecurityPortal = lazy(() => import("./pages/security/SecurityPortal.tsx"));
 
 // Simple loading fallback for route transitions
 function RouteLoading() {
@@ -140,10 +143,16 @@ createRoot(document.getElementById("root")!).render(
                 path="/dashboard/*"
                 element={
                   <RequireAuth>
-                    <Dashboard />
+                    <RequireDevice>
+                      <Dashboard />
+                    </RequireDevice>
                   </RequireAuth>
                 }
               />
+              {/* Independent Security Department. No RequireAuth: it uses its own
+                  operator token and never the KMC staff session. */}
+              <Route path="/security" element={<SecurityPortal />} />
+              <Route path="/security/*" element={<SecurityPortal />} />
               <Route path="*" element={<NotFound />} />
             </Routes>
           </Suspense>

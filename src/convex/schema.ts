@@ -785,6 +785,171 @@ const schema = defineSchema(
       revokedAt: v.optional(v.number()),
     }).index("by_profile", ["profileId"]),
 
+    /* ------------------------------------------------------------------
+     * INDEPENDENT SECURITY DEPARTMENT
+     *
+     * These tables are owned by the security portal only. No staff role —
+     * SUPER_ADMIN included — can read or write them through the normal
+     * application API: every function in `security.ts` authenticates a
+     * separate Security Operator session token, never a Convex Auth identity.
+     * ------------------------------------------------------------------ */
+
+    securityConfig: defineTable({
+      singleton: v.string(), // "kmc-security"
+      bootstrapPinHash: v.optional(v.string()), // one-time activation PIN
+      bootstrapIssuedAt: v.optional(v.number()),
+      bootstrapUsedAt: v.optional(v.number()),
+      pinHash: v.optional(v.string()),
+      pinVersion: v.number(),
+      pinChangedAt: v.optional(v.number()),
+      mustChangePin: v.boolean(),
+      recoveryHash: v.optional(v.string()),
+      recoveryIssuedAt: v.optional(v.number()),
+      sessionPolicyMinutes: v.number(),
+      failedAttempts: v.number(),
+      lockedUntil: v.optional(v.number()),
+      lastFailedAt: v.optional(v.number()),
+      updatedAt: v.number(),
+      updatedBy: v.optional(v.string()),
+    }).index("by_singleton", ["singleton"]),
+
+    securityOperators: defineTable({
+      operatorId: v.string(),
+      name: v.string(),
+      credentialHash: v.string(),
+      role: v.string(), // SECURITY_ADMIN | SECURITY_OFFICER | SECURITY_AUDITOR
+      permissions: v.array(v.string()),
+      status: v.string(), // ACTIVE | SUSPENDED | DISABLED
+      createdAt: v.number(),
+      createdBy: v.string(),
+      lastLoginAt: v.optional(v.number()),
+      sessionVersion: v.number(),
+      failedAttempts: v.number(),
+      lockedUntil: v.optional(v.number()),
+      mustRotateCredential: v.boolean(),
+      credentialUpdatedAt: v.optional(v.number()),
+      notes: v.optional(v.string()),
+    })
+      .index("by_operator_id", ["operatorId"])
+      .index("by_status", ["status"]),
+
+    securitySessions: defineTable({
+      tokenHash: v.string(),
+      operatorRef: v.string(), // securityOperators._id
+      operatorId: v.string(),
+      mode: v.string(), // BOOTSTRAP | FULL | ROTATION
+      permissions: v.array(v.string()),
+      issuedAt: v.number(),
+      expiresAt: v.number(),
+      lastSeenAt: v.number(),
+      revokedAt: v.optional(v.number()),
+      revokedReason: v.optional(v.string()),
+      ip: v.optional(v.string()),
+      userAgent: v.optional(v.string()),
+      sessionVersion: v.number(),
+    })
+      .index("by_token", ["tokenHash"])
+      .index("by_operator", ["operatorRef"]),
+
+    /** Append-only. No mutation in the codebase updates or deletes a row. */
+    securityAudit: defineTable({
+      seq: v.number(),
+      ref: v.string(),
+      operatorId: v.string(),
+      operatorName: v.string(),
+      action: v.string(),
+      targetType: v.string(),
+      targetId: v.string(),
+      previousState: v.string(),
+      newState: v.string(),
+      reason: v.string(),
+      eventRef: v.string(),
+      ip: v.string(),
+      at: v.number(),
+      prevHash: v.string(),
+      hash: v.string(),
+    })
+      .index("by_seq", ["seq"])
+      .index("by_at", ["at"]),
+
+    /** Device authorization registry (one active device per staff ID). */
+    securityDevices: defineTable({
+      profileId: v.id("profiles"),
+      staffId: v.optional(v.string()),
+      staffName: v.string(),
+      role: v.string(),
+      fingerprint: v.string(),
+      deviceKey: v.string(),
+      label: v.string(),
+      platform: v.optional(v.string()),
+      userAgent: v.optional(v.string()),
+      status: v.string(), // PENDING | AUTHORIZED | BLOCKED | REJECTED | REVOKED | REPLACED
+      priorStatus: v.optional(v.string()),
+      source: v.string(), // BASELINE | SECURITY_APPROVAL | REPLACEMENT | REGISTRATION
+      requestedAt: v.number(),
+      lastSeenAt: v.number(),
+      decidedAt: v.optional(v.number()),
+      decidedBy: v.optional(v.string()),
+      reason: v.optional(v.string()),
+      ip: v.optional(v.string()),
+      eventRef: v.optional(v.string()),
+    })
+      .index("by_profile", ["profileId"])
+      .index("by_key", ["deviceKey"])
+      .index("by_status", ["status"]),
+
+    securityDeviceEvents: defineTable({
+      ref: v.string(),
+      kind: v.string(),
+      deviceKey: v.string(),
+      profileId: v.optional(v.id("profiles")),
+      staffId: v.optional(v.string()),
+      staffName: v.string(),
+      ip: v.optional(v.string()),
+      userAgent: v.optional(v.string()),
+      detail: v.string(),
+      actor: v.string(),
+      at: v.number(),
+    })
+      .index("by_at", ["at"])
+      .index("by_device", ["deviceKey"]),
+
+    securityIncidents: defineTable({
+      ref: v.string(),
+      title: v.string(),
+      severity: v.string(), // LOW | MEDIUM | HIGH | CRITICAL
+      status: v.string(), // OPEN | INVESTIGATING | CONTAINED | CLOSED
+      deviceKey: v.optional(v.string()),
+      staffId: v.optional(v.string()),
+      staffName: v.optional(v.string()),
+      summary: v.string(),
+      notes: v.array(
+        v.object({
+          at: v.number(),
+          operatorId: v.string(),
+          operatorName: v.string(),
+          body: v.string(),
+        }),
+      ),
+      openedAt: v.number(),
+      openedBy: v.string(),
+      updatedAt: v.number(),
+      closedAt: v.optional(v.number()),
+    })
+      .index("by_status", ["status"])
+      .index("by_at", ["openedAt"]),
+
+    /** Failed/low-trust portal attempts, retained for investigation. */
+    securityLoginAttempts: defineTable({
+      kind: v.string(), // ACTIVATION | LOGIN | RECOVERY
+      outcome: v.string(), // SUCCESS | FAILED | LOCKED
+      operatorId: v.optional(v.string()),
+      ip: v.optional(v.string()),
+      userAgent: v.optional(v.string()),
+      detail: v.optional(v.string()),
+      at: v.number(),
+    }).index("by_at", ["at"]),
+
     // Atomic sequence counters for human readable codes (receipts, loans...).
     counters: defineTable({
       key: v.string(),

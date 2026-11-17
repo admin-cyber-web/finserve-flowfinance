@@ -34,8 +34,8 @@ const loan = (over: Partial<LoanFacts> = {}): LoanFacts => ({
   loanId: "LN-000001",
   clientCode: "C-000001",
   customerName: "Sunita Devi",
-  groupId: "GRP-MDG",
-  groupName: "Madhopur",
+  centerId: "CNT-MDG",
+  centerName: "Madhopur",
   disbursedAt: OCT_1_START - 40 * DAY,
   principal: 25000,
   tenure: 12,
@@ -101,7 +101,8 @@ describe("Disbursement Report", () => {
     expect(rows[0].loanAmount).toBe(25000);
     expect(rows[0].emi).toBe(2450);
     expect(rows[0].tenure).toBe(12);
-    expect(rows[0].groupName).toBe("Madhopur");
+    expect(rows[0].centerName).toBe("Madhopur");
+    expect(rows[0].centerId).toBe("CNT-MDG");
   });
 
   test("both ends of the range are inclusive", () => {
