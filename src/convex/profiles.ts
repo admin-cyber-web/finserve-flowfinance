@@ -12,11 +12,6 @@ import {
 } from "../lib/server/convexHelpers";
 import { effectivePermissions } from "../lib/finance/permissions";
 import { SUPER_ADMIN_EMAIL } from "./users";
-import {
-  consumeDeviceProof,
-  proofFailureMessage,
-} from "../lib/server/securityDevice";
-import { appendSecurityAudit } from "../lib/server/securityAudit";
 import { FS_ROLES, USER_STATUSES } from "../lib/finance/types";
 import { oneOf, requiredString, optionalString, money } from "../lib/finance/validate";
 import type { Doc } from "./_generated/dataModel";
@@ -144,35 +139,8 @@ export const linkByEmail = mutation({
       throw new AppError("This email is linked to another session.");
     }
 
-    // Email-OTP proves mailbox ownership, not device authorization. The
-    // workspace is only attached after this browser proves possession of an
-    // APPROVED device key. Client-portal profiles are exempt (they do not use
-    // the staff workspace).
-    if (profile.role !== "CLIENT") {
-      const device = await consumeDeviceProof(ctx, {
-        proof: args.deviceProof,
-        enrollmentId: args.deviceEnrollmentId,
-        profile,
-      });
-      if (!device.ok) {
-        await appendSecurityAudit(ctx, {
-          operatorId: `SYSTEM:${profile.staffId}`,
-          operatorName: profile.name,
-          action: "EMAIL_LOGIN_DENIED_DEVICE",
-          targetType: "staffLogin",
-          targetId: args.deviceEnrollmentId ?? profile.staffId,
-          previousState: "",
-          newState: JSON.stringify({ outcome: "FAILED" }),
-          reason: device.reason,
-        });
-        return {
-          ok: false as const,
-          reason: "device-required" as const,
-          message: proofFailureMessage(device.reason),
-        };
-      }
-    }
-
+    // Device verification is no longer part of authentication: proving the
+    // mailbox is enough to attach the workspace profile.
     await ctx.db.patch(profile._id, { userId: actor.userId });
     await ctx.db.insert("devices", {
       profileId: profile._id,

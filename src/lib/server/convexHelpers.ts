@@ -12,7 +12,6 @@ import type { Permission } from "../finance/permissions";
 import {
   effectivePermissions,
   effectiveRole,
-  hasOwnerAuthority,
   hasSuperAdminGrant,
 } from "../finance/permissions";
 import type { TxDirection, WalletTxType } from "../finance/types";
@@ -76,42 +75,26 @@ export async function requireActor(ctx: Ctx): Promise<Actor> {
 }
 
 /**
- * Device authorization backstop.
+ * Device authorization backstop — deliberately inactive.
  *
- * Once a staff ID has device records, at least one must be AUTHORIZED for the
- * account to use the business API at all — so a block or revocation cuts access
- * to every module, not just the shell. A staff profile with no device record at
- * all is denied: the only way to obtain a KMC session is a signed device proof,
- * so "no record" means the caller did not come through the device handshake
- * (or its enrollment was deleted).
- *
- * SUPER_ADMIN / app owner handles registration and approval for everyone, so
- * they are never held back by device approval of their own: the owner console
- * must stay reachable. Every bypassed request still runs the rest of the normal
- * authorization (status, permissions) and is recorded by the caller's audit
- * path, so nothing about it is silent.
+ * Mandatory device verification has been removed from the KMC login and API
+ * flow: staff sign in with Staff ID + PIN, and their dashboard and business API
+ * access never depend on a device approval. The security tables and modules are
+ * kept (device inventory, audit, portal) but are disconnected from normal
+ * authentication, so this helper is a no-op kept for call-site compatibility.
  */
 export async function assertDeviceAuthorized(
-  ctx: Ctx,
-  profile: Doc<"profiles">,
+  _ctx: Ctx,
+  _profile: Doc<"profiles">,
 ): Promise<void> {
-  if (profile.role === "CLIENT") return;
-  if (hasOwnerAuthority(profile)) return;
-  const devices = await ctx.db
-    .query("securityDevices")
-    .withIndex("by_profile", (q) => q.eq("profileId", profile._id))
-    .collect();
-  if (devices.some((d) => d.status === "AUTHORIZED")) return;
-  throw new AppError(
-    "This device is not authorized. Contact the app owner with your staff ID — device approval is handled by SUPER_ADMIN.",
-  );
+  return;
 }
 
 /**
  * The profile used for authorization. Rejects blocked/suspended/deactivated
  * accounts for anything that mutates data — historical records stay readable.
- * Also enforces the Security Department's device authorization when the staff
- * ID already has device records (see assertDeviceAuthorized).
+ * Device authorization is NOT part of this check: device verification no longer
+ * gates login or normal API access.
  */
 export async function requireProfile(
   ctx: Ctx,
@@ -126,13 +109,6 @@ export async function requireProfile(
     throw new AppError(
       `Your account is ${profile.status.toLowerCase()}. Contact your administrator.`,
     );
-  }
-  // The SUPER_ADMIN / app owner is the authority that registers and approves
-  // devices for everyone else. Their dashboard access must not depend on having
-  // a currently authorized device of their own — otherwise the owner console
-  // becomes unreachable the moment their own device is revoked or blocked.
-  if (!hasOwnerAuthority(profile) && !opts.skipDeviceCheck) {
-    await assertDeviceAuthorized(ctx, profile);
   }
   return profile;
 }

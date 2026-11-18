@@ -457,23 +457,22 @@ describe("Operator permissions and sessions", () => {
 });
 
 describe("Device authorization", () => {
-  it("enforces one authorized device per staff ID and invalidates sessions", async () => {
+  it("tracks one authorized device per staff ID without gating staff access", async () => {
     const t = await freshDeployment();
     const activation = await activate(t);
     const staff = await seedStaff(t, "0001", "Super Admin");
     const asStaff = t.withIdentity({ subject: staff.userId, issuer: "https://kmc.test" });
 
-    // No device is grandfathered in — the first request is PENDING and the
-    // staff API stays closed until a Security Operator approves it.
+    // Device registration still records inventory, but a PENDING device no
+    // longer blocks the staff API: login and dashboard access are credential
+    // based (Staff ID + PIN).
     const first = await asStaff.mutation(api.security.registerDevice, {
       fingerprint: "fp-device-primary-0001",
       label: "Chrome · Windows",
       platform: "Windows",
     });
     expect(first.status).toBe("PENDING");
-    await expect(asStaff.query(api.clients.list, {})).rejects.toThrow(
-      /not authorized/i,
-    );
+    expect(Array.isArray(await asStaff.query(api.clients.list, {}))).toBe(true);
     const requested = await t.query(api.security.devices, { token: activation.token });
     const approved = await t.mutation(api.security.approveDevice, {
       token: activation.token,
@@ -483,6 +482,7 @@ describe("Device authorization", () => {
 
     // Business API works while the device is authorized.
     expect(Array.isArray(await asStaff.query(api.clients.list, {}))).toBe(true);
+
 
     // Second device → pending, not authorized.
     const second = await asStaff.mutation(api.security.registerDevice, {
@@ -529,9 +529,9 @@ describe("Device authorization", () => {
       return rows.map((r) => r.status);
     });
     expect(gateProbe.slice().sort()).toEqual(["BLOCKED", "REPLACED"]);
-    await expect(asStaff.query(api.clients.list, {})).rejects.toThrow(
-      /not authorized/i,
-    );
+    // A blocked device is inventory state only — it does not lock the staff
+    // member out of the workspace.
+    expect(Array.isArray(await asStaff.query(api.clients.list, {}))).toBe(true);
 
     // Unblock restores authorization and access.
     const unblocked = await t.mutation(api.security.unblockDevice, {
@@ -549,9 +549,7 @@ describe("Device authorization", () => {
       reason: "Staff left the company",
       confirmCredential: CREDENTIAL,
     });
-    await expect(asStaff.query(api.clients.list, {})).rejects.toThrow(
-      /not authorized/i,
-    );
+    expect(Array.isArray(await asStaff.query(api.clients.list, {}))).toBe(true);
     const reRegister = await asStaff.mutation(api.security.registerDevice, {
       fingerprint: "fp-device-secondary-0002",
       label: "Safari · iOS",
@@ -1001,103 +999,46 @@ describe("Existing KMC functionality", () => {
       });
       return { userId, profileId };
     });
-    // Credentials alone are refused: a device proof is mandatory now.
-    const withoutDevice = await t.mutation(internal.users.staffCredentialsSignIn, {
+    // Staff ID + PIN alone authenticates: no device proof, no device approval.
+    const signedIn = await t.mutation(internal.users.staffCredentialsSignIn, {
       systemId: "0007",
       credential: "1234",
     });
-    expect(withoutDevice.ok).toBe(false);
+    expect(signedIn.ok).toBe(true);
+    if (signedIn.ok) expect(signedIn.userId).toBe(seeded.userId);
 
-    // Enroll a real key, have Security approve it, then present the proof.
-    const token = (await activate(t)).token;
-    const key = await deviceKeyPair();
-    const start = await t.mutation(api.securityDevice.deviceChallenge, {
-      purpose: "ENROLL",
-      staffId: "0007",
-      publicKeyJwk: key.jwk,
-    });
-    if (!start.ok) throw new Error("enrollment challenge refused");
-    const enrolled = await t.mutation(api.securityDevice.completeEnrollment, {
-      challengeRef: start.ref,
-      signature: await signMessage(key.pair, start.challenge),
-      label: "Staff workstation",
-    });
-    expect(enrolled.status).toBe("PENDING");
-
-    const devices = await t.query(api.security.devices, { token });
-    const row = devices.find((d) => d.enrollmentId === enrolled.enrollmentId)!;
-    await t.mutation(api.security.approveDevice, { token, deviceId: row._id });
-
-    const verifyStart = await t.mutation(api.securityDevice.deviceChallenge, {
-      purpose: "VERIFY",
-      enrollmentId: enrolled.enrollmentId!,
-    });
-    if (!verifyStart.ok) throw new Error("verify challenge refused");
-    const verified = await t.mutation(api.securityDevice.verifyDevice, {
-      challengeRef: verifyStart.ref,
-      signature: await signMessage(key.pair, verifyStart.challenge),
-    });
-    expect(verified.status).toBe("AUTHORIZED");
-    const proof = (verified as { proof?: string }).proof!;
-
-    // Approved device + WRONG PIN → denied (the proof is spent).
+    // A wrong PIN is still refused.
     const wrongPin = await t.mutation(internal.users.staffCredentialsSignIn, {
       systemId: "0007",
       credential: "9999",
-      deviceEnrollmentId: enrolled.enrollmentId!,
-      deviceProof: proof,
     });
     expect(wrongPin.ok).toBe(false);
+    if (!wrongPin.ok) {
+      expect(wrongPin.message).toMatch(/invalid system id or credentials/i);
+    }
 
-    // A device proof is bound to its enrollment: another pending device of the
-    // same staff ID cannot borrow this authorised device's proof.
-    const other = await deviceKeyPair();
-    const otherStart = await t.mutation(api.securityDevice.deviceChallenge, {
-      purpose: "ENROLL",
-      staffId: "0007",
-      publicKeyJwk: other.jwk,
+    // SUPER_ADMIN signs in exactly the same way, from a staff ID that has no
+    // device record at all.
+    const adminHash = await hashCredential("4321");
+    const admin = await t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", { name: "Super Admin Login" });
+      await ctx.db.insert("profiles", {
+        userId,
+        name: "Super Admin Login",
+        staffId: "30009",
+        role: "SUPER_ADMIN",
+        status: "ACTIVE",
+        createdAt: Date.now(),
+        credentialHash: adminHash,
+      });
+      return { userId };
     });
-    if (!otherStart.ok) throw new Error("enrollment challenge refused");
-    const otherEnrollment = await t.mutation(api.securityDevice.completeEnrollment, {
-      challengeRef: otherStart.ref,
-      signature: await signMessage(other.pair, otherStart.challenge),
-      label: "Second laptop",
+    const adminSignIn = await t.mutation(internal.users.staffCredentialsSignIn, {
+      systemId: "30009",
+      credential: "4321",
     });
-    const fresh = await t.mutation(api.securityDevice.deviceChallenge, {
-      purpose: "VERIFY",
-      enrollmentId: enrolled.enrollmentId!,
-    });
-    if (!fresh.ok) throw new Error("verify challenge refused");
-    const verifiedAgain = await t.mutation(api.securityDevice.verifyDevice, {
-      challengeRef: fresh.ref,
-      signature: await signMessage(key.pair, fresh.challenge),
-    });
-    const freshProof = (verifiedAgain as { proof?: string }).proof!;
-    const borrowed = await t.mutation(internal.users.staffCredentialsSignIn, {
-      systemId: "0007",
-      credential: "1234",
-      deviceEnrollmentId: otherEnrollment.enrollmentId!,
-      deviceProof: freshProof,
-    });
-    expect(borrowed.ok).toBe(false);
-
-    const result = await t.mutation(internal.users.staffCredentialsSignIn, {
-      systemId: "0007",
-      credential: "1234",
-      deviceEnrollmentId: enrolled.enrollmentId!,
-      deviceProof: proof,
-    });
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.userId).toBe(seeded.userId);
-
-    // The proof is single use: replaying it must fail.
-    const replay = await t.mutation(internal.users.staffCredentialsSignIn, {
-      systemId: "0007",
-      credential: "1234",
-      deviceEnrollmentId: enrolled.enrollmentId!,
-      deviceProof: proof,
-    });
-    expect(replay.ok).toBe(false);
+    expect(adminSignIn.ok).toBe(true);
+    if (adminSignIn.ok) expect(adminSignIn.userId).toBe(admin.userId);
   });
 
   it("existing staff, client, wallet, loan, transaction and branch tables coexist with the new security tables", async () => {

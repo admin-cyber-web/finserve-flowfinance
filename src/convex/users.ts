@@ -20,11 +20,6 @@ import { staffIdMatches } from "../lib/server/idMatch";
 import type { Doc } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { appendSecurityAudit } from "../lib/server/securityAudit";
-import {
-  consumeDeviceProof,
-  logDeviceEvent,
-  proofFailureMessage,
-} from "../lib/server/securityDevice";
 
 export const SUPER_ADMIN_EMAIL = "tiwarijhumki@gmail.com";
 
@@ -143,14 +138,8 @@ export const verifyStaffLogin = mutation({
       await bumpFailedAttempt(ctx, target._id);
       throw new AppError("Invalid system ID or credentials.");
     }
-    // Device authorization is part of authentication: a correct PIN is never
-    // enough on its own, for any role (SUPER_ADMIN included).
-    const device = await consumeDeviceProof(ctx, {
-      proof: args.deviceProof,
-      enrollmentId: args.deviceEnrollmentId,
-      profile: target,
-    });
-    if (!device.ok) throw new AppError(proofFailureMessage(device.reason));
+    // System ID + PIN is the whole authentication check. Device verification is
+    // no longer part of the login flow for any role.
     await clearFailedAttempts(ctx, target._id);
     await touchLastLogin(ctx, target._id);
     return {
@@ -253,64 +242,19 @@ export const staffCredentialsSignIn = internalMutation({
       return { ok: false, message: "Invalid system ID or credentials." };
     }
 
-    // ---- Device authorization.
-    // SUPER_ADMIN / app owner (backend grant or stored SUPER_ADMIN role) signs
-    // in with System ID + PIN only: they are the authority that registers and
-    // approves devices for every other staff member, so no device approval is
-    // required for them and a missing or revoked owner device never locks them
-    // out. The bypass is recorded in the login log, so it is never silent.
-    const isOwner = hasOwnerAuthority(target);
-    let deviceEnrollmentId: string | undefined;
-    let deviceLabel: string | undefined;
-    if (!isOwner) {
-      const deviceCheck = await consumeDeviceProof(ctx, {
-        proof: args.deviceProof,
-        enrollmentId: args.deviceEnrollmentId,
-        profile: target,
-      });
-      if (!deviceCheck.ok) {
-        await logDeviceEvent(ctx, {
-          kind: "LOGIN_DENIED_DEVICE",
-          deviceKey: args.deviceEnrollmentId ?? "unverified",
-          enrollmentId: args.deviceEnrollmentId,
-          profileId: target._id,
-          staffId: target.staffId,
-          staffName: target.name,
-          ip: args.ip,
-          userAgent: args.userAgent,
-          detail: `Sign-in denied: ${deviceCheck.reason}`,
-          actor: "STAFF",
-        });
-        await recordStaffLogin(ctx, {
-          profile: target,
-          staffId: target.staffId,
-          staffName: target.name,
-          action: "STAFF_LOGIN_DENIED_DEVICE",
-          outcome: "FAILED",
-          reason: deviceCheck.reason,
-          deviceKey: args.deviceEnrollmentId,
-        });
-        // A correct PIN from an unauthorized device is still a failed sign-in.
-        await bumpFailedAttempt(ctx, target._id);
-        return { ok: false, message: proofFailureMessage(deviceCheck.reason) };
-      }
-      deviceEnrollmentId = deviceCheck.device?.enrollmentId;
-      deviceLabel = deviceCheck.device?.label;
-    }
-
+    // No device verification step: Staff ID + PIN alone authenticates every
+    // staff account. Device records stay in the database for the Security
+    // Department's inventory, but they no longer gate sign-in.
     await clearFailedAttempts(ctx, target._id);
     await touchLastLogin(ctx, target._id);
     await recordStaffLogin(ctx, {
       profile: target,
       staffId: target.staffId,
       staffName: target.name,
-      action: isOwner ? "SUPER_ADMIN_LOGIN" : "STAFF_LOGIN",
+      action: hasOwnerAuthority(target) ? "SUPER_ADMIN_LOGIN" : "STAFF_LOGIN",
       outcome: "SUCCESS",
-      reason: isOwner
-        ? "SUPER_ADMIN sign-in: device approval not required"
-        : "Device verified cryptographically",
-      deviceKey: deviceEnrollmentId ?? args.deviceEnrollmentId,
-      deviceLabel,
+      reason: "System ID + PIN verified",
+      deviceKey: args.deviceEnrollmentId,
     });
 
     // Resolve the Convex user this session acts as. Admin-created staff may
