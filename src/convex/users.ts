@@ -15,6 +15,7 @@ import {
 import { FS_ROLES, USER_STATUSES } from "../lib/finance/types";
 import { oneOf, requiredString, optionalString, money } from "../lib/finance/validate";
 import { normalizeCredential, hashCredential, verifyCredential } from "../lib/server/credentials";
+import { hasOwnerAuthority } from "../lib/finance/permissions";
 import { staffIdMatches } from "../lib/server/idMatch";
 import type { Doc } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
@@ -99,6 +100,10 @@ export const findBySystemId = query({
       role: match.role,
       status: match.status,
       hasCredential: !!match.credentialHash,
+      // Owners sign in with System ID + PIN only, so the sign-in page needs to
+      // know whether to run the device handshake first. Not a credential: the
+      // backend still re-checks this on the real sign-in.
+      ownerAuthority: hasOwnerAuthority(match),
     };
   },
 });
@@ -249,13 +254,15 @@ export const staffCredentialsSignIn = internalMutation({
     }
 
     // ---- Device authorization.
-    // For SUPER_ADMIN / app owner: the dashboard is the owner console, so a
-    // valid PIN is sufficient to sign in — they are the authority that registers
-    // and approves devices for every other staff member. They are never blocked
-    // from the dashboard or the business API by a missing or revoked device of
-    // their own.
-    const isSuperAdmin = hasSuperAdminGrant(target);
-    if (!isSuperAdmin) {
+    // SUPER_ADMIN / app owner (backend grant or stored SUPER_ADMIN role) signs
+    // in with System ID + PIN only: they are the authority that registers and
+    // approves devices for every other staff member, so no device approval is
+    // required for them and a missing or revoked owner device never locks them
+    // out. The bypass is recorded in the login log, so it is never silent.
+    const isOwner = hasOwnerAuthority(target);
+    let deviceEnrollmentId: string | undefined;
+    let deviceLabel: string | undefined;
+    if (!isOwner) {
       const deviceCheck = await consumeDeviceProof(ctx, {
         proof: args.deviceProof,
         enrollmentId: args.deviceEnrollmentId,
@@ -282,10 +289,13 @@ export const staffCredentialsSignIn = internalMutation({
           outcome: "FAILED",
           reason: deviceCheck.reason,
           deviceKey: args.deviceEnrollmentId,
-      });
-      // A correct PIN from an unauthorized device is still a failed sign-in.
-      await bumpFailedAttempt(ctx, target._id);
-      return { ok: false, message: proofFailureMessage(deviceCheck.reason) };
+        });
+        // A correct PIN from an unauthorized device is still a failed sign-in.
+        await bumpFailedAttempt(ctx, target._id);
+        return { ok: false, message: proofFailureMessage(deviceCheck.reason) };
+      }
+      deviceEnrollmentId = deviceCheck.device?.enrollmentId;
+      deviceLabel = deviceCheck.device?.label;
     }
 
     await clearFailedAttempts(ctx, target._id);
@@ -294,12 +304,13 @@ export const staffCredentialsSignIn = internalMutation({
       profile: target,
       staffId: target.staffId,
       staffName: target.name,
-      action:
-        target.role === "SUPER_ADMIN" ? "SUPER_ADMIN_LOGIN" : "STAFF_LOGIN",
+      action: isOwner ? "SUPER_ADMIN_LOGIN" : "STAFF_LOGIN",
       outcome: "SUCCESS",
-      reason: "Device verified cryptographically",
-      deviceKey: deviceCheck.device?.enrollmentId ?? args.deviceEnrollmentId,
-      deviceLabel: deviceCheck.device?.label,
+      reason: isOwner
+        ? "SUPER_ADMIN sign-in: device approval not required"
+        : "Device verified cryptographically",
+      deviceKey: deviceEnrollmentId ?? args.deviceEnrollmentId,
+      deviceLabel,
     });
 
     // Resolve the Convex user this session acts as. Admin-created staff may

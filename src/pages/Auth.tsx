@@ -1,5 +1,5 @@
 import { api } from "@/convex/_generated/api";
-import { useMutation } from "convex/react";
+import { useConvex, useMutation } from "convex/react";
 import { useAuth } from "@/hooks/use-auth";
 import { useSecurityDevice } from "@/hooks/use-security-device";
 import { Button } from "@/components/ui/button";
@@ -51,6 +51,7 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
 
   const linkProfile = useMutation(api.profiles.linkByEmail);
   const { enroll, verify } = useSecurityDevice();
+  const convex = useConvex();
 
   // Real authentication only: once a session exists, link it to its
   // workspace profile and go straight to the destination dashboard.
@@ -163,6 +164,20 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
       const formData = new FormData(event.currentTarget);
       const systemId = String(formData.get("systemId") ?? "").trim();
       const credential = String(formData.get("credential") ?? "");
+
+      // SUPER_ADMIN / app owner signs in with System ID + PIN only. No device
+      // approval or registration is asked of them — the backend enforces the
+      // same rule, so this is not a client-side shortcut.
+      const account = await convex.query(api.users.findBySystemId, { systemId });
+      if (account?.ownerAuthority) {
+        await signIn("staff-credentials", {
+          systemId,
+          credential,
+          deviceEnrollmentId: "",
+          deviceProof: "",
+        });
+        return;
+      }
 
       let verified = await verify();
       if (verified.status === "NOT_ENROLLED" || verified.status === "UNKNOWN") {

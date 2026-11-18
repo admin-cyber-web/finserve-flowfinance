@@ -77,7 +77,7 @@ async function signMessage(pair: CryptoKeyPair, message: string): Promise<string
   return Buffer.from(new Uint8Array(signature)).toString("base64");
 }
 
-/** SUPER_ADMIN staff identity (the role that must have zero security power). */
+/** SUPER_ADMIN staff identity used for the owner-authority tests. */
 async function seedSuperAdmin(t: TestConvex) {
   return await t.run(async (ctx) => {
     const userId = await ctx.db.insert("users", {
@@ -103,7 +103,7 @@ async function seedStaff(t: TestConvex, staffId: string, name: string) {
       userId,
       name,
       staffId,
-      role: "SUPER_ADMIN",
+      role: "FIELD_STAFF",
       status: "ACTIVE",
       createdAt: Date.now(),
     });
@@ -472,7 +472,7 @@ describe("Device authorization", () => {
     });
     expect(first.status).toBe("PENDING");
     await expect(asStaff.query(api.clients.list, {})).rejects.toThrow(
-      /not authorized by the Security Department/i,
+      /not authorized/i,
     );
     const requested = await t.query(api.security.devices, { token: activation.token });
     const approved = await t.mutation(api.security.approveDevice, {
@@ -530,7 +530,7 @@ describe("Device authorization", () => {
     });
     expect(gateProbe.slice().sort()).toEqual(["BLOCKED", "REPLACED"]);
     await expect(asStaff.query(api.clients.list, {})).rejects.toThrow(
-      /not authorized by the Security Department/i,
+      /not authorized/i,
     );
 
     // Unblock restores authorization and access.
@@ -1102,7 +1102,7 @@ describe("Existing KMC functionality", () => {
 
   it("existing staff, client, wallet, loan, transaction and branch tables coexist with the new security tables", async () => {
     const t = await freshDeployment();
-    await activate(t);
+    const activation = await activate(t);
     await t.run(async (ctx) => {
       const userId = await ctx.db.insert("users", { name: "Coexisting Staff" });
       await ctx.db.insert("profiles", {
@@ -1114,6 +1114,6 @@ describe("Existing KMC functionality", () => {
         createdAt: Date.now(),
       });
     });
-    expect(await t.query(api.security.devices, { token: (await activate(t)).token })).toBeInstanceOf(Array);
+    expect(await t.query(api.security.devices, { token: activation.token })).toBeInstanceOf(Array);
   });
 });

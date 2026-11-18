@@ -83,8 +83,14 @@ export function RequireDevice({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!me) return; // still resolving the signed-in profile
     // The client portal is not a staff workspace and does not use device
-    // authorization; every staff role (including SUPER_ADMIN) does.
+    // authorization.
     if (me.profile?.role === "CLIENT") {
+      setState({ kind: "open" });
+      return;
+    }
+    // The SUPER_ADMIN / app owner registers and approves devices for everyone
+    // else; their own sign-in never waits on device approval.
+    if (me.profile?.role === "SUPER_ADMIN") {
       setState({ kind: "open" });
       return;
     }

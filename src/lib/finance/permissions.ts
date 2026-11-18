@@ -99,6 +99,19 @@ export function hasSuperAdminGrant(
 }
 
 /**
+ * The application owner: either a backend-granted account (see
+ * `SUPER_ADMIN_GRANTS`) or an account whose stored role is literally
+ * `SUPER_ADMIN`. Owners are the authority that registers and approves devices
+ * for everyone else, so no device approval is required for them.
+ */
+export function hasOwnerAuthority(
+  profile: GrantSubject | null | undefined,
+): boolean {
+  if (!profile) return false;
+  return hasSuperAdminGrant(profile) || profile.role === "SUPER_ADMIN";
+}
+
+/**
  * The role the SERVER authorizes with: `SUPER_ADMIN` for granted accounts,
  * the stored role for everyone else. Display code must use the stored role
  * (`designationRole`) so the granted account keeps its own designation.

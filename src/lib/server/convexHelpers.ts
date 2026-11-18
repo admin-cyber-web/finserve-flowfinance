@@ -12,6 +12,7 @@ import type { Permission } from "../finance/permissions";
 import {
   effectivePermissions,
   effectiveRole,
+  hasOwnerAuthority,
   hasSuperAdminGrant,
 } from "../finance/permissions";
 import type { TxDirection, WalletTxType } from "../finance/types";
@@ -84,27 +85,18 @@ export async function requireActor(ctx: Ctx): Promise<Actor> {
  * so "no record" means the caller did not come through the device handshake
  * (or its enrollment was deleted).
  *
- * SUPER_ADMIN / app owner handles enrollment and approval for everyone, so we
- * only bypass the gate when they have not enrolled any device yet. If they do
- * have a device record but it is revoked or blocked, they are treated like any
- * other staff member: a silent bypass must not keep a revoked owner device live.
+ * SUPER_ADMIN / app owner handles registration and approval for everyone, so
+ * they are never held back by device approval of their own: the owner console
+ * must stay reachable. Every bypassed request still runs the rest of the normal
+ * authorization (status, permissions) and is recorded by the caller's audit
+ * path, so nothing about it is silent.
  */
 export async function assertDeviceAuthorized(
   ctx: Ctx,
   profile: Doc<"profiles">,
 ): Promise<void> {
   if (profile.role === "CLIENT") return;
-  if (hasSuperAdminGrant(profile)) {
-    const anyDevice = await ctx.db
-      .query("securityDevices")
-      .withIndex("by_profile", (q) => q.eq("profileId", profile._id))
-      .first();
-    // Allow the owner past this gate when they simply have no device yet — e.g.
-    // before they enroll the device they will use to approve everyone else's.
-    if (!anyDevice) return;
-    // Once a device exists, the owner is subject to the same status check: if
-    // their own device is revoked/blocked, that revocation is enforced.
-  }
+  if (hasOwnerAuthority(profile)) return;
   const devices = await ctx.db
     .query("securityDevices")
     .withIndex("by_profile", (q) => q.eq("profileId", profile._id))
@@ -135,7 +127,13 @@ export async function requireProfile(
       `Your account is ${profile.status.toLowerCase()}. Contact your administrator.`,
     );
   }
-  if (!opts.skipDeviceCheck) await assertDeviceAuthorized(ctx, profile);
+  // The SUPER_ADMIN / app owner is the authority that registers and approves
+  // devices for everyone else. Their dashboard access must not depend on having
+  // a currently authorized device of their own — otherwise the owner console
+  // becomes unreachable the moment their own device is revoked or blocked.
+  if (!hasOwnerAuthority(profile) && !opts.skipDeviceCheck) {
+    await assertDeviceAuthorized(ctx, profile);
+  }
   return profile;
 }
 

@@ -33,7 +33,7 @@ import {
   auditHash,
   auditPayload,
 } from "../lib/server/securityCrypto";
-import { hasSuperAdminGrant } from "../lib/finance/permissions";
+import { hasOwnerAuthority } from "../lib/finance/permissions";
 
 /* ------------------------------- helpers --------------------------------- */
 
@@ -74,7 +74,7 @@ async function latestAuditHash(ctx: any): Promise<string> {
 /** SUPER_ADMIN-only backstop. */
 async function requireSuperAdmin(ctx: any): Promise<Doc<"profiles">> {
   const profile = await requireProfile(ctx);
-  if (!hasSuperAdminGrant(profile)) {
+  if (!hasOwnerAuthority(profile)) {
     throw new AppError("Only SUPER_ADMIN can perform this action.");
   }
   return profile;
