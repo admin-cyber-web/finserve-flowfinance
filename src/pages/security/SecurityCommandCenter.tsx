@@ -160,8 +160,8 @@ export function SecurityCommandCenter({
       </main>
 
       <footer className="border-t border-[#1a1d22] px-4 py-3 text-[9px] uppercase tracking-[0.2em] text-zinc-700">
-        Auditor scope: append-only · generated server-side · SUPER_ADMIN has no
-        security authority
+        Auditor scope: append-only · generated server-side · SUPER_ADMIN can
+        manage devices · operator & PIN management stays with Security Operators
       </footer>
     </div>
   );
@@ -334,7 +334,7 @@ function OverviewModule({
       </div>
 
       <div className="mt-5 grid grid-cols-2 gap-px border border-[#1f232a] bg-[#1f232a] sm:grid-cols-4">
-        <SecStat label="SUPER_ADMIN devices" value={data.devices.superAdmin} hint="no bypass — same rules" />
+        <SecStat label="SUPER_ADMIN devices" value={data.devices.superAdmin} hint="app owner — registry owner" />
         <SecStat label="Staff devices" value={data.devices.staff} hint="staff-level enrollments" />
         <SecStat label="Operator devices" value={data.devices.securityOperator} hint="operators use PIN + credential" />
         <SecStat

@@ -22,6 +22,7 @@ const Dashboard = lazy(() => import("./pages/Dashboard.tsx"));
 const NotFound = lazy(() => import("./pages/NotFound.tsx"));
 // Separate Security Department portal — its own guard and backend module.
 const SecurityPortal = lazy(() => import("./pages/security/SecurityPortal.tsx"));
+const SecurityRegister = lazy(() => import("./pages/security/SecurityRegister.tsx"));
 
 // Simple loading fallback for route transitions
 function RouteLoading() {
@@ -152,6 +153,7 @@ createRoot(document.getElementById("root")!).render(
               {/* Independent Security Department. No RequireAuth: it uses its own
                   operator token and never the KMC staff session. */}
               <Route path="/security" element={<SecurityPortal />} />
+              <Route path="/security/register/:token" element={<SecurityRegister />} />
               <Route path="/security/*" element={<SecurityPortal />} />
               <Route path="*" element={<NotFound />} />
             </Routes>

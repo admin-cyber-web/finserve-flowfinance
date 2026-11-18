@@ -139,7 +139,7 @@ function PortalFrame({ children }: { children: React.ReactNode }) {
       <div className="relative flex flex-1 flex-col">{children}</div>
       <footer className="relative border-t border-[#1a1d22] px-5 py-3 text-[9px] uppercase tracking-[0.22em] text-zinc-700">
         Independent Security Department · append-only audit chain · device
-        authority is not delegated to SUPER_ADMIN
+        authority is shared by authorized Security Operators and SUPER_ADMIN
       </footer>
     </div>
   );
@@ -298,8 +298,8 @@ function AccessGate({
         </p>
         <dl className="mt-6 grid max-w-md grid-cols-2 gap-px border border-[#1f232a] bg-[#1f232a] text-[10px]">
           {[
-            ["Device authority", "Security Department only"],
-            ["SUPER_ADMIN access", "Denied by backend"],
+            ["Device authority", "SUPER_ADMIN (app owner)"],
+            ["SUPER_ADMIN access", "Full authority"],
             ["Audit records", "Append-only + hash chain"],
             ["Sessions", "Bearer token, server-validated"],
           ].map(([k, v]) => (

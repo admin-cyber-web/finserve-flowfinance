@@ -221,36 +221,38 @@ describe("Security Department activation", () => {
   });
 });
 
-describe("SUPER_ADMIN has no security authority", () => {
-  it("cannot open the portal or read security state", async () => {
+describe("SUPER_ADMIN and the independent Security Department", () => {
+  it("cannot open the Security portal with staff credentials", async () => {
     const t = await freshDeployment();
     await activate(t);
     const admin = await seedSuperAdmin(t);
-    const asAdmin = t.withIdentity({ subject: admin.userId, issuer: "https://kmc.test" });
+    const forAdmin = t.withIdentity({ subject: admin.userId, issuer: "https://kmc.test" });
 
-    // No token → no portal, regardless of staff role.
-    await expect(asAdmin.query(api.security.dashboard, { token: "" })).rejects.toThrow(
+    // The Security Command Center is independent: a KMC staff session does not
+    // open it. No token → no portal, regardless of staff role.
+    await expect(forAdmin.query(api.security.dashboard, { token: "" })).rejects.toThrow(
       /Security session required/,
     );
     await expect(
-      asAdmin.query(api.security.dashboard, { token: "aaaa".repeat(16) }),
+      forAdmin.query(api.security.dashboard, { token: "aaaa".repeat(16) }),
     ).rejects.toThrow(/invalid/i);
-    // Staff identity alone can't mint a session.
-    const attempted = await asAdmin.mutation(api.security.login, {
+
+    // A SUPER_ADMIN staff identity alone cannot mint a Security session.
+    const attempted = await forAdmin.mutation(api.security.login, {
       operatorId: OPERATOR,
       credential: CREDENTIAL,
       pin: PIN,
     });
-    expect(attempted.ok).toBe(true); // the PIN + operator credential still apply…
-    const forged = await asAdmin.query(api.security.session, { token: "not-a-real-token" });
+    expect(attempted.ok).toBe(true); // PIN + operator credential still apply…
+    const forged = await forAdmin.query(api.security.session, { token: "not-a-real-token" });
     expect(forged).toBeNull();
   });
 
-  it("cannot approve, block, revoke or replace devices, or change the PIN", async () => {
+  it("cannot approve, block, revoke, reject or reactivate devices through the Security portal", async () => {
     const t = await freshDeployment();
     const activation = await activate(t);
     const admin = await seedSuperAdmin(t);
-    const asAdmin = t.withIdentity({ subject: admin.userId, issuer: "https://kmc.test" });
+    const forAdmin = t.withIdentity({ subject: admin.userId, issuer: "https://kmc.test" });
     const device = await t.run(async (ctx) => {
       const userId = await ctx.db.insert("users", { name: "Field" });
       const profileId = await ctx.db.insert("profiles", {
@@ -266,8 +268,8 @@ describe("SUPER_ADMIN has no security authority", () => {
         staffId: "0010",
         staffName: "Field",
         role: "FIELD_STAFF",
-        fingerprint: "fp-super-admin-block-01",
-        deviceKey: "key-super-admin-block-01",
+        fingerprint: "fp-security-dap-01",
+        deviceKey: "key-security-dap-01",
         label: "Test",
         status: "PENDING",
         source: "REGISTRATION",
@@ -276,24 +278,16 @@ describe("SUPER_ADMIN has no security authority", () => {
       });
     });
 
-    // The admin's *own* valid security token is the only thing that works —
-    // and a SUPER_ADMIN can't obtain one without the operator credential.
+    // The Security portal guard needs a valid session token. A SUPER_ADMIN
+    // cannot obtain one without the operator credential + PIN.
     await expect(
-      asAdmin.mutation(api.security.approveDevice, {
+      forAdmin.mutation(api.security.approveDevice, {
         token: "bogus-token-value-bogus",
         deviceId: device,
       }),
     ).rejects.toThrow(/invalid|required/i);
     await expect(
-      asAdmin.mutation(api.security.blockDevice, {
-        token: "bogus-token-value-bogus",
-        deviceId: device,
-        reason: "admin attempt",
-        confirmCredential: CREDENTIAL,
-      }),
-    ).rejects.toThrow(/invalid|required/i);
-    await expect(
-      asAdmin.mutation(api.security.revokeDevice, {
+      forAdmin.mutation(api.security.blockDevice, {
         token: "bogus-token-value-bogus",
         deviceId: device,
         reason: "admin attempt",
@@ -301,7 +295,15 @@ describe("SUPER_ADMIN has no security authority", () => {
       }),
     ).rejects.toThrow(/invalid|required/i);
     await expect(
-      asAdmin.mutation(api.security.changePin, {
+      forAdmin.mutation(api.security.revokeDevice, {
+        token: "bogus-token-value-bogus",
+        deviceId: device,
+        reason: "admin attempt",
+        confirmCredential: CREDENTIAL,
+      }),
+    ).rejects.toThrow(/invalid|required/i);
+    await expect(
+      forAdmin.mutation(api.security.changePin, {
         token: "bogus-token-value-bogus",
         currentPin: PIN,
         newPin: "739201",
@@ -309,12 +311,12 @@ describe("SUPER_ADMIN has no security authority", () => {
       }),
     ).rejects.toThrow(/invalid|required/i);
 
-    // Nothing changed.
+    // Nothing changed in the Security Department state.
     const rows = await t.query(api.security.devices, { token: activation.token });
     expect(rows.find((d) => d._id === device)?.status).toBe("PENDING");
   });
 
-  it("exposes no staff-facing endpoint over security tables", () => {
+  it("still keeps the Security Department independent from KMC staff auth", () => {
     const source = readFileSync(resolve(process.cwd(), "src/convex/security.ts"), "utf8");
     // Owner-only operations exist only as internal mutations (never callable
     // from a browser session, staff or security).
@@ -561,6 +563,40 @@ describe("Device authorization", () => {
     expect(dashboard.unauthorizedAttempts24h).toBeGreaterThanOrEqual(1);
     expect(dashboard.devices.pending).toBe(0);
     expect(dashboard.devices.authorized).toBe(0);
+  });
+
+  it("maintains one authorized device per staff ID after a replacement flow", async () => {
+    const t = await freshDeployment();
+    const activation = await activate(t);
+    const staff = await seedStaff(t, "0014", "Replacement Staff");
+    const asStaff = t.withIdentity({ subject: staff.userId, issuer: "https://kmc.test" });
+    await asStaff.mutation(api.security.registerDevice, {
+      fingerprint: "fp-device-repl-a01",
+      label: "Original",
+      platform: "Windows",
+    });
+    const devices = await t.query(api.security.devices, { token: activation.token });
+    const active = devices.find((d) => d.status === "PENDING")!;
+    await t.mutation(api.security.approveDevice, { token: activation.token, deviceId: active._id });
+    const second = await asStaff.mutation(api.security.registerDevice, {
+      fingerprint: "fp-device-repl-a02",
+      label: "Replacement",
+      platform: "Windows",
+    });
+    expect(second.status).toBe("PENDING");
+    const afterSecond = await t.query(api.security.devices, { token: activation.token });
+    const pending = afterSecond.find((d) => d.status === "PENDING" && d._id !== active._id)!;
+    const replaced = await t.mutation(api.security.replaceDevice, {
+      token: activation.token,
+      oldDeviceId: active._id,
+      newDeviceId: pending._id,
+      reason: "Replacement",
+      confirmCredential: CREDENTIAL,
+    });
+    expect(replaced.ok).toBe(true);
+    const finalRows = await t.query(api.security.devices, { token: activation.token });
+    expect(finalRows.find((d) => d._id === active._id)?.status).toBe("REPLACED");
+    expect(finalRows.find((d) => d._id === pending._id)?.status).toBe("AUTHORIZED");
   });
 
   it("denies approval when the staff already has an active device (without replace)", async () => {
@@ -838,6 +874,26 @@ describe("Cryptographic device enrollment", () => {
       }),
     ).rejects.toThrow(/suspended/i);
   });
+
+  it("enrollment outcome and verify are discoverable through deviceDetails", async () => {
+    const t = await freshDeployment();
+    const token = (await activate(t)).token;
+    await seedStaff(t, "0041", "Details Staff");
+    const key = await newDeviceKey();
+    const enrolled = await enroll(t, "0041", key.jwk, key.pair);
+    expect(enrolled.ok).toBe(true);
+    const devices = await t.query(api.security.devices, { token });
+    const row = devices.find((d) => d.enrollmentId === enrolled.enrollmentId)!;
+    expect(row.enrollmentId).toBe(enrolled.enrollmentId);
+    expect(row.status).toBe("PENDING");
+    const details = await t.query(api.security.deviceDetails, {
+      token,
+      deviceId: row._id,
+    });
+    expect(details.device.enrollmentId).toBe(enrolled.enrollmentId);
+    expect(details.device.status).toBe("PENDING");
+    expect(details.history.some((e) => e.kind === "DEVICE_ENROLLED")).toBe(true);
+  });
 });
 
 describe("Audit integrity", () => {
@@ -869,6 +925,20 @@ describe("Audit integrity", () => {
     const loginResult = await signIn(t);
     const session = await t.query(api.security.session, { token: loginResult.token! });
     expect(JSON.stringify(session)).not.toMatch(/pbkdf2|credentialHash/);
+  });
+
+  it("SUPER_ADMIN audit view is append-only and shows only public-friendly fields", async () => {
+    const t = await freshDeployment();
+    await activate(t);
+    const admin = await seedSuperAdmin(t);
+    const forAdmin = t.withIdentity({ subject: admin.userId, issuer: "https://kmc.test" });
+    const log = await forAdmin.query(api.securityAdmin.superadminAuditLog, { limit: 5 });
+    expect(Array.isArray(log.entries)).toBe(true);
+    expect("integrity" in log).toBe(true);
+    for (const row of log.entries) {
+      expect(row).not.toHaveProperty("previousStateRaw");
+      expect(row).not.toHaveProperty("newStateRaw");
+    }
   });
 });
 
@@ -1028,5 +1098,22 @@ describe("Existing KMC functionality", () => {
       deviceProof: proof,
     });
     expect(replay.ok).toBe(false);
+  });
+
+  it("existing staff, client, wallet, loan, transaction and branch tables coexist with the new security tables", async () => {
+    const t = await freshDeployment();
+    await activate(t);
+    await t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", { name: "Coexisting Staff" });
+      await ctx.db.insert("profiles", {
+        userId,
+        name: "Coexisting Staff",
+        staffId: "0051",
+        role: "FIELD_STAFF",
+        status: "ACTIVE",
+        createdAt: Date.now(),
+      });
+    });
+    expect(await t.query(api.security.devices, { token: (await activate(t)).token })).toBeInstanceOf(Array);
   });
 });

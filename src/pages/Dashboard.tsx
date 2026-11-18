@@ -26,6 +26,9 @@ import Profile from "./dashboard/Profile";
 import Receipt from "./dashboard/Receipt";
 import Reports from "./dashboard/Reports";
 import Staff from "./dashboard/Staff";
+import SecurityDevicePanel from "./dashboard/SecurityDevicePanel";
+import SecurityDeviceAdmin from "./dashboard/SecurityDeviceAdmin";
+import SecurityRequestAdmin from "./dashboard/SecurityRequestAdmin";
 import StaffDetail from "./dashboard/StaffDetail";
 import StaffHome from "./dashboard/StaffHome";
 import Transactions from "./dashboard/Transactions";
@@ -144,6 +147,9 @@ export default function Dashboard() {
       <Route path="audit" element={<Audit />} />
       <Route path="branches" element={<Branches />} />
       <Route path="centres" element={<Centres />} />
+      <Route path="security" element={<SecurityDevicePanel />} />
+      <Route path="security/device/:id" element={<SecurityDeviceAdmin />} />
+      <Route path="security/request/:enrollmentId" element={<SecurityRequestAdmin />} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
   );

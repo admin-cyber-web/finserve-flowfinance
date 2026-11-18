@@ -135,8 +135,8 @@ export function RequireDevice({ children }: { children: ReactNode }) {
           </p>
         )}
         <p className="mt-3 text-[11px] text-muted-foreground">
-          Device approval is handled only by Security Operators. SUPER_ADMIN
-          cannot approve, block or revoke devices.
+          Device approval is handled by authorized Security Operators and SUPER_ADMIN.
+          This browser must be enrolled and approved before it can sign in.
         </p>
         <div className="mt-5 grid grid-cols-2 gap-2">
           <button

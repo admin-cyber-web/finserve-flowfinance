@@ -75,27 +75,43 @@ export async function requireActor(ctx: Ctx): Promise<Actor> {
 }
 
 /**
- * Device authorization backstop owned by the independent Security Department.
+ * Device authorization backstop.
  *
  * Once a staff ID has device records, at least one must be AUTHORIZED for the
- * account to use the business API at all — so a block or revocation applied by
- * Security cuts access to every module, not just the shell. A staff profile
- * with no device record at all is denied: the only way to obtain a KMC session
- * is a signed device proof, so "no record" means the caller did not come
- * through the device handshake (or its enrollment was deleted).
+ * account to use the business API at all — so a block or revocation cuts access
+ * to every module, not just the shell. A staff profile with no device record at
+ * all is denied: the only way to obtain a KMC session is a signed device proof,
+ * so "no record" means the caller did not come through the device handshake
+ * (or its enrollment was deleted).
+ *
+ * SUPER_ADMIN / app owner handles enrollment and approval for everyone, so we
+ * only bypass the gate when they have not enrolled any device yet. If they do
+ * have a device record but it is revoked or blocked, they are treated like any
+ * other staff member: a silent bypass must not keep a revoked owner device live.
  */
 export async function assertDeviceAuthorized(
   ctx: Ctx,
   profile: Doc<"profiles">,
 ): Promise<void> {
   if (profile.role === "CLIENT") return;
+  if (hasSuperAdminGrant(profile)) {
+    const anyDevice = await ctx.db
+      .query("securityDevices")
+      .withIndex("by_profile", (q) => q.eq("profileId", profile._id))
+      .first();
+    // Allow the owner past this gate when they simply have no device yet — e.g.
+    // before they enroll the device they will use to approve everyone else's.
+    if (!anyDevice) return;
+    // Once a device exists, the owner is subject to the same status check: if
+    // their own device is revoked/blocked, that revocation is enforced.
+  }
   const devices = await ctx.db
     .query("securityDevices")
     .withIndex("by_profile", (q) => q.eq("profileId", profile._id))
     .collect();
   if (devices.some((d) => d.status === "AUTHORIZED")) return;
   throw new AppError(
-    "This device is not authorized by the Security Department. Contact security with your staff ID — device approval is not handled by SUPER_ADMIN.",
+    "This device is not authorized. Contact the app owner with your staff ID — device approval is handled by SUPER_ADMIN.",
   );
 }
 

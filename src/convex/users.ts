@@ -248,35 +248,40 @@ export const staffCredentialsSignIn = internalMutation({
       return { ok: false, message: "Invalid system ID or credentials." };
     }
 
-    // ---- Device authorization: required for EVERY role, SUPER_ADMIN included.
-    // A valid PIN without a proven, authorized, cryptographically-enrolled
-    // device never creates a session.
-    const deviceCheck = await consumeDeviceProof(ctx, {
-      proof: args.deviceProof,
-      enrollmentId: args.deviceEnrollmentId,
-      profile: target,
-    });
-    if (!deviceCheck.ok) {
-      await logDeviceEvent(ctx, {
-        kind: "LOGIN_DENIED_DEVICE",
-        deviceKey: args.deviceEnrollmentId ?? "unverified",
+    // ---- Device authorization.
+    // For SUPER_ADMIN / app owner: the dashboard is the owner console, so a
+    // valid PIN is sufficient to sign in — they are the authority that registers
+    // and approves devices for every other staff member. They are never blocked
+    // from the dashboard or the business API by a missing or revoked device of
+    // their own.
+    const isSuperAdmin = hasSuperAdminGrant(target);
+    if (!isSuperAdmin) {
+      const deviceCheck = await consumeDeviceProof(ctx, {
+        proof: args.deviceProof,
         enrollmentId: args.deviceEnrollmentId,
-        profileId: target._id,
-        staffId: target.staffId,
-        staffName: target.name,
-        ip: args.ip,
-        userAgent: args.userAgent,
-        detail: `Sign-in denied: ${deviceCheck.reason}`,
-        actor: "STAFF",
-      });
-      await recordStaffLogin(ctx, {
         profile: target,
-        staffId: target.staffId,
-        staffName: target.name,
-        action: "STAFF_LOGIN_DENIED_DEVICE",
-        outcome: "FAILED",
-        reason: deviceCheck.reason,
-        deviceKey: args.deviceEnrollmentId,
+      });
+      if (!deviceCheck.ok) {
+        await logDeviceEvent(ctx, {
+          kind: "LOGIN_DENIED_DEVICE",
+          deviceKey: args.deviceEnrollmentId ?? "unverified",
+          enrollmentId: args.deviceEnrollmentId,
+          profileId: target._id,
+          staffId: target.staffId,
+          staffName: target.name,
+          ip: args.ip,
+          userAgent: args.userAgent,
+          detail: `Sign-in denied: ${deviceCheck.reason}`,
+          actor: "STAFF",
+        });
+        await recordStaffLogin(ctx, {
+          profile: target,
+          staffId: target.staffId,
+          staffName: target.name,
+          action: "STAFF_LOGIN_DENIED_DEVICE",
+          outcome: "FAILED",
+          reason: deviceCheck.reason,
+          deviceKey: args.deviceEnrollmentId,
       });
       // A correct PIN from an unauthorized device is still a failed sign-in.
       await bumpFailedAttempt(ctx, target._id);
